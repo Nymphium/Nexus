@@ -133,17 +133,24 @@ fn type_parser() -> P<Type> {
 }
 
 fn literal() -> impl Parser<char, Literal, Error = Simple<char>> + Clone {
-    let number = just('-').or_not().then(text::int(10))
-        .then(just('.').ignore_then(text::int(10)).or_not())
+    let digits = filter(|c: &char| c.is_ascii_digit())
+        .repeated()
+        .at_least(1)
+        .collect::<String>();
+
+    let number = just('-')
+        .or_not()
+        .then(digits.clone())
+        .then(just('.').ignore_then(digits.clone()).or_not())
         .map(|((sign, int_part), frac_part)| {
-             let sign_str = if sign.is_some() { "-" } else { "" };
-             if let Some(frac) = frac_part {
-                 let s = format!("{}{}.{}", sign_str, int_part, frac);
-                 Literal::Float(s.parse::<f64>().unwrap())
-             } else {
-                 let s = format!("{}{}", sign_str, int_part);
-                 Literal::Int(s.parse::<i64>().unwrap())
-             }
+            let sign_str = if sign.is_some() { "-" } else { "" };
+            if let Some(frac) = frac_part {
+                let s = format!("{}{}.{}", sign_str, int_part, frac);
+                Literal::Float(s.parse::<f64>().unwrap())
+            } else {
+                let s = format!("{}{}", sign_str, int_part);
+                Literal::Int(s.parse::<i64>().unwrap())
+            }
         });
 
     let bool_lit = choice((
