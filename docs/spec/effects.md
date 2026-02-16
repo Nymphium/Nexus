@@ -8,7 +8,7 @@ Effects are declared using the `effect` keyword in function signatures.
 
 ```nexus
 fn print_val(x: i64) -> unit effect { Console } do
-  perform print(val: "Value: " ++ to_string(val: x))
+  perform print(val: [=[Value: ]=] ++ i64_to_string(val: x))
 endfn
 ```
 
@@ -38,7 +38,7 @@ Nexus provides a native exception effect `Exn`.
 ### Raising Exceptions
 
 ```nexus
-raise "something went wrong"
+raise [=[something went wrong]=]
 ```
 
 ### Catching Exceptions
@@ -63,8 +63,8 @@ A `port` defines a set of effectful operations (an interface).
 
 ```nexus
 port KeyValueStore do
-  fn get(key: str) -> str
-  fn set(key: str, val: str) -> unit
+  fn get(key: string) -> string
+  fn set(key: string, val: string) -> unit
 endport
 ```
 
@@ -76,12 +76,12 @@ A `handler` implements a specific port.
 
 ```nexus
 handler InMemoryKVS for KeyValueStore do
-  fn get(key: str) -> str do
+  fn get(key: string) -> string do
     // ... implementation ...
-    return "value"
+    return [=[value]=]
   endfn
 
-  fn set(key: str, val: str) -> unit do
+  fn set(key: string, val: string) -> unit do
     // ... implementation ...
     return ()
   endfn

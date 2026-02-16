@@ -7,7 +7,7 @@ Nexus uses a strict type system with Hindley-Milner type inference, structural r
 - `i64`: 64-bit signed integer.
 - `float`: 64-bit floating point number.
 - `bool`: Boolean (`true` / `false`).
-- `str`: UTF-8 string.
+- `string`: UTF-8 string.
 - `unit`: The unit type `()`.
 
 ## Compound Types
@@ -19,7 +19,7 @@ Records are structural and can be defined using `type`.
 ```nexus
 type User = {
   id: i64,
-  name: str
+  name: string
 }
 ```
 

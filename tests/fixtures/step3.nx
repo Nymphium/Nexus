@@ -5,7 +5,7 @@ pub fn test_match(x: i64) -> i64 do
   endmatch
 endfn
 
-pub fn test_ctor(r: Result<i64, str>) -> i64 do
+pub fn test_ctor(r: Result<i64, string>) -> i64 do
   match r do
     case Ok(v) -> return v
     case Err(e) -> return -1

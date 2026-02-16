@@ -126,7 +126,7 @@ db.commit(tx: %tx) // Must consume
 
 ```nexus
 port Database do
-  fn save(data: str) -> unit <IO>
+  fn save(data: string) -> unit <IO>
 endport
 
 ```
@@ -152,18 +152,18 @@ import { json } from "std/json"
 // --- Type Definitions ---
 type User = {
   id: i64,
-  name: str,
-  email: str
+  name: string,
+  email: string
 }
 
 // --- Port Definition ---
 port UserRepository do
-  fn exists(tx: %Tx, email: str) -> Result<bool, str> <IO>
-  fn create(tx: %Tx, u: User) -> Result<%Tx, str> <IO>
+  fn exists(tx: %Tx, email: string) -> Result<bool, string> <IO>
+  fn create(tx: %Tx, u: User) -> Result<%Tx, string> <IO>
 endport
 
 // --- Main Logic ---
-pub fn register_user(name: str, email: str) -> Result<unit, str> <IO, Net> do
+pub fn register_user(name: string, email: string) -> Result<unit, string> <IO, Net> do
 
   // 1. Linear Resource (Transaction Start)
   let %tx = perform db_driver.begin_tx()

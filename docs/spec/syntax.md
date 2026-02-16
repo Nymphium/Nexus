@@ -22,7 +22,7 @@ Immutable variables are defined with `let`.
 
 ```nexus
 let x = 10
-let name = "Nexus"
+let name = [=[Nexus]=]
 ```
 
 Variables are lexically scoped.
@@ -53,7 +53,7 @@ endmatch
 ```
 
 Supported patterns:
-- **Literals**: `1`, `true`, `"string"`.
+- **Literals**: `1`, `true`, `[=[string]=]`.
 - **Constructors**: `Ok(x)`, `Err(e)`.
 - **Records**: `{ x: p1, y: p2 }` (exact match) or `{ x: p1, _ }` (partial match).
 - **Wildcard**: `_` (matches anything).
@@ -108,10 +108,10 @@ Structured concurrency is supported via `conc` blocks with `task`.
 
 ```nexus
 conc do
-  task "worker1" do
+  task [=[worker1]=] do
     // ...
   endtask
-  task "worker2" do
+  task [=[worker2]=] do
     // ...
   endtask
 endconc

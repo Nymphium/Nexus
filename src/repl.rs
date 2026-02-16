@@ -62,7 +62,14 @@ pub fn start() {
 
     // Initialize environment
     let mut env = Env::new();
-    let stdlib_names = vec!["print", "to_string", "print_i64", "print_str", "drop_i64", "drop_array"];
+    let stdlib_names = vec![
+        "print",
+        "i64_to_string",
+        "float_to_string",
+        "bool_to_string",
+        "drop_i64",
+        "drop_array",
+    ];
     for name in &stdlib_names {
         env.define(name.to_string(), Value::NativeFunction(name.to_string()));
         vars.borrow_mut().insert(name.to_string());
@@ -133,10 +140,10 @@ pub fn start() {
                                     Ok(res) => {
                                         match res {
                                             ExprResult::Normal(val) => {
-                                                println!("{} : {:?}", val, typ);
+                                                println!("{} : {}", val, typ);
                                             },
                                             ExprResult::EarlyReturn(val) => {
-                                                println!("returned {} : {:?}", val, typ);
+                                                println!("returned {} : {}", val, typ);
                                             }
                                         }
                                     },

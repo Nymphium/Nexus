@@ -13,10 +13,10 @@ fn check(src: &str) -> Result<(), String> {
 fn test_anonymous_record() {
     let src = r#"
     fn main() -> unit effect { IO } do
-        let r = { x: 1, y: "hello" }
+        let r = { x: 1, y: [=[hello]=] }
         let i = r.x
         // let s = r.y // Type of s is Str. Unused variable? (No check yet)
-        perform print(val: "i=" ++ int_to_string(val: i))
+        perform print(val: [=[i=]=] ++ i64_to_string(val: i))
         return ()
     endfn
     "#;

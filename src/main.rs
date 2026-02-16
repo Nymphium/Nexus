@@ -13,7 +13,7 @@ mod typecheck;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
-    if args.len() < 2 {
+    if args.len() < 2 || args[1] == "--repl" {
         repl::start();
         return;
     }

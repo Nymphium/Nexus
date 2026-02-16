@@ -28,12 +28,13 @@
 - [x] **Error Messages**: Implement rich diagnostics with source spans using Ariadne.
 
 ### Infrastructure & Tooling (Medium Priority)
-- [ ] **Standard Library**: Add basic data structures (List, Map) and utilities.
+- [ ] FFI: Interoperate with C libraries for performance-critical code and system access.
+- [ ] **Standard Library**: Add basic data structures (List, Map) and utilities. Use FFI to basic I/O and system calls.
 - [ ] **Concurrency Runtime**: Implement actual parallel execution for `conc` blocks (currently sequential).
-- [ ] Profiler and Benchmarking Tools: Measure performance and identify bottlenecks.
+- [ ] Profiler, Testing and Benchmarking Tools: Measure performance and identify bottlenecks.
 
 ### Future Goals (Low Priority)
 - [ ] **Modules & Imports**: Implement file loading and namespace management.
-- [ ] **Native Compilation**: LLVM IR / MLIR backend.
+- [ ] **WASM Compilation**: LLVM IR / MLIR backend.
 - [ ] **LSP Server**: Editor support.
 - [ ] **Self-hosting**: Rewrite Nexus in Nexus.

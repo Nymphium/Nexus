@@ -52,7 +52,7 @@ fn type_parser() -> P<Type> {
             text::keyword("i64").to(Type::I64),
             text::keyword("float").to(Type::Float),
             text::keyword("bool").to(Type::Bool),
-            text::keyword("str").to(Type::Str),
+            text::keyword("string").to(Type::String),
             text::keyword("unit").to(Type::Unit),
             text::keyword("ref")
                 .padded()
@@ -163,11 +163,27 @@ fn literal() -> impl Parser<char, Literal, Error = Simple<char>> + Clone {
     .map(Literal::Bool);
 
     let unit_lit = just("()").to(Literal::Unit);
-    let str_lit = just('"')
-        .ignore_then(filter(|c| *c != '"').repeated())
-        .then_ignore(just('"'))
-        .collect::<String>()
-        .map(Literal::String);
+    let str_lit = {
+        let end = just("]=]");
+        let escape = just::<char, &str, Simple<char>>(r"\]=]").to("]=]".to_string());
+        let backslash = just('\\')
+            .then_ignore(just("]=]").not())
+            .map(|c: char| c.to_string());
+        let bracket = just(']')
+            .then_ignore(just("=]").not())
+            .map(|c: char| c.to_string());
+        let other = none_of::<_, _, Simple<char>>("]\\").map(|c: char| c.to_string());
+
+        just("[=[")
+            .ignore_then(
+                choice((escape, backslash, bracket, other))
+                    .repeated()
+                    .collect::<Vec<String>>()
+                    .map(|v: Vec<String>| v.concat()),
+            )
+            .then_ignore(end)
+            .map(Literal::String)
+    };
 
     choice((number, bool_lit, unit_lit, str_lit)).padded()
 }

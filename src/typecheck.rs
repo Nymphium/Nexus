@@ -84,18 +84,11 @@ impl TypeChecker {
         env.types.insert("IO".to_string(), TypeDef { name: "IO".to_string(), type_params: vec![], fields: vec![] });
         let io_eff = Type::Row(vec![Type::UserDefined("IO".into(), vec![])], None);
         
-        let scheme_tx = Scheme { vars: vec![], typ: Type::UserDefined("Tx".to_string(), vec![]) };
-
-        env.insert("db_driver.begin_tx".to_string(), Scheme { vars: vec![], typ: Type::Arrow(vec![], Box::new(scheme_tx.typ.clone()), Box::new(io_eff.clone())) });
-        env.insert("db_driver.commit".to_string(), Scheme { vars: vec![], typ: Type::Arrow(vec![("tx".into(), Type::UserDefined("Tx".to_string(), vec![]))], Box::new(Type::Unit), Box::new(io_eff.clone())) });
-        env.insert("db_driver.rollback".to_string(), Scheme { vars: vec![], typ: Type::Arrow(vec![("tx".into(), Type::UserDefined("Tx".to_string(), vec![]))], Box::new(Type::Unit), Box::new(io_eff.clone())) });
-        env.insert("log.info".to_string(), Scheme { vars: vec![], typ: Type::Arrow(vec![("msg".into(), Type::Str)], Box::new(Type::Unit), Box::new(io_eff.clone())) });
+        env.insert("print".to_string(), Scheme { vars: vec![], typ: Type::Arrow(vec![("val".into(), Type::String)], Box::new(Type::Unit), Box::new(io_eff.clone())) });
         
-        env.insert("print".to_string(), Scheme { vars: vec![], typ: Type::Arrow(vec![("val".into(), Type::Str)], Box::new(Type::Unit), Box::new(io_eff.clone())) });
-        
-        env.insert("int_to_string".to_string(), Scheme { vars: vec![], typ: Type::Arrow(vec![("val".into(), Type::I64)], Box::new(Type::Str), Box::new(Type::Row(vec![], None))) });
-        env.insert("float_to_string".to_string(), Scheme { vars: vec![], typ: Type::Arrow(vec![("val".into(), Type::Float)], Box::new(Type::Str), Box::new(Type::Row(vec![], None))) });
-        env.insert("bool_to_string".to_string(), Scheme { vars: vec![], typ: Type::Arrow(vec![("val".into(), Type::Bool)], Box::new(Type::Str), Box::new(Type::Row(vec![], None))) });
+        env.insert("i64_to_string".to_string(), Scheme { vars: vec![], typ: Type::Arrow(vec![("val".into(), Type::I64)], Box::new(Type::String), Box::new(Type::Row(vec![], None))) });
+        env.insert("float_to_string".to_string(), Scheme { vars: vec![], typ: Type::Arrow(vec![("val".into(), Type::Float)], Box::new(Type::String), Box::new(Type::Row(vec![], None))) });
+        env.insert("bool_to_string".to_string(), Scheme { vars: vec![], typ: Type::Arrow(vec![("val".into(), Type::Bool)], Box::new(Type::String), Box::new(Type::Row(vec![], None))) });
 
         env.insert("drop_i64".to_string(), Scheme { vars: vec![], typ: Type::Arrow(vec![("val".into(), Type::Linear(Box::new(Type::I64)))], Box::new(Type::Unit), Box::new(Type::Row(vec![], None))) });
         env.insert("drop_array".to_string(), Scheme { vars: vec!["T".into()], typ: Type::Arrow(vec![("arr".into(), Type::Array(Box::new(Type::Var("T".into()))))], Box::new(Type::Unit), Box::new(Type::Row(vec![], None))) });
@@ -264,16 +257,15 @@ impl TypeChecker {
                     }
                 }
                 Stmt::Conc(ts) => { for t in ts { self.check_task(t, env, &s.span)?; } }
-                Stmt::Try { body, catch_param, catch_body } => {
-                    let exn = Type::UserDefined("Exn".into(), vec![]);
-                    let try_eff = Type::Row(vec![exn], Some(Box::new(ee.clone())));
-                    let mut et = env.clone(); self.infer_body(body, &mut et, er, &try_eff)?;
-                    let mut ec = env.clone(); ec.insert(catch_param.clone(), Scheme { vars: vec![], typ: Type::Str });
-                    self.infer_body(catch_body, &mut ec, er, ee)?;
-                    if et.linear_vars != ec.linear_vars { return Err(TypeError { message: "Linear mismatch".into(), span: s.span.clone() }); }
-                    env.linear_vars = et.linear_vars;
-                }
-                Stmt::Comment => {}
+                            Stmt::Try { body, catch_param, catch_body } => {
+                                let exn = Type::UserDefined("Exn".into(), vec![]);
+                                let try_eff = Type::Row(vec![exn], Some(Box::new(ee.clone())));
+                                let mut et = env.clone(); self.infer_body(body, &mut et, er, &try_eff)?;
+                                let mut ec = env.clone(); ec.insert(catch_param.clone(), Scheme { vars: vec![], typ: Type::String });
+                                self.infer_body(catch_body, &mut ec, er, ee)?;
+                                if et.linear_vars != ec.linear_vars { return Err(TypeError { message: "Linear mismatch".into(), span: s.span.clone() }); }
+                                env.linear_vars = et.linear_vars;
+                            }                Stmt::Comment => {}
             }
         }
         Ok(())
@@ -303,7 +295,7 @@ impl TypeChecker {
                 Literal::Int(_) => Type::I64,
                 Literal::Float(_) => Type::Float,
                 Literal::Bool(_) => Type::Bool,
-                Literal::String(_) => Type::Str,
+                Literal::String(_) => Type::String,
                 Literal::Unit => Type::Unit,
             })),
             Expr::Variable(n, s) => {
@@ -329,11 +321,11 @@ impl TypeChecker {
                         Ok((s, Type::I64))
                     }
                     "++" => {
-                        let s3 = self.unify(&apply_subst_type(&s, &t1), &Type::Str).map_err(|m| TypeError { message: m, span: l.span.clone() })?;
+                        let s3 = self.unify(&apply_subst_type(&s, &t1), &Type::String).map_err(|m| TypeError { message: m, span: l.span.clone() })?;
                         s = compose_subst(&s, &s3);
-                        let s4 = self.unify(&apply_subst_type(&s, &t2), &Type::Str).map_err(|m| TypeError { message: m, span: r.span.clone() })?;
+                        let s4 = self.unify(&apply_subst_type(&s, &t2), &Type::String).map_err(|m| TypeError { message: m, span: r.span.clone() })?;
                         s = compose_subst(&s, &s4);
-                        Ok((s, Type::Str))
+                        Ok((s, Type::String))
                     }
                     "+." | "-." | "*." | "/." => {
                         let s3 = self.unify(&apply_subst_type(&s, &t1), &Type::Float).map_err(|m| TypeError { message: m, span: l.span.clone() })?;
@@ -522,7 +514,7 @@ impl TypeChecker {
             }
             Expr::Raise(ex) => {
                 let (s, t) = self.infer(env, ex, er, ee)?;
-                let ss = self.unify(&t, &Type::Str).map_err(|m| TypeError { message: m, span: ex.span.clone() })?;
+                let ss = self.unify(&t, &Type::String).map_err(|m| TypeError { message: m, span: ex.span.clone() })?;
                 let mut s = compose_subst(&s, &ss);
                 let exn_type = Type::UserDefined("Exn".into(), vec![]);
                 let required_eff = Type::Row(vec![exn_type], Some(Box::new(self.new_var())));
@@ -563,7 +555,7 @@ impl TypeChecker {
                 }
             }
             Pattern::Literal(l) => {
-                let tl = match l { Literal::Int(_) => Type::I64, Literal::Float(_) => Type::Float, Literal::Bool(_) => Type::Bool, Literal::String(_) => Type::Str, Literal::Unit => Type::Unit };
+                let tl = match l { Literal::Int(_) => Type::I64, Literal::Float(_) => Type::Float, Literal::Bool(_) => Type::Bool, Literal::String(_) => Type::String, Literal::Unit => Type::Unit };
                 self.unify(tt, &tl).map_err(|m| TypeError { message: m, span: p.span.clone() })
             }
             Pattern::Wildcard => { if contains_linear(tt) { return Err(TypeError { message: "Discard linear".into(), span: p.span.clone() }); } Ok(HashMap::new()) }
@@ -720,7 +712,7 @@ impl TypeChecker {
             (Type::Array(i1), Type::Array(i2)) => self.unify(i1, i2),
             (Type::Result(o1, er1), Type::Result(o2, er2)) => { let s1 = self.unify(o1, o2)?; let s2 = self.unify(&apply_subst_type(&s1, er1), &apply_subst_type(&s1, er2))?; Ok(compose_subst(&s1, &s2)) }
             (Type::Ref(t1), Type::Ref(t2)) | (Type::Linear(t1), Type::Linear(t2)) | (Type::Borrow(t1), Type::Borrow(t2)) => self.unify(t1, t2),
-            _ => Err(format!("Mismatch: {:?} vs {:?}", t1, t2)),
+            _ => Err(format!("Mismatch: {} vs {}", t1, t2)),
         }
     }
 }
@@ -793,7 +785,7 @@ fn contains_linear(t: &Type) -> bool {
     match t {
         Type::Linear(_) | Type::Array(_) => true,
         Type::Ref(i) | Type::Borrow(i) | Type::List(i) => contains_linear(i),
-        Type::Arrow(p, r, e) => contains_linear(r) || p.iter().any(|(_, x)| contains_linear(x)) || contains_linear(e),
+        Type::Arrow(_, _, _) => false,
         Type::UserDefined(_, a) => a.iter().any(contains_linear),
         Type::Result(o, e) => contains_linear(o) || contains_linear(e),
         Type::Row(es, t) => es.iter().any(contains_linear) || t.as_ref().map_or(false, |x| contains_linear(x)),

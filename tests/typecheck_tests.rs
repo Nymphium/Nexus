@@ -152,7 +152,7 @@ fn test_complex_poly_logic() {
 
     fn main() -> unit do
         let a = weird(x: 1)
-        let b = weird(x: "string")
+        let b = weird(x: [=[string]=])
         return ()
     endfn
     "#;

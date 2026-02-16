@@ -16,7 +16,7 @@ fn test_array_basic() {
         let %arr = [| 1, 2, 3 |]
         %arr[0] <- 42
         let val = (borrow %arr)[0]
-        perform print(val: int_to_string(val: val))
+        perform print(val: i64_to_string(val: val))
         drop_array(arr: %arr)
         return ()
     endfn

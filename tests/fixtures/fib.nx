@@ -8,6 +8,8 @@ fn fib(n: i64) -> i64 do
   return fib(n: n - 1) + fib(n: n - 2)
 endfn
 
-fn main() -> unit do
-  perform printf(fmt: "Fib(10) = {}", val: fib(n: 10))
+fn main() -> unit effect { IO } do
+  let result = fib(n: 30)
+  perform print(val: [=[Fib(30) = ]=] ++ i64_to_string(val: result))
+  return ()
 endfn

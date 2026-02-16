@@ -51,7 +51,7 @@ fn test_call_pure_from_impure() {
 fn test_try_catch_removes_exn() {
     let src = r#"
     fn risky() -> unit effect { Exn } do
-        raise "oops"
+        raise [=[oops]=]
         return ()
     endfn
 
@@ -73,7 +73,7 @@ fn test_try_catch_removes_exn() {
 fn test_raise_requires_exn() {
     let src = r#"
     fn fail() -> unit do
-        raise "oops" // Should fail: no Exn effect allowed
+        raise [=[oops]=] // Should fail: no Exn effect allowed
         return ()
     endfn
     "#;

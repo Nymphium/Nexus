@@ -1,36 +1,47 @@
 # Nexus Agents
 
-This project uses AI agents to assist with development.
+This project is a language spec and implementation for LLM-friendly language.
 
 ## Guidelines
 
 - Follow TDD (Test Driven Development)
 - Write clear commit messages
-- Update documentation after feature implementation
+- Update documentation every after feature implementation or fixes
 - Ensure `cargo test` and `cargo fmt` passes before committing
 
-## Context
+## Special Agents
 
-- `src/ast.rs`: AST definitions
-- `src/parser.rs`: Parser (Chumsky)
-- `src/typecheck.rs`: Type system (HM + Linear + Effects)
-- `src/interpreter/mod.rs`: Interpreter
-- `tests/`: Integration tests
+### Consistency Auditor (The "Fixme-Resolve" Cycle)
 
-## Features
+This agent is responsible for maintaining strict consistency between documentation (`docs/`), implementation (`src/`), and tests (`tests/`).
 
-### Linear Types
-Implemented in `src/typecheck.rs`.
-- Sigil: `%`
-- Type: `Type::Linear(Box<Type>)`
-- Tracking: `linear_vars` in `TypeEnv`
-- Enforcement: Consumption check in `Expr::Variable`, End-of-scope check in `check_function`/`infer_body`.
-- Tests: `tests/linear_tests.rs`
+**Trigger**: "Audit codebase", "Check consistency", "Resolve FIXME"
+**Log File**: `RESOLUTION_LOG.md` (Tracks resolutions and fixes)
+**Issue File**: `FIXME.md` (Tracks known discrepancies and implementation gaps)
 
-### Effect System
-Implemented in `src/typecheck.rs` and `src/interpreter/mod.rs`.
-- Row-based: `Type::Row(Vec<Type>, Option<Box<Type>>)`
-- Unification: Order-independent row unification in `src/typecheck.rs`.
-- Polymorphism: Support for effect variables in function signatures.
-- Exception: `Raise` expression and `Try-Catch` statement.
-- Tests: `tests/effect_tests.rs`
+#### Protocol
+
+1.  **Scan & Assess**:
+    *   Read `FIXME.md` to identify known issues.
+    *   Read `docs/`, `src/`, and `tests/` to verify current state and identify new discrepancies.
+    *   If a discrepancy in `FIXME.md` is already fixed, move to **Clean**.
+
+2.  **Resolve**:
+    *   **Case A (Implementation is correct)**: Update `docs/` to match `src/`.
+    *   **Case B (Specification is correct)**: Fix `src/` or `tests/` to match `docs/`.
+    *   **Case C (Both wrong/Ambiguous)**: Propose a plan, update `docs/` first, then `src/`.
+
+3.  **Log (Audit Trail)**:
+    *   Append a standardized entry to `RESOLVED.md` detailing the fix.
+    *   Format:
+        ```markdown
+        ## YYYY-MM-DD
+        ### [Category] Summary of Fix
+        - **Problem**: Description of the mismatch.
+        - **Resolution**: How it was fixed (e.g., "Updated typechecker to enforce perform keyword").
+        ```
+
+4.  **Clean & Update**:
+    *   Remove resolved items from `FIXME.md`.
+    *   If new discrepancies were found during the audit, add them to `FIXME.md`.
+

@@ -13,7 +13,7 @@ pub enum Type {
     I64,
     Float,
     Bool,
-    Str,
+    String,
     Unit,
     Result(Box<Type>, Box<Type>),
     UserDefined(String, Vec<Type>),
@@ -22,10 +22,74 @@ pub enum Type {
     Ref(Box<Type>),
     Linear(Box<Type>), // %T
     Row(Vec<Type>, Option<Box<Type>>), // { E1, E2 | r }
-    Record(Vec<(String, Type)>), // { x: i64, y: str }
+    Record(Vec<(String, Type)>), // { x: i64, y: string }
     List(Box<Type>), // [T]
     Array(Box<Type>), // [| T |]
     Borrow(Box<Type>), // &T
+}
+
+impl std::fmt::Display for Type {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Type::I64 => write!(f, "i64"),
+            Type::Float => write!(f, "float"),
+            Type::Bool => write!(f, "bool"),
+            Type::String => write!(f, "string"),
+            Type::Unit => write!(f, "unit"),
+            Type::Result(ok, err) => write!(f, "Result<{}, {}>", ok, err),
+            Type::UserDefined(name, args) => {
+                write!(f, "{}", name)?;
+                if !args.is_empty() {
+                    write!(f, "<")?;
+                    for (i, arg) in args.iter().enumerate() {
+                        if i > 0 { write!(f, ", ")?; }
+                        write!(f, "{}", arg)?;
+                    }
+                    write!(f, ">")?;
+                }
+                Ok(())
+            }
+            Type::Var(name) => write!(f, "{}", name),
+            Type::Arrow(params, ret, eff) => {
+                write!(f, "(")?;
+                for (i, (name, typ)) in params.iter().enumerate() {
+                    if i > 0 { write!(f, ", ")?; }
+                    write!(f, "{}: {}", name, typ)?;
+                }
+                write!(f, ") -> {}", ret)?;
+                match &**eff {
+                    Type::Row(effs, tail) if effs.is_empty() && tail.is_none() => {},
+                    _ => write!(f, " effect {}", eff)?,
+                }
+                Ok(())
+            }
+            Type::Ref(t) => write!(f, "ref({})", t),
+            Type::Linear(t) => write!(f, "%{}", t),
+            Type::Row(effs, tail) => {
+                write!(f, "{{")?;
+                for (i, eff) in effs.iter().enumerate() {
+                    if i > 0 { write!(f, ", ")?; }
+                    write!(f, "{}", eff)?;
+                }
+                if let Some(t) = tail {
+                    if !effs.is_empty() { write!(f, " | ")?; }
+                    write!(f, "{}", t)?;
+                }
+                write!(f, "}}")
+            }
+            Type::Record(fields) => {
+                write!(f, "{{")?;
+                for (i, (name, typ)) in fields.iter().enumerate() {
+                    if i > 0 { write!(f, ", ")?; }
+                    write!(f, "{}: {}", name, typ)?;
+                }
+                write!(f, "}}")
+            }
+            Type::List(t) => write!(f, "[{}]", t),
+            Type::Array(t) => write!(f, "[| {} |]", t),
+            Type::Borrow(t) => write!(f, "&{}", t),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

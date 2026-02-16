@@ -3,8 +3,6 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-mod stdlib;
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Int(i64),
@@ -116,12 +114,15 @@ impl Env {
 pub struct Interpreter {
     pub functions: HashMap<String, Function>,
     pub handlers: HashMap<String, Handler>,
+    pub native_functions: HashMap<String, Box<dyn Fn(&[Value]) -> Result<ExprResult, String>>>,
 }
 
 impl Interpreter {
     pub fn new(program: Program) -> Self {
         let mut functions = HashMap::new();
         let mut handlers = HashMap::new();
+        let mut native_functions: HashMap<String, Box<dyn Fn(&[Value]) -> Result<ExprResult, String>>> = HashMap::new();
+
         for def in program.definitions {
             match def.node {
                 TopLevel::Function(func) => {
@@ -133,7 +134,55 @@ impl Interpreter {
                 _ => {}
             }
         }
-        Interpreter { functions, handlers }
+
+        // Register stdlib functions
+        native_functions.insert("print".to_string(), Box::new(|args| {
+            if args.len() != 1 { return Some(Err("print requires 1 arg".to_string())).unwrap(); }
+            if let Value::String(s) = &args[0] {
+                println!("{}", s);
+                Ok(ExprResult::Normal(Value::Unit))
+            } else {
+                Err("Expected string".to_string())
+            }
+        }));
+        
+        native_functions.insert("i64_to_string".to_string(), Box::new(|args| {
+            if args.len() != 1 { return Some(Err("i64_to_string requires 1 arg".to_string())).unwrap(); }
+            if let Value::Int(i) = &args[0] {
+                Ok(ExprResult::Normal(Value::String(i.to_string())))
+            } else {
+                Err("Expected i64".to_string())
+            }
+        }));
+
+        native_functions.insert("float_to_string".to_string(), Box::new(|args| {
+            if args.len() != 1 { return Some(Err("float_to_string requires 1 arg".to_string())).unwrap(); }
+            if let Value::Float(f) = &args[0] {
+                Ok(ExprResult::Normal(Value::String(f.to_string())))
+            } else {
+                Err("Expected float".to_string())
+            }
+        }));
+
+        native_functions.insert("bool_to_string".to_string(), Box::new(|args| {
+            if args.len() != 1 { return Some(Err("bool_to_string requires 1 arg".to_string())).unwrap(); }
+            if let Value::Bool(b) = &args[0] {
+                Ok(ExprResult::Normal(Value::String(b.to_string())))
+            } else {
+                Err("Expected bool".to_string())
+            }
+        }));
+
+        native_functions.insert("drop_i64".to_string(), Box::new(|args| {
+            if args.len() != 1 { return Some(Err("drop_i64 requires 1 arg".to_string())).unwrap(); }
+            Ok(ExprResult::Normal(Value::Unit))
+        }));
+        native_functions.insert("drop_array".to_string(), Box::new(|args| {
+            if args.len() != 1 { return Some(Err("drop_array requires 1 arg".to_string())).unwrap(); }
+            Ok(ExprResult::Normal(Value::Unit))
+        }));
+
+        Interpreter { functions, handlers, native_functions }
     }
 
     pub fn eval_repl_stmt(&mut self, stmt: &Spanned<Stmt>, env: &mut Env) -> EvalResult {
@@ -370,8 +419,10 @@ impl Interpreter {
                 if let Some(val) = env.get(func) {
                     match val {
                         Value::NativeFunction(name) => {
-                            if let Some(res) = stdlib::handle_call(&name, &evaluated_args) {
-                                return res;
+                            if let Some(f) = self.native_functions.get(&name) {
+                                return f(&evaluated_args);
+                            } else {
+                                return Err(format!("Native function '{}' not found", name));
                             }
                         }
                         Value::Function(name) => {
@@ -404,8 +455,10 @@ impl Interpreter {
                         }
                     }
                 }
-                if let Some(res) = stdlib::handle_call(func, &evaluated_args) {
-                    return res;
+                
+                // Fallback to global native function lookup (for stdlib if not in Env as var)
+                if let Some(f) = self.native_functions.get(func) {
+                    return f(&evaluated_args);
                 }
 
                 let res = self.run_function(func, evaluated_args)?;
