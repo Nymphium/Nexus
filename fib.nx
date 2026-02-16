@@ -1,0 +1,13 @@
+fn fib(n: i64) -> i64 do
+  if n == 0 then
+    return 0
+  endif
+  if n == 1 then
+    return 1
+  endif
+  return fib(n: n - 1) + fib(n: n - 2)
+endfn
+
+fn main() -> unit do
+  perform printf(fmt: "Fib(10) = {}", val: fib(n: 10))
+endfn
