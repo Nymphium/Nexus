@@ -116,4 +116,5 @@ conc do
   endtask
 endconc
 ```
-Tasks run concurrently and `conc` waits for all to complete.
+Tasks are designed to run concurrently, and `conc` waits for all to complete.
+*Note: In the current reference interpreter, tasks are executed sequentially for simplicity and deterministic debugging.*
