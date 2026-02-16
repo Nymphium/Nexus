@@ -26,16 +26,30 @@ pub fn start() {
     let mut env = Env::new();
 
     println!("Nexus REPL v0.1.0");
-    println!("Type 'exit' or Ctrl-D to quit.");
+    println!("Type ':exit' or Ctrl-D to quit. Type ':help' for commands.");
 
     loop {
         let readline = rl.readline(">> ");
         match readline {
             Ok(line) => {
                 let line_str = line.trim();
-                if line_str == "exit" {
-                    break;
+                
+                if line_str.starts_with(':') {
+                    match line_str {
+                        ":exit" | ":quit" => break,
+                        ":help" => {
+                            println!("Available commands:");
+                            println!("  :exit, :quit  Exit the REPL");
+                            println!("  :help         Show this help message");
+                            continue;
+                        }
+                        _ => {
+                            println!("Unknown command: {}", line_str);
+                            continue;
+                        }
+                    }
                 }
+                
                 if line_str.is_empty() {
                     continue;
                 }
