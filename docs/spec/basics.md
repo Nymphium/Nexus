@@ -11,11 +11,7 @@ Nexus source files use the `.nx` extension.
 Nexus programs are executed using the `nexus` CLI.
 
 ```bash
-# Run a file
 nexus <file.nx>
-
-# Start REPL mode
-nexus
 ```
 
 ## Structure
