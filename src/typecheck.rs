@@ -90,23 +90,12 @@ impl TypeChecker {
         env.insert("db_driver.commit".to_string(), Scheme { vars: vec![], typ: Type::Arrow(vec![("tx".into(), Type::UserDefined("Tx".to_string(), vec![]))], Box::new(Type::Unit), Box::new(io_eff.clone())) });
         env.insert("db_driver.rollback".to_string(), Scheme { vars: vec![], typ: Type::Arrow(vec![("tx".into(), Type::UserDefined("Tx".to_string(), vec![]))], Box::new(Type::Unit), Box::new(io_eff.clone())) });
         env.insert("log.info".to_string(), Scheme { vars: vec![], typ: Type::Arrow(vec![("msg".into(), Type::Str)], Box::new(Type::Unit), Box::new(io_eff.clone())) });
-        env.insert("print_str".to_string(), Scheme { vars: vec![], typ: Type::Arrow(vec![("val".into(), Type::Str)], Box::new(Type::Unit), Box::new(io_eff.clone())) });
-        env.insert("print_i64".to_string(), Scheme { vars: vec![], typ: Type::Arrow(vec![("val".into(), Type::I64)], Box::new(Type::Unit), Box::new(io_eff.clone())) });
         
-        env.insert(
-            "print".to_string(),
-            Scheme {
-                vars: vec!["T".to_string()],
-                typ: Type::Arrow(vec![("val".into(), Type::Var("T".to_string()))], Box::new(Type::Unit), Box::new(io_eff.clone())),
-            },
-        );
-        env.insert(
-            "to_string".to_string(),
-            Scheme {
-                vars: vec!["T".to_string()],
-                typ: Type::Arrow(vec![("val".into(), Type::Var("T".to_string()))], Box::new(Type::Str), Box::new(Type::Row(vec![], None))),
-            },
-        );
+        env.insert("print".to_string(), Scheme { vars: vec![], typ: Type::Arrow(vec![("val".into(), Type::Str)], Box::new(Type::Unit), Box::new(io_eff.clone())) });
+        
+        env.insert("int_to_string".to_string(), Scheme { vars: vec![], typ: Type::Arrow(vec![("val".into(), Type::I64)], Box::new(Type::Str), Box::new(Type::Row(vec![], None))) });
+        env.insert("float_to_string".to_string(), Scheme { vars: vec![], typ: Type::Arrow(vec![("val".into(), Type::Float)], Box::new(Type::Str), Box::new(Type::Row(vec![], None))) });
+        env.insert("bool_to_string".to_string(), Scheme { vars: vec![], typ: Type::Arrow(vec![("val".into(), Type::Bool)], Box::new(Type::Str), Box::new(Type::Row(vec![], None))) });
 
         env.insert("drop_i64".to_string(), Scheme { vars: vec![], typ: Type::Arrow(vec![("val".into(), Type::Linear(Box::new(Type::I64)))], Box::new(Type::Unit), Box::new(Type::Row(vec![], None))) });
         env.insert("drop_array".to_string(), Scheme { vars: vec!["T".into()], typ: Type::Arrow(vec![("arr".into(), Type::Array(Box::new(Type::Var("T".into()))))], Box::new(Type::Unit), Box::new(Type::Row(vec![], None))) });

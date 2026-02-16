@@ -20,7 +20,7 @@ fn test_port_basic() {
 
     handler StdoutLogger for Logger do
       fn log(msg: str) -> unit effect { IO } do
-        perform print_str(val: msg)
+        perform print(val: msg)
         return ()
       endfn
     endhandler
@@ -55,7 +55,7 @@ fn test_port_redefinition_wins() {
 
     fn main() -> unit effect { IO } do
       let result = Adder.add_one(n: 10)
-      perform print_i64(val: result)
+      perform print(val: int_to_string(val: result))
       return ()
     endfn
     "#;

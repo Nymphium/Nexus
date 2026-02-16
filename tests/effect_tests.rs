@@ -59,7 +59,7 @@ fn test_try_catch_removes_exn() {
         try
             perform risky()
         catch e ->
-            perform print_str(val: e)
+            perform print(val: e)
         endtry
         return ()
     endfn

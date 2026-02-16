@@ -72,7 +72,7 @@ fn test_linear_match_wildcard_fail() {
 fn test_linear_borrow_basic() {
     let src = r#"
     fn peek(x: &i64) -> unit effect { IO } do
-        perform print_i64(val: x)
+        perform print(val: int_to_string(val: x))
         return ()
     endfn
 
