@@ -48,10 +48,10 @@ pub fn start() {
                                     Ok(res) => {
                                         match res {
                                             ExprResult::Normal(val) => {
-                                                println!("{:?} : {:?}", val, typ);
+                                                println!("{} : {:?}", val, typ);
                                             },
                                             ExprResult::EarlyReturn(val) => {
-                                                println!("returned {:?} : {:?}", val, typ);
+                                                println!("returned {} : {:?}", val, typ);
                                             }
                                         }
                                     },
