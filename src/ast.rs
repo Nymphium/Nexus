@@ -1,3 +1,13 @@
+use std::ops::Range;
+
+pub type Span = Range<usize>;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Spanned<T> {
+    pub node: T,
+    pub span: Span,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type {
     I64,
@@ -12,6 +22,7 @@ pub enum Type {
     Linear(Box<Type>), // %T
     Row(Vec<Type>, Option<Box<Type>>), // { E1, E2 | r }
     Record(Vec<(String, Type)>), // { x: i64, y: str }
+    Borrow(Box<Type>), // &T
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -54,15 +65,15 @@ pub enum Literal {
 pub enum Pattern {
     Literal(Literal),
     Variable(String, Sigil), // e.g. case Ok(%new_tx)
-    Constructor(String, Vec<Pattern>),
-    Record(Vec<(String, Pattern)>, bool), // { x: p, _ }
+    Constructor(String, Vec<Spanned<Pattern>>),
+    Record(Vec<(String, Spanned<Pattern>)>, bool), // { x: p, _ }
     Wildcard,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct MatchCase {
-    pub pattern: Pattern,
-    pub body: Vec<Stmt>,
+    pub pattern: Spanned<Pattern>,
+    pub body: Vec<Spanned<Stmt>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -70,28 +81,29 @@ pub enum Expr {
     Literal(Literal),
     Variable(String, Sigil),
     // Binary operations (e.g. +, -) are allowed in expressions
-    BinaryOp(Box<Expr>, String, Box<Expr>),
+    BinaryOp(Box<Spanned<Expr>>, String, Box<Spanned<Expr>>),
+    Borrow(String, Sigil), // borrow %x
     // Function calls
     Call {
         func: String,
-        args: Vec<(String, Expr)>, // label, value
+        args: Vec<(String, Spanned<Expr>)>, // label, value
         perform: bool,             // true if 'perform' keyword is used
     },
-    Constructor(String, Vec<Expr>),
-    Record(Vec<(String, Expr)>),
-    FieldAccess(Box<Expr>, String),
+    Constructor(String, Vec<Spanned<Expr>>),
+    Record(Vec<(String, Spanned<Expr>)>),
+    FieldAccess(Box<Spanned<Expr>>, String),
     // If and Match can be expressions or statements.
     // In many FP languages they are expressions.
     If {
-        cond: Box<Expr>,
-        then_branch: Vec<Stmt>,
-        else_branch: Option<Vec<Stmt>>,
+        cond: Box<Spanned<Expr>>,
+        then_branch: Vec<Spanned<Stmt>>,
+        else_branch: Option<Vec<Spanned<Stmt>>>,
     },
     Match {
-        target: Box<Expr>,
+        target: Box<Spanned<Expr>>,
         cases: Vec<MatchCase>,
     },
-    Raise(Box<Expr>), // raise "error"
+    Raise(Box<Spanned<Expr>>), // raise "error"
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -100,22 +112,22 @@ pub enum Stmt {
         name: String,
         sigil: Sigil,
         typ: Option<Type>,
-        value: Expr,
+        value: Spanned<Expr>,
     },
-    Expr(Expr), // For side-effecting calls or match/if used as statement
-    Return(Expr),
+    Expr(Spanned<Expr>), // For side-effecting calls or match/if used as statement
+    Return(Spanned<Expr>),
     // Assignment for mutable variables: ~counter <- ~counter + 1
     Assign {
         name: String,
         sigil: Sigil,
-        value: Expr,
+        value: Spanned<Expr>,
     },
     // Concurrent block
     Conc(Vec<Function>), // 'task' blocks look like functions/closures
     Try {
-        body: Vec<Stmt>,
+        body: Vec<Spanned<Stmt>>,
         catch_param: String,
-        catch_body: Vec<Stmt>,
+        catch_body: Vec<Spanned<Stmt>>,
     },
     Comment,
 }
@@ -128,7 +140,7 @@ pub struct Function {
     pub params: Vec<Param>,
     pub ret_type: Type,
     pub effects: Type,
-    pub body: Vec<Stmt>,
+    pub body: Vec<Spanned<Stmt>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -136,6 +148,19 @@ pub struct TypeDef {
     pub name: String,
     pub type_params: Vec<String>,
     pub fields: Vec<(String, Type)>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnumDef {
+    pub name: String,
+    pub type_params: Vec<String>,
+    pub variants: Vec<VariantDef>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct VariantDef {
+    pub name: String,
+    pub fields: Vec<Type>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -169,6 +194,7 @@ pub struct FunctionSignature {
 pub enum TopLevel {
     Function(Function),
     TypeDef(TypeDef),
+    Enum(EnumDef),
     Import(Import),
     Port(Port),
     Handler(Handler),
@@ -177,5 +203,5 @@ pub enum TopLevel {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Program {
-    pub definitions: Vec<TopLevel>,
+    pub definitions: Vec<Spanned<TopLevel>>,
 }

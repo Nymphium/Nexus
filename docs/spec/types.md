@@ -1,19 +1,19 @@
 # Types
 
-Nexus uses a strict, nominal type system with Hindley-Milner type inference.
+Nexus uses a strict type system with Hindley-Milner type inference, structural records, and linear types.
 
 ## Primitive Types
 
 - `i64`: 64-bit signed integer.
 - `bool`: Boolean (`true` / `false`).
 - `str`: UTF-8 string.
-- `unit`: The unit type `()` (similar to `void`).
+- `unit`: The unit type `()`.
 
 ## Compound Types
 
 ### Records
 
-Records are anonymous structures with named fields.
+Records are structural and can be defined using `type`.
 
 ```nexus
 type User = {
@@ -22,31 +22,53 @@ type User = {
 }
 ```
 
-Field access uses `.`.
+### Enums (ADTs)
+
+Custom algebraic data types are defined via `enum`.
 
 ```nexus
-let u = {id: 1, name: "Nexus"}
-let name = u.name
+enum Option<T> {
+  Some(T),
+  None
+}
 ```
 
-### Variants (Algebraic Data Types)
+## Memory Management
 
-Currently, Nexus supports `Result<T, E>` and user-defined variants implicitly via pattern matching.
-Constructors like `Ok(T)` and `Err(E)` are built-in for `Result`.
+### Linear Types
 
-## Generics
-
-Functions can be generic over types.
+Linear types (prefixed with `%`) must be consumed exactly once. They ensure resources (like database transactions) are never leaked or reused inappropriately.
 
 ```nexus
-fn id<T>(x: T) -> T do
-  return x
-endfn
+let %tx = db.begin_tx()
+perform db.commit(tx: %tx) // tx is consumed
 ```
 
-Nexus enforces parametricity (cannot inspect generic values unless constrained).
+### Borrowing
 
-## Type Inference
+The `borrow` keyword allows temporary, immutable access to a linear value without consuming it.
 
-Nexus infers types for local variables (`let`).
-However, top-level function signatures must be explicitly typed.
+```nexus
+fn peek(x: &i64) -> unit do ... endfn
+
+let %x = 10
+perform peek(x: borrow %x) // %x is NOT consumed
+perform drop_i64(x: %x)    // %x is consumed here
+```
+
+### Mutable References
+
+Mutable stack references use `~` and `ref(T)` type. They are restricted by the "Gravity Rule" (cannot be stored in immutable variables or returned from functions).
+
+```nexus
+let ~count = 1
+~count <- ~count + 1
+```
+
+## Effect Types
+
+Function effects are represented as row-polymorphic types `{ E1, E2 | r }`.
+
+```nexus
+fn g() -> unit effect { IO, Net } do ... endfn
+```

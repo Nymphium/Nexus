@@ -6,7 +6,7 @@ use chumsky::Parser;
 fn check(src: &str) -> Result<(), String> {
     let p = parser().parse(src).map_err(|e| format!("{:?}", e))?;
     let mut checker = TypeChecker::new();
-    checker.check_program(&p)
+    checker.check_program(&p).map_err(|e| e.message)
 }
 
 #[test]
@@ -25,6 +25,23 @@ fn test_effect_propagation() {
 
     fn main() -> unit effect { IO } do
         perform g()
+    endfn
+    "#;
+    assert!(check(src).is_ok());
+}
+
+#[test]
+fn test_call_pure_from_impure() {
+    let src = r#"
+    type IO = {}
+    fn pure_fn() -> unit do return () endfn
+    fn impure_fn() -> unit effect { IO } do
+        perform pure_fn() // Should be allowed
+        return ()
+    endfn
+    fn main() -> unit effect { IO } do
+        perform impure_fn()
+        return ()
     endfn
     "#;
     assert!(check(src).is_ok());

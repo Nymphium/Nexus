@@ -7,7 +7,7 @@ fn check_code(src: &str) -> Result<(), String> {
     let program = parser.parse(src).map_err(|e| format!("{:?}", e))?;
 
     let mut checker = TypeChecker::new();
-    checker.check_program(&program)
+    checker.check_program(&program).map_err(|e| e.message)
 }
 
 #[test]

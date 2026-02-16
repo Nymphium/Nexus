@@ -6,7 +6,7 @@ use chumsky::Parser;
 fn check(src: &str) -> Result<(), String> {
     let p = parser().parse(src).map_err(|e| format!("{:?}", e))?;
     let mut checker = TypeChecker::new();
-    checker.check_program(&p)
+    checker.check_program(&p).map_err(|e| e.message)
 }
 
 #[test]
@@ -52,6 +52,38 @@ fn test_linear_in_ref_fail() {
     endfn
     "#;
     assert!(check(src).is_err(), "Should fail because Ref cannot contain Linear type");
+}
+
+#[test]
+fn test_linear_match_wildcard_fail() {
+    let src = r#"
+    fn main() -> unit do
+        let %x = 10
+        match %x do
+            case _ -> return () // Implicitly drops %x
+        endmatch
+    endfn
+    "#;
+    assert!(check(src).is_err(), "Should fail because wildcard match drops linear value");
+}
+
+#[test]
+fn test_linear_borrow_basic() {
+    let src = r#"
+    fn peek(x: &i64) -> unit do
+        perform print_i64(val: x)
+        return ()
+    endfn
+
+    fn main() -> unit do
+        let %x = 10
+        perform peek(x: borrow %x)
+        perform peek(x: borrow %x) // Borrow again
+        perform drop_i64(x: %x)    // Finally consume
+        return ()
+    endfn
+    "#;
+    assert!(check(src).is_ok());
 }
 
 #[test]

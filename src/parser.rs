@@ -11,7 +11,9 @@ const KEYWORDS: &[&str] = &[
 
     "task", "endtask", "conc", "endconc", "port", "endport", "perform", "type", "import", "from",
 
-    "pub", "effect", "raise", "try", "catch", "endtry", "handler", "for", "endhandler",
+    "pub", "effect", "raise", "try", "catch", "endtry", "handler", "for", "endhandler", "enum",
+
+    "borrow",
 
 ];
 
@@ -55,6 +57,10 @@ fn type_parser() -> P<Type> {
                 .padded()
                 .ignore_then(t.clone().delimited_by(just('('), just(')')))
                 .map(|inner| Type::Ref(Box::new(inner))),
+            just('&')
+                .padded()
+                .ignore_then(t.clone())
+                .map(|inner| Type::Borrow(Box::new(inner))),
             just('%')
                 .padded()
                 .ignore_then(t.clone())
@@ -141,7 +147,7 @@ fn literal() -> impl Parser<char, Literal, Error = Simple<char>> + Clone {
     choice((int, bool_lit, unit_lit, str_lit)).padded()
 }
 
-fn expr_parser() -> P<Expr> {
+fn expr_parser() -> P<Spanned<Expr>> {
     recursive(|expr| {
         let path = ident()
             .separated_by(just('.'))
@@ -169,8 +175,6 @@ fn expr_parser() -> P<Expr> {
             perform: false,
         });
 
-
-
         let record_field = ident().then_ignore(just(':').padded()).then(expr.clone());
         let record = record_field
             .separated_by(just(','))
@@ -192,8 +196,15 @@ fn expr_parser() -> P<Expr> {
             .ignore_then(expr.clone())
             .map(|e| Expr::Raise(Box::new(e)));
 
+        let borrow_expr = text::keyword("borrow")
+            .padded()
+            .ignore_then(sigil())
+            .then(ident())
+            .map(|(s, n)| Expr::Borrow(n, s));
+
         let atom = choice((
             raise,
+            borrow_expr,
             perform_call,
             constructor,
             simple_call,
@@ -201,13 +212,23 @@ fn expr_parser() -> P<Expr> {
             literal().map(Expr::Literal),
             var,
         ))
-        .padded();
+        .padded()
+        .map_with_span(|node, span| Spanned { node, span });
 
         // Field Access: atom.ident
         let atom_with_access = atom
             .clone()
-            .then(just('.').ignore_then(ident()).repeated())
-            .foldl(|lhs, name| Expr::FieldAccess(Box::new(lhs), name));
+            .then(
+                just('.')
+                    .ignore_then(ident())
+                    .map_with_span(|n, s| (n, s))
+                    .repeated(),
+            )
+            .foldl(|lhs, (name, name_span)| {
+                let span = lhs.span.start..name_span.end;
+                let node = Expr::FieldAccess(Box::new(lhs), name);
+                Spanned { node, span }
+            });
 
         let op = choice((
             just("==").to("==".to_string()),
@@ -226,12 +247,16 @@ fn expr_parser() -> P<Expr> {
         atom_with_access
             .clone()
             .then(op.then(atom_with_access).repeated())
-            .foldl(|lhs, (op, rhs)| Expr::BinaryOp(Box::new(lhs), op, Box::new(rhs)))
+            .foldl(|lhs, (op, rhs)| {
+                let span = lhs.span.start..rhs.span.end;
+                let node = Expr::BinaryOp(Box::new(lhs), op, Box::new(rhs));
+                Spanned { node, span }
+            })
     })
     .boxed()
 }
 
-pub fn stmt_parser() -> impl Parser<char, Stmt, Error = Simple<char>> {
+pub fn stmt_parser() -> impl Parser<char, Spanned<Stmt>, Error = Simple<char>> {
     recursive(|stmt| {
         let expr = expr_parser();
 
@@ -241,26 +266,35 @@ pub fn stmt_parser() -> impl Parser<char, Stmt, Error = Simple<char>> {
             .then(ident())
             .then(just(':').padded().ignore_then(type_parser()).or_not())
             .then(just('=').padded().ignore_then(expr.clone()))
-            .map(|(((s, n), t), v)| Stmt::Let {
-                name: n,
-                sigil: s,
-                typ: t,
-                value: v,
+            .map_with_span(|(((s, n), t), v), span| Spanned {
+                node: Stmt::Let {
+                    name: n,
+                    sigil: s,
+                    typ: t,
+                    value: v,
+                },
+                span,
             });
 
         let return_stmt = text::keyword("return")
             .padded()
             .ignore_then(expr.clone())
-            .map(Stmt::Return);
+            .map_with_span(|v, span| Spanned {
+                node: Stmt::Return(v),
+                span,
+            });
 
         let assign_stmt = sigil()
             .then(ident())
             .then_ignore(just("<-").padded())
             .then(expr.clone())
-            .map(|((s, n), v)| Stmt::Assign {
-                name: n,
-                sigil: s,
-                value: v,
+            .map_with_span(|((s, n), v), span| Spanned {
+                node: Stmt::Assign {
+                    name: n,
+                    sigil: s,
+                    value: v,
+                },
+                span,
             });
 
         let if_stmt = text::keyword("if")
@@ -275,29 +309,49 @@ pub fn stmt_parser() -> impl Parser<char, Stmt, Error = Simple<char>> {
                     .or_not(),
             )
             .then_ignore(text::keyword("endif").padded())
-            .map(|((cond, then_branch), else_branch)| {
-                Stmt::Expr(Expr::If {
-                    cond: Box::new(cond),
-                    then_branch,
-                    else_branch,
-                })
+            .map_with_span(|((cond, then_branch), else_branch), span| Spanned {
+                node: Stmt::Expr(Spanned {
+                    node: Expr::If {
+                        cond: Box::new(cond),
+                        then_branch,
+                        else_branch,
+                    },
+                    span: span.clone(),
+                }),
+                span,
             });
 
-        let pattern = recursive(|p: Recursive<'_, char, Pattern, Simple<char>>| {
-            let variable = sigil().then(ident()).map(|(s, n)| Pattern::Variable(n, s));
-            let lit = literal().map(Pattern::Literal);
-            let wildcard = just('_').padded().to(Pattern::Wildcard);
+        let pattern = recursive(|p: Recursive<'_, char, Spanned<Pattern>, Simple<char>>| {
+            let variable = sigil().then(ident()).map_with_span(|(s, n), span| Spanned {
+                node: Pattern::Variable(n, s),
+                span,
+            });
+            let lit = literal().map_with_span(|l, span| Spanned {
+                node: Pattern::Literal(l),
+                span,
+            });
+            let wildcard = just('_').padded().map_with_span(|_, span| Spanned {
+                node: Pattern::Wildcard,
+                span,
+            });
 
             let constructor = ident()
                 .then(
-                    p.clone().separated_by(just(',').padded())
+                    p.clone()
+                        .separated_by(just(',').padded())
                         .delimited_by(just('('), just(')')),
                 )
-                .map(|(c, args)| Pattern::Constructor(c, args));
+                .map_with_span(|(c, args), span| Spanned {
+                    node: Pattern::Constructor(c, args),
+                    span,
+                });
 
             let record_pat = choice((
                 just('_').padded().to(None),
-                ident().then_ignore(just(':').padded()).then(p.clone()).map(Some),
+                ident()
+                    .then_ignore(just(':').padded())
+                    .then(p.clone())
+                    .map(Some),
             ))
             .separated_by(just(',').padded())
             .allow_trailing()
@@ -321,7 +375,10 @@ pub fn stmt_parser() -> impl Parser<char, Stmt, Error = Simple<char>> {
                         }
                     }
                 }
-                Ok(Pattern::Record(fields, open))
+                Ok(Spanned {
+                    node: Pattern::Record(fields, open),
+                    span,
+                })
             });
 
             choice((constructor, record_pat, lit, wildcard, variable))
@@ -340,11 +397,15 @@ pub fn stmt_parser() -> impl Parser<char, Stmt, Error = Simple<char>> {
             .then_ignore(text::keyword("do").padded())
             .then(match_case.repeated())
             .then_ignore(text::keyword("endmatch").padded())
-            .map(|(target, cases)| {
-                Stmt::Expr(Expr::Match {
-                    target: Box::new(target),
-                    cases,
-                })
+            .map_with_span(|(target, cases), span| Spanned {
+                node: Stmt::Expr(Spanned {
+                    node: Expr::Match {
+                        target: Box::new(target),
+                        cases,
+                    },
+                    span: span.clone(),
+                }),
+                span,
             });
 
         let conc_block = text::keyword("conc")
@@ -366,14 +427,17 @@ pub fn stmt_parser() -> impl Parser<char, Stmt, Error = Simple<char>> {
                         is_public: false,
                         params: vec![],
                         ret_type: Type::Unit,
-                        effects: Type::Unit,
+                        effects: Type::Row(vec![], None),
                         body,
                         type_params: vec![],
                     })
                     .repeated(),
             )
             .then_ignore(text::keyword("endconc").padded())
-            .map(|(_, tasks)| Stmt::Conc(tasks));
+            .map_with_span(|(_, tasks), span| Spanned {
+                node: Stmt::Conc(tasks),
+                span,
+            });
 
         let try_stmt = text::keyword("try")
             .padded()
@@ -386,143 +450,68 @@ pub fn stmt_parser() -> impl Parser<char, Stmt, Error = Simple<char>> {
                     .then(stmt.clone().repeated()),
             )
             .then_ignore(text::keyword("endtry").padded())
-            .map(|(body, (catch_param, catch_body))| Stmt::Try {
-                body,
-                catch_param,
-                catch_body,
+            .map_with_span(|(body, (catch_param, catch_body)), span| Spanned {
+                node: Stmt::Try {
+                    body,
+                    catch_param,
+                    catch_body,
+                },
+                span,
             });
 
         let comment = just("//")
             .then(take_until(choice((just('\n'), end().to('\n')))))
             .padded()
-            .map(|_| Stmt::Comment);
+            .map_with_span(|_, span| Spanned {
+                node: Stmt::Comment,
+                span,
+            });
 
-        choice((
-            comment,
-            let_stmt,
-            return_stmt,
-            assign_stmt,
-            if_stmt,
-            match_stmt,
-            try_stmt,
-            conc_block,
-            expr.map(Stmt::Expr),
-        ))
-        .padded()
-    })
-    .boxed()
-}
+        let basic_stmt = choice((
+            comment.boxed(),
+            let_stmt.boxed(),
+            return_stmt.boxed(),
+            assign_stmt.boxed(),
+        ));
 
-pub fn parser() -> impl Parser<char, Program, Error = Simple<char>> {
-    let param = sigil()
-        .then(ident())
-        .then_ignore(just(':').padded())
-        .then(type_parser())
-        .map(|((sigil, name), typ)| Param { name, sigil, typ });
+        let complex_stmt = choice((
+            if_stmt.boxed(),
+            match_stmt.boxed(),
+            try_stmt.boxed(),
+            conc_block.boxed(),
+        ));
 
-    let function_inner = text::keyword("pub")
-        .or_not()
-        .padded()
-        .then_ignore(text::keyword("fn").padded())
-        .then(ident())
-        .then(
-            just('<')
-                .ignore_then(ident().separated_by(just(',').padded()))
-                .then_ignore(just('>'))
-                .or_not(),
-        )
-        .then(
-            param
-                .clone()
-                .separated_by(just(','))
-                .delimited_by(just('('), just(')')),
-        )
-        .then_ignore(just("->").padded())
-        .then(type_parser())
-        .then(
-            text::keyword("effect")
-                .padded()
-                .ignore_then(choice((
-                    type_parser()
-                        .separated_by(just(',').padded())
-                        .then(
-                            just('|')
-                                .padded()
-                                .ignore_then(type_parser())
-                                .or_not(),
-                        )
-                        .delimited_by(just('{'), just('}'))
-                        .map(|(effs, tail)| Type::Row(effs, tail.map(Box::new))),
-                    type_parser(),
-                )))
-                .or_not(),
-        )
-        .then_ignore(text::keyword("do").padded())
-        .then(stmt_parser().repeated())
-        .then_ignore(text::keyword("endfn").padded())
-        .map(
-            |((((((vis, name), type_params), params), ret_type), effects), body)| Function {
-                name,
-                is_public: vis.is_some(),
-                type_params: type_params.unwrap_or_default(),
-                params,
-                ret_type,
-                effects: effects.unwrap_or(Type::Row(vec![], None)),
-                body,
-            },
-        )
-        .boxed();
-
-    let func_def = function_inner.clone().map(TopLevel::Function);
-
-    let type_def = text::keyword("type")
-        .padded()
-        .ignore_then(ident())
-        .then(
-            just('<')
-                .ignore_then(ident().separated_by(just(',').padded()))
-                .then_ignore(just('>'))
-                .or_not(),
-        )
-        .then_ignore(just('=').padded())
-        .then(
-            ident()
+        basic_stmt
+            .or(complex_stmt)
+            .or(expr.map(|v| {
+                let span = v.span.clone();
+                Spanned {
+                    node: Stmt::Expr(v),
+                    span,
+                }
+            }).boxed())
+            .padded()            })
+            .boxed()
+        }
+        
+        pub fn parser() -> impl Parser<char, Program, Error = Simple<char>> {
+            let param = sigil()
+                .then(ident())
                 .then_ignore(just(':').padded())
                 .then(type_parser())
-                .separated_by(just(','))
-                .delimited_by(just('{'), just('}')),
-        )
-        .map(|((name, type_params), fields)| {
-            TopLevel::TypeDef(TypeDef {
-                name,
-                type_params: type_params.unwrap_or_default(),
-                fields,
-            })
-        });
-
-    let import_def = text::keyword("import")
-        .padded()
-        .ignore_then(
-            ident()
-                .separated_by(just(','))
-                .delimited_by(just('{'), just('}')),
-        )
-        .then_ignore(text::keyword("from").padded())
-        .then(
-            just('"')
-                .ignore_then(take_until(just('"')))
-                .map(|(s, _)| s.into_iter().collect::<String>()),
-        )
-        .map(|(items, module)| TopLevel::Import(Import { module, items }));
-
-    let port_def = text::keyword("port")
-        .padded()
-        .ignore_then(ident())
-        .then_ignore(text::keyword("do").padded())
-        .then(
-            text::keyword("fn")
+                .map(|((sigil, name), typ)| Param { name, sigil, typ });
+        
+            let function_inner = text::keyword("pub")
+                .or_not()
                 .padded()
-                .ignore_then(ident())
+                .then_ignore(text::keyword("fn").padded())
+                .then(ident())
+                .then(
+                    just('<')
+                        .ignore_then(ident().separated_by(just(',').padded()))
+                        .then_ignore(just('>'))
+                        .or_not(),
+                )
                 .then(
                     param
                         .clone()
@@ -531,48 +520,176 @@ pub fn parser() -> impl Parser<char, Program, Error = Simple<char>> {
                 )
                 .then_ignore(just("->").padded())
                 .then(type_parser())
-                .map(|((name, params), ret_type)| FunctionSignature {
-                    name,
-                    params,
-                    ret_type,
-                    effects: Type::Row(vec![], None),
-                })
-                .repeated(),
-        )
-        .then_ignore(text::keyword("endport").padded())
-        .map(|(name, functions)| TopLevel::Port(Port { name, functions }));
-
-    let handler_def = text::keyword("handler")
-        .padded()
-        .ignore_then(ident())
-        .then_ignore(text::keyword("for").padded())
-        .then(ident())
-        .then_ignore(text::keyword("do").padded())
-        .then(function_inner.repeated())
-        .then_ignore(text::keyword("endhandler").padded())
-        .map(|((name, port_name), functions)| {
-            TopLevel::Handler(Handler {
-                name,
-                port_name,
-                functions,
-            })
-        });
-
-    let comment = just("//")
-        .then(take_until(just('\n')))
-        .padded()
-        .map(|_| TopLevel::Comment);
-
-    choice((
-        func_def,
-        type_def,
-        import_def,
-        port_def,
-        handler_def,
-        comment,
-    ))
-        .padded()
-        .repeated()
-        .map(|definitions| Program { definitions })
-        .then_ignore(end())
-}
+                .then(
+                    text::keyword("effect")
+                        .padded()
+                        .ignore_then(choice((
+                            type_parser()
+                                .separated_by(just(',').padded())
+                                .then(
+                                    just('|')
+                                        .padded()
+                                        .ignore_then(type_parser())
+                                        .or_not(),
+                                )
+                                .delimited_by(just('{'), just('}'))
+                                .map(|(effs, tail)| Type::Row(effs, tail.map(Box::new))),
+                            type_parser(),
+                        )))
+                        .or_not(),
+                )
+                .then_ignore(text::keyword("do").padded())
+                .then(stmt_parser().repeated())
+                .then_ignore(text::keyword("endfn").padded())
+                .map(
+                    |((((((vis, name), type_params), params), ret_type), effects), body)| Function {
+                        name,
+                        is_public: vis.is_some(),
+                        type_params: type_params.unwrap_or_default(),
+                        params,
+                        ret_type,
+                        effects: effects.unwrap_or(Type::Row(vec![], None)),
+                        body,
+                    },
+                )
+                .boxed();
+        
+            let func_def = function_inner.clone().map(TopLevel::Function);
+        
+            let type_def = text::keyword("type")
+                .padded()
+                .ignore_then(ident())
+                .then(
+                    just('<')
+                        .ignore_then(ident().separated_by(just(',').padded()))
+                        .then_ignore(just('>'))
+                        .or_not(),
+                )
+                .then_ignore(just('=').padded())
+                .then(
+                    ident()
+                        .then_ignore(just(':').padded())
+                        .then(type_parser())
+                        .separated_by(just(','))
+                        .delimited_by(just('{'), just('}')),
+                )
+                .map(|((name, type_params), fields)| {
+                    TopLevel::TypeDef(TypeDef {
+                        name,
+                        type_params: type_params.unwrap_or_default(),
+                        fields,
+                    })
+                });
+        
+            let enum_def = text::keyword("enum")
+                .padded()
+                .ignore_then(ident())
+                .then(
+                    just('<')
+                        .ignore_then(ident().separated_by(just(',').padded()))
+                        .then_ignore(just('>'))
+                        .or_not(),
+                )
+                .then_ignore(just('{').padded())
+                .then(
+                    ident()
+                        .then(
+                            type_parser()
+                                .separated_by(just(',').padded())
+                                .delimited_by(just('('), just(')'))
+                                .or_not(),
+                        )
+                        .map(|(name, fields)| VariantDef {
+                            name,
+                            fields: fields.unwrap_or_default(),
+                        })
+                        .separated_by(just(',').padded())
+                        .allow_trailing(),
+                )
+                .then_ignore(just('}').padded())
+                .map(|((name, type_params), variants)| {
+                    TopLevel::Enum(EnumDef {
+                        name,
+                        type_params: type_params.unwrap_or_default(),
+                        variants,
+                    })
+                });
+        
+            let import_def = text::keyword("import")
+                .padded()
+                .ignore_then(
+                    ident()
+                        .separated_by(just(','))
+                        .delimited_by(just('{'), just('}')),
+                )
+                .then_ignore(text::keyword("from").padded())
+                .then(
+                    just('"')
+                        .ignore_then(take_until(just('"')))
+                        .map(|(s, _)| s.into_iter().collect::<String>()),
+                )
+                .map(|(items, module)| TopLevel::Import(Import { module, items }));
+        
+            let port_def = text::keyword("port")
+                .padded()
+                .ignore_then(ident())
+                .then_ignore(text::keyword("do").padded())
+                .then(
+                    text::keyword("fn")
+                        .padded()
+                        .ignore_then(ident())
+                        .then(
+                            param
+                                .clone()
+                                .separated_by(just(','))
+                                .delimited_by(just('('), just(')')),
+                        )
+                        .then_ignore(just("->").padded())
+                        .then(type_parser())
+                        .map(|((name, params), ret_type)| FunctionSignature {
+                            name,
+                            params,
+                            ret_type,
+                            effects: Type::Row(vec![], None),
+                        })
+                        .repeated(),
+                )
+                .then_ignore(text::keyword("endport").padded())
+                .map(|(name, functions)| TopLevel::Port(Port { name, functions }));
+        
+            let handler_def = text::keyword("handler")
+                .padded()
+                .ignore_then(ident())
+                .then_ignore(text::keyword("for").padded())
+                .then(ident())
+                .then_ignore(text::keyword("do").padded())
+                .then(function_inner.repeated())
+                .then_ignore(text::keyword("endhandler").padded())
+                .map(|((name, port_name), functions)| {
+                    TopLevel::Handler(Handler {
+                        name,
+                        port_name,
+                        functions,
+                    })
+                });
+        
+            let comment = just("//")
+                .then(take_until(just('\n')))
+                .padded()
+                .map(|_| TopLevel::Comment);
+        
+            choice((
+                func_def,
+                type_def,
+                enum_def,
+                import_def,
+                port_def,
+                handler_def,
+                comment,
+            ))
+            .padded()
+            .map_with_span(|node, span| Spanned { node, span })
+            .repeated()
+            .map(|definitions| Program { definitions })
+            .then_ignore(end())
+        }

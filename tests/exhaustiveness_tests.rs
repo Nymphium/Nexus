@@ -6,7 +6,7 @@ use chumsky::Parser;
 fn check(src: &str) -> Result<(), String> {
     let p = parser().parse(src).map_err(|e| format!("{:?}", e))?;
     let mut checker = TypeChecker::new();
-    checker.check_program(&p)
+    checker.check_program(&p).map_err(|e| e.message)
 }
 
 #[test]
@@ -125,4 +125,34 @@ fn test_record_non_exhaustive() {
     endfn
     "#;
     assert!(check(src).is_err(), "Should fail");
+}
+
+#[test]
+fn test_enum_exhaustive() {
+    let src = r#"
+    enum Color { Red, Green, Blue }
+    fn main() -> unit do
+        let c = Red()
+        match c do
+            case Red() -> return ()
+            case Green() -> return ()
+            case Blue() -> return ()
+        endmatch
+    endfn
+    "#;
+    assert!(check(src).is_ok());
+}
+
+#[test]
+fn test_enum_non_exhaustive() {
+    let src = r#"
+    enum Color { Red, Green, Blue }
+    fn main() -> unit do
+        let c = Red()
+        match c do
+            case Red() -> return ()
+        endmatch
+    endfn
+    "#;
+    assert!(check(src).is_err(), "Should fail due to missing Green and Blue");
 }

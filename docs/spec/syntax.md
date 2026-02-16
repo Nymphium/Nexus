@@ -68,6 +68,31 @@ match point do
 endmatch
 ```
 
+### Enum
+
+User-defined algebraic data types (ADTs) are supported via `enum`.
+
+```nexus
+enum Color {
+  Red,
+  Green,
+  Blue,
+  Rgb(i64, i64, i64)
+}
+
+fn main() -> unit do
+  let c = Rgb(255, 0, 0)
+  match c do
+    case Red() -> ...
+    case Rgb(r, g, b) -> ...
+    case _ -> ...
+  endmatch
+endfn
+```
+
+Note: Constructors currently require `()` if they have no arguments in patterns and expressions (e.g., `Red()`).
+
+
 
 ## Comments
 

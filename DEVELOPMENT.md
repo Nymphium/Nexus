@@ -22,10 +22,10 @@
 
 ## Core & Semantics (High Priority)
 - [x] **Exhaustiveness Check**: Verify that `match` expressions cover all possible patterns.
-- [ ] User-defined ADTs and pattern matching on them.
-- [ ] **Linear Borrowing**: Allow temporary access to linear values without consuming them (`borrow` keyword).
-- [ ] **Refined Effect Checking**: Enhance unification to support flexible subset/superset relationships for effects beyond basic row polymorphism.
-- [ ] **Error Messages**: Implement rich diagnostics with source spans using Ariadne.
+- [x] User-defined ADTs and pattern matching on them.
+- [x] **Linear Borrowing**: Allow temporary access to linear values without consuming them (`borrow` keyword).
+- [x] **Refined Effect Checking**: Enhance unification to support flexible subset/superset relationships for effects beyond basic row polymorphism.
+- [x] **Error Messages**: Implement rich diagnostics with source spans using Ariadne.
 
 ### Infrastructure & Tooling (Medium Priority)
 - [ ] **Standard Library**: Add basic data structures (List, Map) and utilities.

@@ -31,7 +31,16 @@ fn main() {
             match checker.check_program(&program) {
                 Ok(_) => println!("Type checking successful!"),
                 Err(e) => {
-                    eprintln!("Type Error: {}", e);
+                    Report::build(ReportKind::Error, filename, e.span.start)
+                        .with_message(e.message.clone())
+                        .with_label(
+                            Label::new((filename, e.span))
+                                .with_message(e.message)
+                                .with_color(Color::Red),
+                        )
+                        .finish()
+                        .print((filename, Source::from(&src)))
+                        .unwrap();
                     return;
                 }
             }

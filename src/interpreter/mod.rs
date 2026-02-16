@@ -67,7 +67,7 @@ impl Interpreter {
         let mut functions = HashMap::new();
         let mut handlers = HashMap::new();
         for def in program.definitions {
-            match def {
+            match def.node {
                 TopLevel::Function(func) => {
                     functions.insert(func.name.clone(), func);
                 }
@@ -80,8 +80,8 @@ impl Interpreter {
         Interpreter { functions, handlers }
     }
 
-    pub fn eval_repl_stmt(&mut self, stmt: &Stmt, env: &mut Env) -> EvalResult {
-        match stmt {
+    pub fn eval_repl_stmt(&mut self, stmt: &Spanned<Stmt>, env: &mut Env) -> EvalResult {
+        match &stmt.node {
             Stmt::Expr(expr) => self.eval_expr(expr, env),
             _ => self.eval_body(&[stmt.clone()], env),
         }
@@ -114,9 +114,9 @@ impl Interpreter {
         }
     }
 
-    fn eval_body(&mut self, body: &[Stmt], env: &mut Env) -> EvalResult {
+    fn eval_body(&mut self, body: &[Spanned<Stmt>], env: &mut Env) -> EvalResult {
         for stmt in body {
-            match stmt {
+            match &stmt.node {
                                 Stmt::Let { name, sigil, value, .. } => {
                                     let res = self.eval_expr(value, env)?;
                                     match res {
@@ -189,8 +189,8 @@ impl Interpreter {
         Ok(ExprResult::Normal(Value::Unit))
     }
 
-    fn eval_expr(&mut self, expr: &Expr, env: &mut Env) -> EvalResult {
-        match expr {
+    fn eval_expr(&mut self, expr: &Spanned<Expr>, env: &mut Env) -> EvalResult {
+        match &expr.node {
             Expr::Literal(lit) => Ok(ExprResult::Normal(match lit {
                 Literal::Int(i) => Value::Int(*i),
                 Literal::Bool(b) => Value::Bool(*b),
@@ -258,6 +258,13 @@ impl Interpreter {
                     }
                 }
             }
+            Expr::Borrow(name, sigil) => {
+                let key = sigil.get_key(name);
+                let val = env
+                    .get(&key)
+                    .ok_or_else(|| format!("Variable '{}' not found", key))?;
+                Ok(ExprResult::Normal(val))
+            }
             Expr::Call { func, args, .. } => {
                 let mut evaluated_args = Vec::new();
                 for (_, arg_expr) in args {
@@ -268,7 +275,6 @@ impl Interpreter {
                     }
                 }
 
-                // Dynamic dispatch for Ports & Handlers
                 if let Some(pos) = func.find('.') {
                     let port_name = &func[..pos];
                     let func_name = &func[pos + 1..];
@@ -278,53 +284,21 @@ impl Interpreter {
                             handler.functions.iter().find(|f| f.name == func_name)
                         {
                             let mut handler_env = Env::new();
-                            if target_func.params.len() != evaluated_args.len() {
-                                return Err(format!(
-                                    "Arity mismatch for handler {}.{}",
-                                    port_name, func_name
-                                ));
+                            for (param, arg) in target_func.params.iter().zip(evaluated_args.iter())
+                            {
+                                handler_env.define(param.name.clone(), arg.clone());
                             }
-                                                            for (param, arg) in target_func.params.iter().zip(evaluated_args.iter())
-                                                        {
-                                                            handler_env.define(param.name.clone(), arg.clone());
-                                                        }
-                                                        let res = self.eval_body(&target_func.body, &mut handler_env)?;
-                                                        let val = match res {
-                                                            ExprResult::Normal(v) => v,
-                                                            ExprResult::EarlyReturn(v) => v,
-                                                        };
-                                                        return Ok(ExprResult::Normal(val));
-                                                    }
-                                                }
-                                            }
+                            let res = self.eval_body(&target_func.body, &mut handler_env)?;
+                            let val = match res {
+                                ExprResult::Normal(v) => v,
+                                ExprResult::EarlyReturn(v) => v,
+                            };
+                            return Ok(ExprResult::Normal(val));
+                        }
+                    }
+                }
                 if let Some(res) = stdlib::handle_call(func, &evaluated_args) {
                     return res;
-                }
-
-                if func == "log.info" {
-                    println!("[LOG] {:?}", evaluated_args);
-                    return Ok(ExprResult::Normal(Value::Unit));
-                }
-                if func == "db_driver.begin_tx" {
-                    return Ok(ExprResult::Normal(Value::String("tx_001".to_string())));
-                }
-                if func == "db_driver.commit" {
-                    return Ok(ExprResult::Normal(Value::Unit));
-                }
-                if func == "db_driver.rollback" {
-                    return Ok(ExprResult::Normal(Value::Unit));
-                }
-                if func == "UserRepository.exists" {
-                    return Ok(ExprResult::Normal(Value::Variant(
-                        "Ok".to_string(),
-                        vec![Value::Bool(false)],
-                    )));
-                }
-                if func == "UserRepository.create" {
-                    return Ok(ExprResult::Normal(Value::Variant(
-                        "Ok".to_string(),
-                        vec![Value::String("new_tx_002".to_string())],
-                    )));
                 }
 
                 let res = self.run_function(func, evaluated_args)?;
@@ -421,17 +395,17 @@ impl Interpreter {
                 };
                 Err(msg)
             }
-
         }
     }
 
-    fn match_pattern(&self, pattern: &Pattern, val: &Value) -> Option<HashMap<String, Value>> {
-        match (pattern, val) {
+    fn match_pattern(&self, pattern: &Spanned<Pattern>, val: &Value) -> Option<HashMap<String, Value>> {
+        match (&pattern.node, val) {
             (Pattern::Variable(name, _), v) => {
                 let mut map = HashMap::new();
                 map.insert(name.clone(), v.clone());
                 Some(map)
             }
+            (Pattern::Wildcard, _) => Some(HashMap::new()),
             (Pattern::Literal(lit), v) => match (lit, v) {
                 (Literal::Int(a), Value::Int(b)) if a == b => Some(HashMap::new()),
                 (Literal::Bool(a), Value::Bool(b)) if a == b => Some(HashMap::new()),
@@ -453,6 +427,21 @@ impl Interpreter {
                 } else {
                     None
                 }
+            }
+            (Pattern::Record(pat_fields, _), Value::Record(map)) => {
+                let mut bindings = HashMap::new();
+                for (name, pat) in pat_fields {
+                    if let Some(v) = map.get(name) {
+                        if let Some(b) = self.match_pattern(pat, v) {
+                            bindings.extend(b);
+                        } else {
+                            return None;
+                        }
+                    } else {
+                        return None;
+                    }
+                }
+                Some(bindings)
             }
             _ => None,
         }

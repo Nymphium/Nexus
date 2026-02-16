@@ -1,16 +1,29 @@
 use crate::ast::*;
 use std::collections::{HashMap, HashSet};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
+pub struct TypeError {
+    pub message: String,
+    pub span: Span,
+}
+
+impl From<(String, Span)> for TypeError {
+    fn from((message, span): (String, Span)) -> Self {
+        TypeError { message, span }
+    }
+}
+
+#[derive(Clone)]
 pub struct Scheme {
     pub vars: Vec<String>,
     pub typ: Type,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct TypeEnv {
     pub vars: HashMap<String, Scheme>,
     pub types: HashMap<String, TypeDef>,
+    pub enums: HashMap<String, EnumDef>,
     pub linear_vars: HashSet<String>,
 }
 
@@ -21,12 +34,13 @@ impl TypeEnv {
         TypeEnv {
             vars: HashMap::new(),
             types: HashMap::new(),
+            enums: HashMap::new(),
             linear_vars: HashSet::new(),
         }
     }
 
     pub fn insert(&mut self, name: String, scheme: Scheme) {
-        if let Type::Linear(_) = scheme.typ {
+        if contains_linear(&scheme.typ) {
             self.linear_vars.insert(name.clone());
         }
         self.vars.insert(name, scheme);
@@ -35,20 +49,25 @@ impl TypeEnv {
     pub fn get(&self, name: &str) -> Option<&Scheme> {
         self.vars.get(name)
     }
-    
-    pub fn consume(&mut self, name: &str) -> Result<(), String> {
-        if self.linear_vars.remove(name) {
-            Ok(())
-        } else {
-            // It might be double use, or it might be not linear.
-            // Caller ensures it IS linear type.
-            Err(format!("Linear variable '{}' used more than once", name))
-        }
-    }
 
     pub fn apply(&mut self, subst: &Subst) {
         for scheme in self.vars.values_mut() {
             scheme.typ = apply_subst_type(subst, &scheme.typ);
+        }
+    }
+
+    pub fn consume(&mut self, name: &str) -> Result<(), String> {
+        if self.linear_vars.remove(name) {
+            Ok(())
+        } else if self.vars.contains_key(name) {
+            if let Some(s) = self.vars.get(name) {
+                if contains_linear(&s.typ) {
+                    return Err(format!("Linear variable {} already consumed", name));
+                }
+            }
+            Ok(())
+        } else {
+            Err(format!("Variable {} not found", name))
         }
     }
 }
@@ -61,85 +80,18 @@ pub struct TypeChecker {
 impl TypeChecker {
     pub fn new() -> Self {
         let mut env = TypeEnv::new();
-        // Mocks for std lib
-        let scheme_tx = Scheme {
-            vars: vec![],
-            typ: Type::UserDefined("Tx".to_string(), vec![]),
-        };
+        let scheme_tx = Scheme { vars: vec![], typ: Type::UserDefined("Tx".to_string(), vec![]) };
 
-        // db_driver
-        env.insert(
-            "db_driver.begin_tx".to_string(),
-            Scheme {
-                vars: vec![],
-                typ: Type::Arrow(vec![], Box::new(scheme_tx.typ.clone()), Box::new(Type::Row(vec![], None))),
-            },
-        );
-        env.insert(
-            "db_driver.commit".to_string(),
-            Scheme {
-                vars: vec![],
-                typ: Type::Arrow(
-                    vec![Type::UserDefined("Tx".to_string(), vec![])],
-                    Box::new(Type::Unit),
-                    Box::new(Type::Row(vec![], None)),
-                ),
-            },
-        );
-        env.insert(
-            "db_driver.rollback".to_string(),
-            Scheme {
-                vars: vec![],
-                typ: Type::Arrow(
-                    vec![Type::UserDefined("Tx".to_string(), vec![])],
-                    Box::new(Type::Unit),
-                    Box::new(Type::Row(vec![], None)),
-                ),
-            },
-        );
+        env.insert("db_driver.begin_tx".to_string(), Scheme { vars: vec![], typ: Type::Arrow(vec![], Box::new(scheme_tx.typ.clone()), Box::new(Type::Row(vec![], None))) });
+        env.insert("db_driver.commit".to_string(), Scheme { vars: vec![], typ: Type::Arrow(vec![Type::UserDefined("Tx".to_string(), vec![])], Box::new(Type::Unit), Box::new(Type::Row(vec![], None))) });
+        env.insert("db_driver.rollback".to_string(), Scheme { vars: vec![], typ: Type::Arrow(vec![Type::UserDefined("Tx".to_string(), vec![])], Box::new(Type::Unit), Box::new(Type::Row(vec![], None))) });
+        env.insert("log.info".to_string(), Scheme { vars: vec![], typ: Type::Arrow(vec![Type::Str], Box::new(Type::Unit), Box::new(Type::Row(vec![], None))) });
+        env.insert("printf".to_string(), Scheme { vars: vec![], typ: Type::Arrow(vec![Type::Str, Type::I64], Box::new(Type::Unit), Box::new(Type::Row(vec![], None))) });
+        env.insert("print_str".to_string(), Scheme { vars: vec![], typ: Type::Arrow(vec![Type::Str], Box::new(Type::Unit), Box::new(Type::Row(vec![], None))) });
+        env.insert("print_i64".to_string(), Scheme { vars: vec![], typ: Type::Arrow(vec![Type::I64], Box::new(Type::Unit), Box::new(Type::Row(vec![], None))) });
+        env.insert("drop_i64".to_string(), Scheme { vars: vec![], typ: Type::Arrow(vec![Type::Linear(Box::new(Type::I64))], Box::new(Type::Unit), Box::new(Type::Row(vec![], None))) });
 
-        // log
-        env.insert(
-            "log.info".to_string(),
-            Scheme {
-                vars: vec![],
-                typ: Type::Arrow(vec![Type::Str], Box::new(Type::Unit), Box::new(Type::Row(vec![], None))),
-            },
-        );
-
-        // stdlib printf (str, i64) -> unit
-        env.insert(
-            "printf".to_string(),
-            Scheme {
-                vars: vec![],
-                typ: Type::Arrow(vec![Type::Str, Type::I64], Box::new(Type::Unit), Box::new(Type::Row(vec![], None))),
-            },
-        );
-
-        env.insert(
-            "print_str".to_string(),
-            Scheme {
-                vars: vec![],
-                typ: Type::Arrow(vec![Type::Str], Box::new(Type::Unit), Box::new(Type::Row(vec![], None))),
-            },
-        );
-
-        env.insert(
-            "print_i64".to_string(),
-            Scheme {
-                vars: vec![],
-                typ: Type::Arrow(vec![Type::I64], Box::new(Type::Unit), Box::new(Type::Row(vec![], None))),
-            },
-        );
-
-        env.insert(
-            "drop_i64".to_string(),
-            Scheme {
-                vars: vec![],
-                typ: Type::Arrow(vec![Type::Linear(Box::new(Type::I64))], Box::new(Type::Unit), Box::new(Type::Row(vec![], None))),
-            },
-        );
-
+        env.linear_vars.clear();
         TypeChecker { supply: 0, env }
     }
 
@@ -149,1010 +101,445 @@ impl TypeChecker {
         Type::Var(format!("?{}", n))
     }
 
-    pub fn check_program(&mut self, program: &Program) -> Result<(), String> {
+    pub fn check_program(&mut self, program: &Program) -> Result<(), TypeError> {
         for def in &program.definitions {
-            match def {
-                TopLevel::TypeDef(td) => {
-                    self.env.types.insert(td.name.clone(), td.clone());
+            match &def.node {
+                TopLevel::TypeDef(td) => { self.env.types.insert(td.name.clone(), td.clone()); }
+                TopLevel::Enum(ed) => {
+                    self.env.enums.insert(ed.name.clone(), ed.clone());
+                    for v in &ed.variants {
+                        if v.fields.is_empty() {
+                            let mut targs = Vec::new(); for p in &ed.type_params { targs.push(Type::Var(p.clone())); }
+                            self.env.insert(v.name.clone(), Scheme { vars: ed.type_params.clone(), typ: Type::UserDefined(ed.name.clone(), targs) });
+                        }
+                    }
                 }
                 TopLevel::Port(port) => {
                     for sig in &port.functions {
                         let name = format!("{}.{}", port.name, sig.name);
-                        let param_types: Vec<Type> =
-                            sig.params.iter().map(|p| p.typ.clone()).collect();
-                        let typ = Type::Arrow(
-                            param_types,
-                            Box::new(sig.ret_type.clone()),
-                            Box::new(sig.effects.clone()),
-                        );
-                        self.env.insert(name, Scheme { vars: vec![], typ });
+                        let ptypes: Vec<Type> = sig.params.iter().map(|p| p.typ.clone()).collect();
+                        self.env.insert(name, Scheme { vars: vec![], typ: Type::Arrow(ptypes, Box::new(sig.ret_type.clone()), Box::new(sig.effects.clone())) });
                     }
                 }
+                TopLevel::Function(func) => { self.env.insert(func.name.clone(), self.generalize_top_level(func)); }
+                                _ => {}
+                            }
+                        }
+                        self.env.linear_vars.clear();
+                
+                        for def in &program.definitions {
+            match &def.node {
                 TopLevel::Function(func) => {
-                    let scheme = self.generalize_top_level(func);
-                    self.env.insert(func.name.clone(), scheme);
+                    if func.name == "main" && func.is_public { return Err(TypeError { message: "main must be private".into(), span: def.span.clone() }); }
+                    self.check_function(func, &def.span)?;
                 }
+                TopLevel::Handler(h) => { self.check_handler(h, &def.span)?; }
                 _ => {}
             }
         }
-
-        for def in &program.definitions {
-            match def {
-                TopLevel::Function(func) => {
-                    if func.name == "main" && func.is_public {
-                        return Err("main function must be private (remove 'pub')".to_string());
-                    }
-                    self.check_function(func)?;
-                }
-                TopLevel::Handler(handler) => {
-                    self.check_handler(handler)?;
-                }
-                _ => {}
-            }
-        }
-
-        // Verify main function signature if it exists
-        if let Some(scheme) = self.env.get("main") {
-            if !scheme.vars.is_empty() {
-                 return Err("main function cannot be generic".to_string());
-            }
-            if let Type::Arrow(params, ret, _) = &scheme.typ {
-                if !params.is_empty() {
-                    return Err("main function cannot take arguments".to_string());
-                }
-                if **ret != Type::Unit {
-                    return Err("main function must return unit".to_string());
-                }
-            } else {
-                return Err("main must be a function".to_string());
-            }
-        }
-
         Ok(())
     }
 
     fn generalize_top_level(&self, func: &Function) -> Scheme {
         let vars: HashSet<String> = func.type_params.iter().cloned().collect();
-
-        let mut param_types = Vec::new();
-        for p in &func.params {
-            param_types.push(self.convert_user_defined_to_var(&p.typ, &vars));
-        }
-        let ret_type = self.convert_user_defined_to_var(&func.ret_type, &vars);
-        
-        let effects = self.convert_user_defined_to_var(&func.effects, &vars);
-
-        let typ = Type::Arrow(param_types, Box::new(ret_type), Box::new(effects));
-
-        Scheme {
-            vars: func.type_params.clone(),
-            typ,
-        }
+        let pts: Vec<Type> = func.params.iter().map(|p| self.convert_user_defined_to_var(&p.typ, &vars)).collect();
+        let rt = self.convert_user_defined_to_var(&func.ret_type, &vars);
+        let ef = self.convert_user_defined_to_var(&func.effects, &vars);
+        Scheme { vars: func.type_params.clone(), typ: Type::Arrow(pts, Box::new(rt), Box::new(ef)) }
     }
 
     fn convert_user_defined_to_var(&self, typ: &Type, vars: &HashSet<String>) -> Type {
         match typ {
-            Type::UserDefined(n, args) => {
-                if args.is_empty() && vars.contains(n) {
-                    Type::Var(n.clone())
-                } else {
-                    Type::UserDefined(
-                        n.clone(),
-                        args.iter()
-                            .map(|a| self.convert_user_defined_to_var(a, vars))
-                            .collect(),
-                    )
-                }
-            }
-            Type::Result(ok, err) => Type::Result(
-                Box::new(self.convert_user_defined_to_var(ok, vars)),
-                Box::new(self.convert_user_defined_to_var(err, vars)),
-            ),
-            Type::Arrow(params, ret, effects) => Type::Arrow(
-                params
-                    .iter()
-                    .map(|p| self.convert_user_defined_to_var(p, vars))
-                    .collect(),
-                Box::new(self.convert_user_defined_to_var(ret, vars)),
-                Box::new(self.convert_user_defined_to_var(effects, vars)),
-            ),
-            Type::Ref(inner) => Type::Ref(Box::new(self.convert_user_defined_to_var(inner, vars))),
-            Type::Linear(inner) => {
-                Type::Linear(Box::new(self.convert_user_defined_to_var(inner, vars)))
-            }
-            Type::Row(effs, tail) => Type::Row(
-                effs.iter()
-                    .map(|e| self.convert_user_defined_to_var(e, vars))
-                    .collect(),
-                tail.as_ref()
-                    .map(|t| Box::new(self.convert_user_defined_to_var(t, vars))),
-            ),
-            Type::Record(fields) => Type::Record(
-                fields
-                    .iter()
-                    .map(|(n, t)| (n.clone(), self.convert_user_defined_to_var(t, vars)))
-                    .collect(),
-            ),
+            Type::UserDefined(n, args) => { if args.is_empty() && vars.contains(n) { Type::Var(n.clone()) } else { Type::UserDefined(n.clone(), args.iter().map(|a| self.convert_user_defined_to_var(a, vars)).collect()) } }
+            Type::Arrow(p, r, e) => Type::Arrow(p.iter().map(|t| self.convert_user_defined_to_var(t, vars)).collect(), Box::new(self.convert_user_defined_to_var(r, vars)), Box::new(self.convert_user_defined_to_var(e, vars))),
+            Type::Result(o, e) => Type::Result(Box::new(self.convert_user_defined_to_var(o, vars)), Box::new(self.convert_user_defined_to_var(e, vars))),
+            Type::Ref(i) => Type::Ref(Box::new(self.convert_user_defined_to_var(i, vars))),
+            Type::Linear(i) => Type::Linear(Box::new(self.convert_user_defined_to_var(i, vars))),
+            Type::Borrow(i) => Type::Borrow(Box::new(self.convert_user_defined_to_var(i, vars))),
+            Type::Row(es, t) => Type::Row(es.iter().map(|x| self.convert_user_defined_to_var(x, vars)).collect(), t.as_ref().map(|x| Box::new(self.convert_user_defined_to_var(x, vars)))),
+            Type::Record(fs) => Type::Record(fs.iter().map(|(n, t)| (n.clone(), self.convert_user_defined_to_var(t, vars))).collect()),
             _ => typ.clone(),
         }
     }
 
-    fn check_function(&mut self, func: &Function) -> Result<(), String> {
-        let mut local_env = self.env.clone();
-        for param in &func.params {
-            let typ = param.typ.clone();
-            local_env.insert(
-                param.sigil.get_key(&param.name),
-                Scheme { vars: vec![], typ },
-            );
-        }
-        let expected_ret = func.ret_type.clone();
-        let expected_eff = func.effects.clone();
+    fn check_function(&mut self, func: &Function, span: &Span) -> Result<(), TypeError> {
+        let mut env = self.env.clone();
+        for p in &func.params { env.insert(p.sigil.get_key(&p.name), Scheme { vars: vec![], typ: p.typ.clone() }); }
+        if contains_ref(&func.ret_type) { return Err(TypeError { message: "Cannot return Ref".into(), span: span.clone() }); }
+        self.infer_body(&func.body, &mut env, &func.ret_type, &func.effects)?;
+        if !env.linear_vars.is_empty() { return Err(TypeError { message: format!("Unused linear: {:?}", env.linear_vars), span: span.clone() }); }
+        Ok(())
+    }
 
-        // Gravity Rule: Return type cannot contain Ref
-        if contains_ref(&expected_ret) {
-            return Err(format!(
-                "Function {} cannot return a Reference type: {:?}",
-                func.name, expected_ret
-            ));
-        }
-
-        eprintln!("DEBUG: check_function start for {}. linear_vars: {:?}", func.name, local_env.linear_vars);
-        self.infer_body(&func.body, &mut local_env, &expected_ret, &expected_eff)?;
-        eprintln!("DEBUG: check_function end for {}. linear_vars: {:?}", func.name, local_env.linear_vars);
-        
-        if !local_env.linear_vars.is_empty() {
-             return Err(format!("Unused linear variables at end of function {}: {:?}", func.name, local_env.linear_vars));
+    fn check_handler(&mut self, h: &Handler, span: &Span) -> Result<(), TypeError> {
+        for f in &h.functions {
+            let name = format!("{}.{}", h.port_name, f.name);
+            if let Some(sch) = self.env.get(&name).cloned() {
+                self.unify(&sch.typ, &self.generalize_top_level(f).typ).map_err(|e| TypeError { message: e, span: span.clone() })?;
+                self.check_function(f, span)?;
+            } else { return Err(TypeError { message: format!("Fn {} not in port", f.name), span: span.clone() }); }
         }
         Ok(())
     }
 
-    fn check_handler(&mut self, handler: &Handler) -> Result<(), String> {
-        for func in &handler.functions {
-            let full_name = format!("{}.{}", handler.port_name, func.name);
-            if let Some(scheme) = self.env.get(&full_name).cloned() {
-                // Ensure the function signature in handler matches the port's signature.
-                let func_type = self.generalize_top_level(func).typ;
-                self.unify(&scheme.typ, &func_type)?;
-
-                // Now check the body
-                self.check_function(func)?;
-            } else {
-                return Err(format!(
-                    "Function {} not found in port {}",
-                    func.name, handler.port_name
-                ));
-            }
-        }
-        Ok(())
-    }
-
-    fn infer_body(
-        &mut self,
-        body: &[Stmt],
-        env: &mut TypeEnv,
-        expected_ret: &Type,
-        expected_eff: &Type,
-    ) -> Result<(), String> {
-        for stmt in body {
-            match stmt {
-                                Stmt::Let {
-                                    name, value, sigil, ..
-                                } => {
-                                    let (s1, t1) = self.infer(env, value, expected_ret, expected_eff)?;
-                                    env.apply(&s1);
-                
-                                    let final_type = match sigil {
-                                        Sigil::Mutable => {
-                                            if contains_linear(&t1) {
-                                                return Err(format!("Cannot create mutable reference to linear type: {:?}", t1));
-                                            }
-                                            Type::Ref(Box::new(t1))
-                                        },
-                                        Sigil::Linear => Type::Linear(Box::new(t1)),
-                                        Sigil::Immutable => {
-                                            // Gravity Rule: Immutable variables cannot hold References
-                                            if contains_ref(&t1) {
-                                                 return Err(format!("Immutable variable {} cannot hold a Reference type: {:?}", name, t1));
-                                            }
-                                            t1
-                                        }
-                                    };
-                
-                                    let scheme = self.generalize(env, final_type);
-                                    let key = sigil.get_key(name);
-                
-                                    env.insert(key.clone(), scheme);
-                                    // if name == "_" {
-                                    //    env.linear_vars.remove(&key);
-                                    // }
-                                    eprintln!("DEBUG: Stmt::Let {}. linear_vars: {:?}", key, env.linear_vars);
-                                }
-                
-                Stmt::Return(expr) => {
-                    let (s1, t1) = self.infer(env, expr, expected_ret, expected_eff)?;
-                    env.apply(&s1);
+    fn infer_body(&mut self, body: &[Spanned<Stmt>], env: &mut TypeEnv, er: &Type, ee: &Type) -> Result<(), TypeError> {
+        for s in body {
+            match &s.node {
+                Stmt::Let { name, sigil, typ, value } => {
+                    let (s1, t1) = self.infer(env, value, er, ee)?; env.apply(&s1);
                     
-                    if !env.linear_vars.is_empty() {
-                         return Err(format!("Unused linear variables at return: {:?}", env.linear_vars));
+                    if let Some(ann_type) = typ {
+                        let s_ann = self.unify(&t1, ann_type).map_err(|e| TypeError { message: e, span: value.span.clone() })?;
+                        env.apply(&s_ann);
                     }
 
-                    let current_ret = apply_subst_type(&s1, expected_ret);
-                    let s2 = self.unify(&t1, &current_ret)?;
-                    env.apply(&s2);
+                    let ft = match sigil {
+                        Sigil::Mutable => { if contains_linear(&t1) { return Err(TypeError { message: "Mutable linear".into(), span: value.span.clone() }); } Type::Ref(Box::new(t1)) }
+                        Sigil::Linear => Type::Linear(Box::new(t1)),
+                        Sigil::Immutable => { if contains_ref(&t1) { return Err(TypeError { message: "Immutable Ref".into(), span: value.span.clone() }); } t1 }
+                    };
+                    env.insert(sigil.get_key(name), self.generalize(env, ft));
                 }
-                Stmt::Expr(expr) => {
-                    let (s1, _) = self.infer(env, expr, expected_ret, expected_eff)?;
-                    env.apply(&s1);
+                Stmt::Return(e) => {
+                    let (s1, t1) = self.infer(env, e, er, ee)?; env.apply(&s1);
+                    if !env.linear_vars.is_empty() { return Err(TypeError { message: "Unused linear".into(), span: e.span.clone() }); }
+                    self.unify(&t1, &apply_subst_type(&s1, er)).map_err(|err| TypeError { message: err, span: e.span.clone() })?;
                 }
-
-                Stmt::Assign { name, value, sigil } => {
-                    // Gravity Rule: Mutation requires Mutable sigil
-                    if let Sigil::Immutable = sigil {
-                        return Err(format!(
-                            "Cannot use immutable variable {} for mutation. Use ~{} instead.",
-                            name, name
-                        ));
-                    }
-
-                    let (s_val, t_val) = self.infer(env, value, expected_ret, expected_eff)?;
-                    env.apply(&s_val);
-
-                    let key = sigil.get_key(name);
-                    if let Some(scheme) = env.get(&key) {
-                        let t_var = self.instantiate(scheme);
-                        if let Type::Ref(inner) = t_var {
-                            let s_assign = self.unify(&t_val, &inner)?;
-                            env.apply(&s_assign);
-                        } else {
-                            return Err(format!("Cannot assign to non-ref variable {}", key));
-                        }
-                    } else {
-                        return Err(format!("Variable not found: {}", key));
-                    }
+                Stmt::Expr(e) => { self.infer(env, e, er, ee)?; }
+                Stmt::Assign { name, sigil, value } => {
+                    if let Sigil::Immutable = sigil { return Err(TypeError { message: "Mutating immutable".into(), span: s.span.clone() }); }
+                    let (s_v, t_v) = self.infer(env, value, er, ee)?; env.apply(&s_v);
+                    if let Some(sch) = env.get(&sigil.get_key(name)) {
+                        if let Type::Ref(i) = self.instantiate(sch) { self.unify(&t_v, &i).map_err(|e| TypeError { message: e, span: value.span.clone() })?; }
+                        else { return Err(TypeError { message: "Not a ref".into(), span: s.span.clone() }); }
+                    } else { return Err(TypeError { message: "Not found".into(), span: s.span.clone() }); }
                 }
-                Stmt::Conc(tasks) => {
-                    for task in tasks {
-                        self.check_task(task, env)?;
-                    }
-                }
+                Stmt::Conc(ts) => { for t in ts { self.check_task(t, env, &s.span)?; } }
                 Stmt::Try { body, catch_param, catch_body } => {
-                    let mut env_try = env.clone();
-                    self.infer_body(body, &mut env_try, expected_ret, expected_eff)?;
-                    
-                    let mut env_catch = env.clone();
-                    env_catch.insert(catch_param.clone(), Scheme { vars: vec![], typ: Type::Str });
-                    self.infer_body(catch_body, &mut env_catch, expected_ret, expected_eff)?;
-                    
-                    // Merge linear vars
-                    let avail_try = &env_try.linear_vars;
-                    let avail_catch = &env_catch.linear_vars;
-                    if avail_try != avail_catch {
-                        return Err("Linear variable usage mismatch in try/catch".to_string());
-                    }
-                    env.linear_vars = env_try.linear_vars;
+                    let mut et = env.clone(); self.infer_body(body, &mut et, er, ee)?;
+                    let mut ec = env.clone(); ec.insert(catch_param.clone(), Scheme { vars: vec![], typ: Type::Str });
+                    self.infer_body(catch_body, &mut ec, er, ee)?;
+                    if et.linear_vars != ec.linear_vars { return Err(TypeError { message: "Linear mismatch".into(), span: s.span.clone() }); }
+                    env.linear_vars = et.linear_vars;
                 }
-                _ => {}
+                Stmt::Comment => {}
             }
         }
         Ok(())
     }
 
-    fn check_task(&mut self, task: &Function, outer_env: &TypeEnv) -> Result<(), String> {
-        // Gravity Rule: Parallel tasks cannot capture Mutable variables (~ vars)
-        let mut task_env = TypeEnv::new();
-        task_env.types = outer_env.types.clone();
-
-        for (key, scheme) in &outer_env.vars {
-            if !key.starts_with('~') {
-                task_env.insert(key.clone(), scheme.clone());
-            }
-        }
-
-        // Tasks return Unit
-        self.infer_body(&task.body, &mut task_env, &Type::Unit, &Type::Unit)
+    fn check_task(&mut self, t: &Function, oe: &TypeEnv, _span: &Span) -> Result<(), TypeError> {
+        let mut te = TypeEnv::new(); te.types = oe.types.clone(); te.enums = oe.enums.clone();
+        for (k, s) in &oe.vars { if !k.starts_with('~') { te.insert(k.clone(), s.clone()); } }
+        self.infer_body(&t.body, &mut te, &Type::Unit, &Type::Row(vec![], None))
     }
 
-        pub fn check_repl_stmt(&mut self, stmt: &Stmt) -> Result<Type, String> {
+    pub fn check_repl_stmt(&mut self, s: &Spanned<Stmt>) -> Result<Type, TypeError> {
+        let mut env = std::mem::replace(&mut self.env, TypeEnv::new());
+        let ev = self.new_var();
+        let res = match &s.node {
+            Stmt::Expr(e) => { let (sub, t) = self.infer(&mut env, e, &Type::Unit, &ev)?; env.apply(&sub); Ok(t) }
+            _ => { self.infer_body(&[s.clone()], &mut env, &Type::Unit, &ev)?; Ok(Type::Unit) }
+        };
+        self.env = env; res
+    }
 
-            let mut env = std::mem::replace(&mut self.env, TypeEnv::new());
-
-            let res = (|| {
-
-                match stmt {
-
-                    Stmt::Expr(expr) => {
-
-                        let eff = self.new_var();
-
-                        let (s, t) = self.infer(&mut env, expr, &Type::Unit, &eff)?;
-
-                        env.apply(&s);
-
-                        Ok(t)
-
-                    }
-
-                    _ => {
-
-                        let eff = self.new_var();
-
-                        self.infer_body(&[stmt.clone()], &mut env, &Type::Unit, &eff)?;
-
-                        Ok(Type::Unit)
-
-                    }
-
-                }
-
-            })();
-
-            self.env = env;
-
-            res
-
-        }
-
-    fn infer(
-        &mut self,
-        env: &mut TypeEnv,
-        expr: &Expr,
-        expected_ret: &Type,
-        expected_eff: &Type,
-    ) -> Result<(Subst, Type), String> {
-        eprintln!("DEBUG: infer expr: {:?}", expr);
-        match expr {
-            Expr::Literal(lit) => {
-                let t = match lit {
-                    Literal::Int(_) => Type::I64,
-                    Literal::Bool(_) => Type::Bool,
-                    Literal::String(_) => Type::Str,
-                    Literal::Unit => Type::Unit,
-                };
-                Ok((HashMap::new(), t))
-            }
-            Expr::Variable(name, sigil) => {
-                let key = sigil.get_key(name);
-                eprintln!("DEBUG: infer Variable key={}", key);
-
-                // Clone scheme to avoid holding immutable borrow on env while consuming
-                if let Some(scheme) = env.get(&key).cloned() {
-                    let mut t = self.instantiate(&scheme);
-                    if let Sigil::Mutable = sigil {
-                        if let Type::Ref(inner) = t {
-                            t = *inner;
-                        }
-                    }
-                    // Consume if Type is Linear
-                    if let Type::Linear(_) = t {
-                        if let Err(e) = env.consume(&key) {
-                            return Err(e);
-                        }
-                    }
+    fn infer(&mut self, env: &mut TypeEnv, e: &Spanned<Expr>, er: &Type, ee: &Type) -> Result<(Subst, Type), TypeError> {
+        match &e.node {
+            Expr::Literal(l) => Ok((HashMap::new(), match l { Literal::Int(_) => Type::I64, Literal::Bool(_) => Type::Bool, Literal::String(_) => Type::Str, Literal::Unit => Type::Unit })),
+            Expr::Variable(n, s) => {
+                let key = s.get_key(n);
+                if let Some(sch) = env.get(&key).cloned() {
+                    let mut t = self.instantiate(&sch);
+                    if let Sigil::Mutable = s { if let Type::Ref(i) = t { t = *i; } }
+                    if let Type::Borrow(i) = t { t = *i; }
+                    else if let Type::Linear(_) = t { env.consume(&key).map_err(|m| TypeError { message: m, span: e.span.clone() })?; }
                     Ok((HashMap::new(), t))
-                } else {
-                    Err(format!("Variable not found: {}", key))
-                }
+                } else { Err(TypeError { message: format!("Not found: {}", key), span: e.span.clone() }) }
             }
-            Expr::BinaryOp(lhs, op, rhs) => {
-                let (s1, t1) = self.infer(env, lhs, expected_ret, expected_eff)?;
-                let (s2, t2) = self.infer(env, rhs, expected_ret, expected_eff)?;
+            Expr::BinaryOp(l, op, r) => {
+                let (s1, t1) = self.infer(env, l, er, ee)?;
+                let (s2, t2) = self.infer(env, r, er, ee)?;
                 let mut s = compose_subst(&s1, &s2);
-                match op.as_str() {
-                    "+" | "-" | "*" | "/" => {
-                        let s3 = self.unify(&apply_subst_type(&s, &t1), &Type::I64)?;
-                        s = compose_subst(&s, &s3);
-                        let s4 = self.unify(&apply_subst_type(&s, &t2), &Type::I64)?;
-                        s = compose_subst(&s, &s4);
-                        Ok((s, Type::I64))
-                    }
-                    "==" | "!=" | "<" | ">" | "<=" | ">=" => {
-                        let s3 = self.unify(&apply_subst_type(&s, &t1), &Type::I64)?;
-                        s = compose_subst(&s, &s3);
-                        let s4 = self.unify(&apply_subst_type(&s, &t2), &Type::I64)?;
-                        s = compose_subst(&s, &s4);
-                        Ok((s, Type::Bool))
-                    }
-                    _ => Err(format!("Unknown operator {}", op)),
-                }
+                let is_b = match op.as_str() { "=="|"!="|"<"|">"|"<="|">=" => true, _ => false };
+                let s3 = self.unify(&apply_subst_type(&s, &t1), &Type::I64).map_err(|m| TypeError { message: m, span: l.span.clone() })?;
+                s = compose_subst(&s, &s3);
+                let s4 = self.unify(&apply_subst_type(&s, &t2), &Type::I64).map_err(|m| TypeError { message: m, span: r.span.clone() })?;
+                Ok((compose_subst(&s, &s4), if is_b { Type::Bool } else { Type::I64 }))
+            }
+            Expr::Borrow(n, s) => {
+                if let Some(sch) = env.get(&s.get_key(n)).cloned() {
+                    let t = self.instantiate(&sch);
+                    let i = match t { Type::Linear(u) | Type::Borrow(u) => *u, o => o };
+                    Ok((HashMap::new(), Type::Borrow(Box::new(i))))
+                } else { Err(TypeError { message: "Not found".into(), span: e.span.clone() }) }
             }
             Expr::Call { func, args, .. } => {
-                let (mut subst, func_type) = if let Some(scheme) = env.get(func).cloned() {
-                    (HashMap::new(), self.instantiate(&scheme))
-                } else {
-                    return Err(format!("Function not found: {}", func));
-                };
-
-                let ret_type = self.new_var();
-                let param_types: Vec<Type> = args.iter().map(|_| self.new_var()).collect();
-                let eff_call = self.new_var();
-                let call_type = Type::Arrow(
-                    param_types.clone(),
-                    Box::new(ret_type.clone()),
-                    Box::new(eff_call.clone()),
-                );
-
-                let s_fn = self.unify(&func_type, &call_type)?;
-                subst = compose_subst(&subst, &s_fn);
-                
-                // Check effects
-                let s_eff = self.unify(&apply_subst_type(&subst, expected_eff), &apply_subst_type(&subst, &eff_call))?;
-                subst = compose_subst(&subst, &s_eff);
-
-                for (param_type, (_, arg_expr)) in param_types.iter().zip(args) {
-                    let (s_arg, t_arg) = self.infer(env, arg_expr, expected_ret, expected_eff)?;
-                    subst = compose_subst(&subst, &s_arg);
-
-                    let current_param = apply_subst_type(&subst, param_type);
-                    let s_unify = self.unify(&t_arg, &current_param)?;
-                    subst = compose_subst(&subst, &s_unify);
+                let (mut s, ft) = if let Some(sch) = env.get(func).cloned() { (HashMap::new(), self.instantiate(&sch)) }
+                else { return Err(TypeError { message: format!("Fn {} not found", func), span: e.span.clone() }); };
+                let rt = self.new_var(); let pts: Vec<Type> = args.iter().map(|_| self.new_var()).collect(); let ec = self.new_var();
+                let sf = self.unify(&ft, &Type::Arrow(pts.clone(), Box::new(rt.clone()), Box::new(ec.clone()))).map_err(|m| TypeError { message: m, span: e.span.clone() })?;
+                s = compose_subst(&s, &sf);
+                let eci = apply_subst_type(&s, &ec);
+                let eco = match eci { Type::Row(el, None) => Type::Row(el, Some(Box::new(self.new_var()))), Type::Unit => Type::Row(vec![], Some(Box::new(self.new_var()))), o => o };
+                let se = self.unify(&apply_subst_type(&s, ee), &eco).map_err(|m| TypeError { message: m, span: e.span.clone() })?;
+                s = compose_subst(&s, &se);
+                for (pt, (_, ae)) in pts.iter().zip(args) {
+                    let (sa, ta) = self.infer(env, ae, er, ee)?; s = compose_subst(&s, &sa);
+                    let su = self.unify(&ta, &apply_subst_type(&s, pt)).map_err(|m| TypeError { message: m, span: ae.span.clone() })?;
+                    s = compose_subst(&s, &su);
                 }
-
-                Ok((subst.clone(), apply_subst_type(&subst, &ret_type)))
+                Ok((s.clone(), apply_subst_type(&s, &rt)))
             }
             Expr::Constructor(name, args) => {
-                if name == "Ok" && args.len() == 1 {
-                    let (s, t) = self.infer(env, &args[0], expected_ret, expected_eff)?;
-                    return Ok((s, Type::Result(Box::new(t), Box::new(self.new_var()))));
-                }
-                if name == "Err" && args.len() == 1 {
-                    let (s, t) = self.infer(env, &args[0], expected_ret, expected_eff)?;
-                    return Ok((s, Type::Result(Box::new(self.new_var()), Box::new(t))));
+                if name == "Ok" && args.len() == 1 { let (s, t) = self.infer(env, &args[0], er, ee)?; return Ok((s, Type::Result(Box::new(t), Box::new(self.new_var())))); }
+                if name == "Err" && args.len() == 1 { let (s, t) = self.infer(env, &args[0], er, ee)?; return Ok((s, Type::Result(Box::new(self.new_var()), Box::new(t)))); }
+                for ed in env.enums.values().cloned() {
+                    if let Some(v) = ed.variants.iter().find(|x| x.name == *name) {
+                        if v.fields.len() != args.len() { return Err(TypeError { message: "Arity mismatch".into(), span: e.span.clone() }); }
+                        let mut s = HashMap::new(); let targs: Vec<Type> = ed.type_params.iter().map(|_| self.new_var()).collect();
+                        let mut inst = HashMap::new(); for (p, a) in ed.type_params.iter().zip(&targs) { inst.insert(p.clone(), a.clone()); }
+                        for (ft, ae) in v.fields.iter().zip(args) {
+                            let (sa, ta) = self.infer(env, ae, er, ee)?; s = compose_subst(&s, &sa);
+                            let su = self.unify(&ta, &apply_subst_type(&s, &apply_subst_type(&inst, ft))).map_err(|m| TypeError { message: m, span: ae.span.clone() })?;
+                            s = compose_subst(&s, &su);
+                        }
+                        return Ok((s.clone(), Type::UserDefined(ed.name.clone(), targs.iter().map(|a| apply_subst_type(&s, a)).collect())));
+                    }
                 }
                 Ok((HashMap::new(), Type::Unit))
             }
-            Expr::Record(fields) => {
-                let mut subst = HashMap::new();
-                let mut record_fields = Vec::new();
-                for (name, expr) in fields {
-                    let (s, t) = self.infer(env, expr, expected_ret, expected_eff)?;
-                    subst = compose_subst(&subst, &s);
-                    record_fields.push((name.clone(), t));
-                }
-                Ok((
-                    subst,
-                    Type::Record(record_fields),
-                ))
+            Expr::Record(fs) => {
+                let mut s = HashMap::new(); let mut rfs = Vec::new();
+                for (n, ex) in fs { let (sa, ta) = self.infer(env, ex, er, ee)?; s = compose_subst(&s, &sa); rfs.push((n.clone(), ta)); }
+                Ok((s, Type::Record(rfs)))
             }
-            Expr::FieldAccess(receiver, field_name) => {
-                let (s1, t_rec) = self.infer(env, receiver, expected_ret, expected_eff)?;
-                let t_rec = apply_subst_type(&s1, &t_rec);
-
-                if let Type::Record(fields) = &t_rec {
-                    if let Some((_, t)) = fields.iter().find(|(n, _)| n == field_name) {
-                        return Ok((s1, t.clone()));
-                    }
-                    return Err(format!("Field {} not found in record", field_name));
-                }
-
-                if let Type::UserDefined(type_name, type_args) = &t_rec {
-                    if let Some(td) = env.types.get(type_name).cloned() {
-                        if let Some((_, f_type)) = td.fields.iter().find(|(n, _)| n == field_name) {
-                            let mut subst = HashMap::new();
-                            for (p, a) in td.type_params.iter().zip(type_args) {
-                                subst.insert(p.clone(), a.clone());
-                            }
-                            return Ok((s1, apply_subst_type(&subst, f_type)));
+            Expr::FieldAccess(rec, fnm) => {
+                let (s1, tr) = self.infer(env, rec, er, ee)?; let tr = apply_subst_type(&s1, &tr);
+                if let Type::Record(fs) = &tr { if let Some((_, t)) = fs.iter().find(|(n, _)| n == fnm) { return Ok((s1, t.clone())); } }
+                if let Type::UserDefined(tn, ta) = &tr {
+                    if let Some(td) = env.types.get(tn).cloned() {
+                        if let Some((_, ft)) = td.fields.iter().find(|(n, _)| n == fnm) {
+                            let mut su = HashMap::new(); for (p, a) in td.type_params.iter().zip(ta) { su.insert(p.clone(), a.clone()); }
+                            return Ok((s1, apply_subst_type(&su, ft)));
                         }
                     }
                 }
-                Err(format!(
-                    "Field {} not found on type {:?}",
-                    field_name, t_rec
-                ))
+                Err(TypeError { message: format!("Field {} not found", fnm), span: e.span.clone() })
             }
-            Expr::If {
-                cond,
-                then_branch,
-                else_branch,
-            } => {
-                let (s1, t_cond) = self.infer(env, cond, expected_ret, expected_eff)?;
-                let s = compose_subst(&s1, &self.unify(&t_cond, &Type::Bool)?);
-                
-                let mut env_then = env.clone();
-                env_then.apply(&s);
-                self.infer_body(then_branch, &mut env_then, expected_ret, expected_eff)?;
-                
-                let mut env_else = env.clone();
-                env_else.apply(&s);
-                if let Some(else_branch) = else_branch {
-                    self.infer_body(else_branch, &mut env_else, expected_ret, expected_eff)?;
-                } else {
-                     // Implicit else branch (returns Unit). 
-                     // But implicit else does nothing, so it consumes NOTHING.
-                     // If 'then' branch consumes linear vars, this is a mismatch!
-                }
-                
-                // Merge linear vars
-                // Both branches must leave the SAME set of linear vars (Exactly Once).
-                // Or rather: "Consumed" set must be equal.
-                // env.linear_vars is "Available".
-                // Available_then must equal Available_else.
-                let available_then = &env_then.linear_vars;
-                let available_else = &env_else.linear_vars;
-                
-                if available_then != available_else {
-                    let diff1: Vec<_> = available_then.difference(available_else).collect();
-                    let diff2: Vec<_> = available_else.difference(available_then).collect();
-                    return Err(format!("Linear variable usage mismatch in branches. Unmatched: {:?}, {:?}", diff1, diff2));
-                }
-                
-                // Update outer env
-                env.linear_vars = env_then.linear_vars;
-                
-                Ok((s, Type::Unit))
+            Expr::If { cond, then_branch, else_branch } => {
+                let (s1, tc) = self.infer(env, cond, er, ee)?;
+                let s = compose_subst(&s1, &self.unify(&tc, &Type::Bool).map_err(|m| TypeError { message: m, span: cond.span.clone() })?);
+                let mut et = env.clone(); et.apply(&s); self.infer_body(then_branch, &mut et, er, ee)?;
+                let mut ee_env = env.clone(); ee_env.apply(&s); if let Some(eb) = else_branch { self.infer_body(eb, &mut ee_env, er, ee)?; }
+                if et.linear_vars != ee_env.linear_vars { return Err(TypeError { message: "Linear mismatch".into(), span: e.span.clone() }); }
+                env.linear_vars = et.linear_vars; Ok((s, Type::Unit))
             }
             Expr::Match { target, cases } => {
-                let (s1, t_target) = self.infer(env, target, expected_ret, expected_eff)?;
-                let mut s = s1;
-                
-                if let Err(e) = self.check_exhaustiveness(&apply_subst_type(&s, &t_target), cases) {
-                    return Err(e);
-                }
-                
-                // For match, we need to ensure all cases consume same linear vars.
-                // We'll track the "resulting available vars" from the first case, and compare others.
-                let mut resulting_linear_vars: Option<HashSet<String>> = None;
-
+                let (s1, tt) = self.infer(env, target, er, ee)?; let mut s = s1;
+                self.check_exhaustiveness(&apply_subst_type(&s, &tt), cases).map_err(|m| TypeError { message: m, span: e.span.clone() })?;
+                let mut rv: Option<HashSet<String>> = None;
                 for case in cases {
-                    let mut local_env = env.clone();
-                    local_env.apply(&s);
-                    let s_match = self.bind_pattern(
-                        &case.pattern,
-                        &apply_subst_type(&s, &t_target),
-                        &mut local_env,
-                    )?;
-                    s = compose_subst(&s, &s_match);
-                    local_env.apply(&s_match);
-                    self.infer_body(&case.body, &mut local_env, expected_ret, expected_eff)?;
-                    
-                    if let Some(prev) = &resulting_linear_vars {
-                        if prev != &local_env.linear_vars {
-                             return Err("Linear variable usage mismatch in match cases".to_string());
-                        }
-                    } else {
-                        resulting_linear_vars = Some(local_env.linear_vars.clone());
-                    }
+                    let mut le = env.clone(); le.apply(&s);
+                    let sm = self.bind_pattern(&case.pattern, &apply_subst_type(&s, &tt), &mut le)?;
+                    s = compose_subst(&s, &sm); le.apply(&sm); self.infer_body(&case.body, &mut le, er, ee)?;
+                    if let Some(p) = &rv { if p != &le.linear_vars { return Err(TypeError { message: "Linear mismatch".into(), span: case.pattern.span.clone() }); } }
+                    else { rv = Some(le.linear_vars.clone()); }
                 }
-                
-                                if let Some(res_vars) = resulting_linear_vars {
-                
-                                    env.linear_vars = res_vars;
-                
-                                }
-                
-                                
-                
-                                Ok((s, Type::Unit))
-                
-                            }
-                
-                                        Expr::Raise(expr) => {
-                
-                                            let (s, t) = self.infer(env, expr, expected_ret, expected_eff)?;
-                
-                                            // Expect string error message
-                
-                                            let s_str = self.unify(&t, &Type::Str)?;
-                
-                                            let s = compose_subst(&s, &s_str);
-                
-                                            
-                
-                                            // Raise returns any type (diverges)
-                
-                                            let ret = self.new_var();
-                
-                                            Ok((s, ret))
-                
-                                        }
-                
-                        }
-                
-                    }
+                if let Some(vars) = rv { env.linear_vars = vars; }
+                Ok((s, Type::Unit))
+            }
+            Expr::Raise(ex) => {
+                let (s, t) = self.infer(env, ex, er, ee)?;
+                let ss = self.unify(&t, &Type::Str).map_err(|m| TypeError { message: m, span: ex.span.clone() })?;
+                Ok((compose_subst(&s, &ss), self.new_var()))
+            }
+        }
+    }
 
-    fn bind_pattern(
-        &mut self,
-        pattern: &Pattern,
-        t_target: &Type,
-        env: &mut TypeEnv,
-    ) -> Result<Subst, String> {
-        match pattern {
-            Pattern::Variable(name, _) => {
-                env.insert(
-                    name.clone(),
-                    Scheme {
-                        vars: vec![],
-                        typ: t_target.clone(),
-                    },
-                );
-                Ok(HashMap::new())
-            }
-            Pattern::Constructor(name, pats) => {
-                if name == "Ok" && pats.len() == 1 {
-                    let t_ok = self.new_var();
-                    let t_err = self.new_var();
-                    let s = self.unify(
-                        t_target,
-                        &Type::Result(Box::new(t_ok.clone()), Box::new(t_err)),
-                    )?;
-                    let s_pat = self.bind_pattern(&pats[0], &apply_subst_type(&s, &t_ok), env)?;
-                    return Ok(compose_subst(&s, &s_pat));
+    fn bind_pattern(&mut self, p: &Spanned<Pattern>, tt: &Type, env: &mut TypeEnv) -> Result<Subst, TypeError> {
+        match &p.node {
+            Pattern::Variable(n, _) => { env.insert(n.clone(), Scheme { vars: vec![], typ: tt.clone() }); Ok(HashMap::new()) }
+            Pattern::Constructor(n, pats) => {
+                if n == "Ok" && pats.len() == 1 {
+                    let (tok, terr) = (self.new_var(), self.new_var());
+                    let s = self.unify(tt, &Type::Result(Box::new(tok.clone()), Box::new(terr))).map_err(|m| TypeError { message: m, span: p.span.clone() })?;
+                    let sp = self.bind_pattern(&pats[0], &apply_subst_type(&s, &tok), env)?; Ok(compose_subst(&s, &sp))
+                } else if n == "Err" && pats.len() == 1 {
+                    let (tok, terr) = (self.new_var(), self.new_var());
+                    let s = self.unify(tt, &Type::Result(Box::new(tok), Box::new(terr.clone()))).map_err(|m| TypeError { message: m, span: p.span.clone() })?;
+                    let sp = self.bind_pattern(&pats[0], &apply_subst_type(&s, &terr), env)?; Ok(compose_subst(&s, &sp))
+                } else {
+                    for ed in env.enums.values().cloned() {
+                        if let Some(v) = ed.variants.iter().find(|x| x.name == *n) {
+                            if v.fields.len() != pats.len() { return Err(TypeError { message: "Arity mismatch".into(), span: p.span.clone() }); }
+                            let targs: Vec<Type> = ed.type_params.iter().map(|_| self.new_var()).collect();
+                            let s_en = self.unify(tt, &Type::UserDefined(ed.name.clone(), targs.clone())).map_err(|m| TypeError { message: m, span: p.span.clone() })?;
+                            let mut subst = s_en; let mut inst = HashMap::new(); for (pa, a) in ed.type_params.iter().zip(targs) { inst.insert(pa.clone(), a.clone()); }
+                            for (ft, pt) in v.fields.iter().zip(pats) {
+                                let sp = self.bind_pattern(pt, &apply_subst_type(&subst, &apply_subst_type(&inst, ft)), env)?;
+                                subst = compose_subst(&subst, &sp);
+                            }
+                            return Ok(subst);
+                        }
+                    }
+                    Err(TypeError { message: format!("Unknown ctor {}", n), span: p.span.clone() })
                 }
-                if name == "Err" && pats.len() == 1 {
-                    let t_ok = self.new_var();
-                    let t_err = self.new_var();
-                    let s = self.unify(
-                        t_target,
-                        &Type::Result(Box::new(t_ok), Box::new(t_err.clone())),
-                    )?;
-                    let s_pat = self.bind_pattern(&pats[0], &apply_subst_type(&s, &t_err), env)?;
-                    return Ok(compose_subst(&s, &s_pat));
-                }
-                Err(format!("Unknown constructor in pattern: {}", name))
             }
-            Pattern::Literal(lit) => {
-                let t_lit = match lit {
-                    Literal::Int(_) => Type::I64,
-                    Literal::Bool(_) => Type::Bool,
-                    Literal::String(_) => Type::Str,
-                    Literal::Unit => Type::Unit,
+            Pattern::Literal(l) => {
+                let tl = match l { Literal::Int(_) => Type::I64, Literal::Bool(_) => Type::Bool, Literal::String(_) => Type::Str, Literal::Unit => Type::Unit };
+                self.unify(tt, &tl).map_err(|m| TypeError { message: m, span: p.span.clone() })
+            }
+            Pattern::Wildcard => { if contains_linear(tt) { return Err(TypeError { message: "Discard linear".into(), span: p.span.clone() }); } Ok(HashMap::new()) }
+            Pattern::Record(pfs, open) => {
+                let tfs = match tt {
+                    Type::Record(fs) => { let mut m = HashMap::new(); for (n,t) in fs { m.insert(n.clone(), t.clone()); } m }
+                    Type::UserDefined(n, args) => {
+                        if let Some(td) = env.types.get(n).cloned() {
+                            let mut m = HashMap::new(); let mut su = HashMap::new(); for (pa, a) in td.type_params.iter().zip(args) { su.insert(pa.clone(), a.clone()); }
+                            for (nm, t) in &td.fields { m.insert(nm.clone(), apply_subst_type(&su, t)); } m
+                        } else { return Err(TypeError { message: "Unknown type".into(), span: p.span.clone() }); }
+                    }
+                    _ => return Err(TypeError { message: "Not record".into(), span: p.span.clone() }),
                 };
-                self.unify(t_target, &t_lit)
-            }
-            Pattern::Wildcard => {
-                if contains_linear(t_target) {
-                    return Err(format!("Cannot discard linear type with wildcard pattern: {:?}", t_target));
+                let mut sub = HashMap::new(); let mut matched = HashSet::new();
+                for (n, pt) in pfs {
+                    if let Some(tf) = tfs.get(n) {
+                        let sp = self.bind_pattern(pt, &apply_subst_type(&sub, tf), env)?; sub = compose_subst(&sub, &sp); matched.insert(n.clone());
+                    } else { return Err(TypeError { message: format!("No field {}", n), span: pt.span.clone() }); }
                 }
-                Ok(HashMap::new())
-            },
-            Pattern::Record(pat_fields, is_open) => {
-                // Resolve target to fields
-                let target_fields_map = match t_target {
-                    Type::Record(fields) => {
-                        let mut map = HashMap::new();
-                        for (n, t) in fields { map.insert(n.clone(), t.clone()); }
-                        map
-                    },
-                    Type::UserDefined(name, args) => {
-                        if let Some(td) = env.types.get(name).cloned() {
-                            let mut map = HashMap::new();
-                            let mut subst = HashMap::new();
-                            for (p, a) in td.type_params.iter().zip(args) {
-                                subst.insert(p.clone(), a.clone());
-                            }
-                            for (n, t) in &td.fields {
-                                map.insert(n.clone(), apply_subst_type(&subst, t));
-                            }
-                            map
-                        } else {
-                            return Err(format!("Unknown type or not a record: {}", name));
-                        }
-                    },
-                    _ => return Err(format!("Pattern record match against non-record type: {:?}", t_target)),
-                };
-
-                let mut subst = HashMap::new();
-                let mut matched_fields = HashSet::new();
-
-                for (name, pat) in pat_fields {
-                    if let Some(t_field) = target_fields_map.get(name) {
-                        let s_field = self.bind_pattern(pat, &apply_subst_type(&subst, t_field), env)?;
-                        subst = compose_subst(&subst, &s_field);
-                        matched_fields.insert(name.clone());
-                    } else {
-                         return Err(format!("Field {} not found in target type", name));
-                    }
-                }
-
-                if !is_open {
-                    for key in target_fields_map.keys() {
-                        if !matched_fields.contains(key) {
-                            return Err(format!("Missing field in pattern: {}", key));
-                        }
-                    }
-                }
-                
-                Ok(subst)
+                if !open { for k in tfs.keys() { if !matched.contains(k) { return Err(TypeError { message: format!("Missing {}", k), span: p.span.clone() }); } } }
+                Ok(sub)
             }
         }
     }
 
     fn instantiate(&mut self, scheme: &Scheme) -> Type {
         let mut subst = HashMap::new();
-        for var in &scheme.vars {
-            subst.insert(var.clone(), self.new_var());
-        }
+        for var in &scheme.vars { subst.insert(var.clone(), self.new_var()); }
         apply_subst_type(&subst, &scheme.typ)
     }
 
-    fn check_exhaustiveness(&self, target_type: &Type, cases: &[MatchCase]) -> Result<(), String> {
-        let patterns: Vec<&Pattern> = cases.iter().map(|c| &c.pattern).collect();
-        // Convert to matrix (Nx1)
-        let matrix: Vec<Vec<&Pattern>> = patterns.iter().map(|p| vec![*p]).collect();
-        let types = vec![target_type];
-        self.check_matrix(&matrix, &types)
+    fn check_exhaustiveness(&self, tt: &Type, cases: &[MatchCase]) -> Result<(), String> {
+        let matrix: Vec<Vec<PatRef>> = cases.iter().map(|c| vec![PatRef::Original(&c.pattern)]).collect();
+        self.check_matrix(&matrix, &[tt])
     }
 
-    fn check_matrix(&self, matrix: &[Vec<&Pattern>], types: &[&Type]) -> Result<(), String> {
-        if matrix.is_empty() {
-            return Err("Non-exhaustive patterns".to_string());
-        }
-        if types.is_empty() {
-            return Ok(());
-        }
-
-        let first_type = types[0];
-        let rest_types = &types[1..];
-
-        // Check if first column has wildcard
-        // But we need to handle constructors.
-        // Simplified: Split based on type.
-
-        match first_type {
-            Type::Bool => {
-                self.check_constructor_matrix(matrix, "true", 0, &[], rest_types)?;
-                self.check_constructor_matrix(matrix, "false", 0, &[], rest_types)?;
-                Ok(())
-            },
-            Type::Result(ok, err) => {
-                self.check_constructor_matrix(matrix, "Ok", 1, &[&**ok], rest_types)?;
-                self.check_constructor_matrix(matrix, "Err", 1, &[&**err], rest_types)?;
-                Ok(())
-            },
+    fn check_matrix(&self, matrix: &[Vec<PatRef>], types: &[&Type]) -> Result<(), String> {
+        if matrix.is_empty() { return Err("Non-exhaustive".to_string()); }
+        if types.is_empty() { return Ok(()); }
+        let ft = types[0]; let rt = &types[1..];
+        match ft {
+            Type::Bool => { self.check_constructor_matrix(matrix, "true", 0, &[], rt)?; self.check_constructor_matrix(matrix, "false", 0, &[], rt)?; Ok(()) }
+            Type::Result(ok, err) => { self.check_constructor_matrix(matrix, "Ok", 1, &[&**ok], rt)?; self.check_constructor_matrix(matrix, "Err", 1, &[&**err], rt)?; Ok(()) }
             Type::Record(fields) => {
-                // Product type. Expand.
-                // New types: fields types + rest_types.
-                let mut field_types: Vec<&Type> = fields.iter().map(|(_, t)| t).collect();
-                field_types.extend_from_slice(rest_types);
-                
-                // Expand matrix
-                let mut new_matrix = Vec::new();
+                let mut fts: Vec<&Type> = fields.iter().map(|(_, t)| t).collect(); fts.extend_from_slice(rt);
+                let mut nm = Vec::new();
                 for row in matrix {
-                    let p = row[0];
-                    let rest_row = &row[1..];
-                    
-                    match p {
-                        Pattern::Record(pat_fields, is_open) => {
-                            // Map pat_fields to ordered fields.
-                            // If is_open and missing, Wildcard.
-                            // If !is_open and missing, impossible (checked by bind).
-                            let mut new_row = Vec::new();
-                            for (fname, _) in fields {
-                                if let Some((_, pat)) = pat_fields.iter().find(|(n, _)| n == fname) {
-                                    new_row.push(pat);
-                                } else if *is_open {
-                                    new_row.push(&Pattern::Wildcard);
-                                } else {
-                                    // Should not happen if well-typed
-                                    new_row.push(&Pattern::Wildcard); 
-                                }
+                    let p = &row[0]; let rr = &row[1..];
+                    match p.node() {
+                        Pattern::Record(pfs, open) => {
+                            let mut nr = Vec::new();
+                            for (fnm, _) in fields {
+                                if let Some((_, pt)) = pfs.iter().find(|(n, _)| n == fnm) { nr.push(PatRef::Original(pt)); }
+                                else if *open { nr.push(PatRef::Synthetic(Pattern::Wildcard, p.span())); }
+                                else { nr.push(PatRef::Synthetic(Pattern::Wildcard, p.span())); }
                             }
-                            new_row.extend_from_slice(rest_row);
-                            new_matrix.push(new_row);
-                        },
+                            nr.extend_from_slice(rr); nm.push(nr);
+                        }
                         Pattern::Wildcard | Pattern::Variable(..) => {
-                             // Expand wildcard to wildcards for all fields
-                             let mut new_row = vec![&Pattern::Wildcard; fields.len()];
-                             new_row.extend_from_slice(rest_row);
-                             new_matrix.push(new_row);
-                        },
-                        _ => {} // Skip mismatched patterns (shouldn't happen)
+                            let mut nr = vec![PatRef::Synthetic(Pattern::Wildcard, p.span()); fields.len()];
+                            nr.extend_from_slice(rr); nm.push(nr);
+                        }
+                        _ => {}
                     }
                 }
-                self.check_matrix(&new_matrix, &field_types)
-            },
-            Type::Unit => {
-                self.check_constructor_matrix(matrix, "()", 0, &[], rest_types)?;
-                Ok(())
+                self.check_matrix(&nm, &fts)
             }
-            Type::UserDefined(name, _) => {
-                 // Try to resolve to Record/TypeDef?
-                 // If nominal type, we need to know if it's enum or struct.
-                 // Currently only TypeDef (Record-like).
-                 // So treat as Record if found in env?
-                 // check_exhaustiveness calls check_matrix.
-                 // env is not passed to check_matrix easily (self has env, but check_matrix is distinct?)
-                 // self is TypeChecker.
-                 if let Some(td) = self.env.types.get(name) {
-                     // It is a struct (record).
-                     // Treat same as Record.
-                     // Construct Type::Record equivalent for logic.
-                     // But types slice contains references.
-                     // We need to construct owned Type::Record or handle UserDefined same as Record logic.
-                     // Duplicate Record logic or recursion?
-                     // I'll assume Record logic logic.
-                     // We need to resolve generics? Yes.
-                     // But types[0] is instantiated type?
-                     // No, Type::UserDefined holds args.
-                     // So we can resolve field types.
-                     // This is complex.
-                     // For now, assume UserDefined requires Wildcard unless it is opaque?
-                     // Fallback to "Wildcard required".
-                     self.check_wildcard_matrix(matrix, rest_types)
-                 } else {
-                     self.check_wildcard_matrix(matrix, rest_types)
-                 }
-            },
-            _ => {
-                // Int, Str, etc.
-                self.check_wildcard_matrix(matrix, rest_types)
+            Type::Unit => { self.check_constructor_matrix(matrix, "()", 0, &[], rt)?; Ok(()) }
+            Type::UserDefined(name, args) => {
+                 if let Some(ed) = self.env.enums.get(name).cloned() {
+                     let mut subst = HashMap::new(); for (p, a) in ed.type_params.iter().zip(args) { subst.insert(p.clone(), a.clone()); }
+                     for v in &ed.variants {
+                         let ats: Vec<Type> = v.fields.iter().map(|f| apply_subst_type(&subst, f)).collect();
+                         let ars: Vec<&Type> = ats.iter().collect();
+                         self.check_constructor_matrix(matrix, &v.name, v.fields.len(), &ars, rt)?;
+                     }
+                     Ok(())
+                 } else { self.check_wildcard_matrix(matrix, rt) }
             }
+            _ => self.check_wildcard_matrix(matrix, rt)
         }
     }
 
-    fn check_wildcard_matrix(&self, matrix: &[Vec<&Pattern>], rest_types: &[&Type]) -> Result<(), String> {
-         // Filter rows starting with Wildcard/Variable.
-         let mut new_matrix = Vec::new();
-         for row in matrix {
-             match row[0] {
-                 Pattern::Wildcard | Pattern::Variable(..) => {
-                     new_matrix.push(row[1..].to_vec());
-                 },
-                 _ => {}
-             }
-         }
-         if new_matrix.is_empty() {
-             return Err("Non-exhaustive: missing wildcard/variable case".to_string());
-         }
-         self.check_matrix(&new_matrix, rest_types)
+    fn check_wildcard_matrix(&self, matrix: &[Vec<PatRef>], rt: &[&Type]) -> Result<(), String> {
+        let mut nm = Vec::new();
+        for row in matrix { match row[0].node() { Pattern::Wildcard | Pattern::Variable(..) => nm.push(row[1..].to_vec()), _ => {} } }
+        if nm.is_empty() { return Err("Non-exhaustive".to_string()); }
+        self.check_matrix(&nm, rt)
     }
 
-    fn check_constructor_matrix(&self, matrix: &[Vec<&Pattern>], ctor: &str, arity: usize, arg_types: &[&Type], rest_types: &[&Type]) -> Result<(), String> {
-        let mut new_matrix = Vec::new();
-        let mut new_types = arg_types.to_vec();
-        new_types.extend_from_slice(rest_types);
-
+    fn check_constructor_matrix(&self, matrix: &[Vec<PatRef>], ctor: &str, arity: usize, ats: &[&Type], rt: &[&Type]) -> Result<(), String> {
+        let mut nm = Vec::new(); let mut nt = ats.to_vec(); nt.extend_from_slice(rt);
         for row in matrix {
-            let p = row[0];
-            let rest = &row[1..];
-            match p {
-                 Pattern::Constructor(c, args) => {
-                     if c == ctor {
-                         let mut new_row: Vec<&Pattern> = args.iter().collect();
-                         new_row.extend_from_slice(rest);
-                         new_matrix.push(new_row);
-                     }
-                 },
+            let p = &row[0]; let rest = &row[1..];
+            match p.node() {
+                 Pattern::Constructor(c, args) => if c == ctor { let mut nr: Vec<PatRef> = args.iter().map(|a| PatRef::Original(a)).collect(); nr.extend_from_slice(rest); nm.push(nr); },
                  Pattern::Literal(lit) => {
-                     let name = match lit {
-                         Literal::Bool(true) => "true",
-                         Literal::Bool(false) => "false",
-                         Literal::Unit => "()",
-                         _ => "",
-                     };
-                     if name == ctor {
-                         let mut new_row = Vec::new(); // arity 0
-                         new_row.extend_from_slice(rest);
-                         new_matrix.push(new_row);
-                     }
+                     let name = match lit { Literal::Bool(true) => "true", Literal::Bool(false) => "false", Literal::Unit => "()", _ => "" };
+                     if name == ctor { let mut nr = Vec::new(); nr.extend_from_slice(rest); nm.push(nr); }
                  },
                  Pattern::Wildcard | Pattern::Variable(..) => {
-                     let mut new_row = vec![&Pattern::Wildcard; arity];
-                     new_row.extend_from_slice(rest);
-                     new_matrix.push(new_row);
+                     let mut nr = vec![PatRef::Synthetic(Pattern::Wildcard, p.span()); arity]; nr.extend_from_slice(rest); nm.push(nr);
                  },
                  _ => {}
             }
         }
-        
-        self.check_matrix(&new_matrix, &new_types).map_err(|_| format!("Non-exhaustive: missing {} case", ctor))
+        self.check_matrix(&nm, &nt).map_err(|_| format!("Missing {}", ctor))
     }
 
     fn generalize(&self, env: &TypeEnv, typ: Type) -> Scheme {
-        let env_vars = get_free_vars_env(env);
-        let type_vars = get_free_vars_type(&typ);
-        let free: Vec<String> = type_vars.difference(&env_vars).cloned().collect();
-        Scheme { vars: free, typ }
+        let evs = get_free_vars_env(env); let tvs = get_free_vars_type(&typ);
+        let free: Vec<String> = tvs.difference(&evs).cloned().collect(); Scheme { vars: free, typ }
     }
 
     fn unify(&mut self, t1: &Type, t2: &Type) -> Result<Subst, String> {
         match (t1, t2) {
             (t1, t2) if t1 == t2 => Ok(HashMap::new()),
-            (Type::Var(n), t) | (t, Type::Var(n)) => {
-                if occurs_check(n, t) {
-                    return Err("Recursive type".into());
-                }
-                let mut s = HashMap::new();
-                s.insert(n.clone(), t.clone());
-                Ok(s)
-            }
+            (Type::Var(n), t) | (t, Type::Var(n)) => { if occurs_check(n, t) { return Err("Recursive".into()); } let mut s = HashMap::new(); s.insert(n.clone(), t.clone()); Ok(s) }
             (Type::Arrow(p1, r1, e1), Type::Arrow(p2, r2, e2)) => {
-                if p1.len() != p2.len() {
-                    return Err("Arity mismatch".into());
-                }
-                // Unify params
+                if p1.len() != p2.len() { return Err("Arity mismatch".into()); }
                 let mut s = HashMap::new();
-                for (a, b) in p1.iter().zip(p2) {
-                    let s_new = self.unify(&apply_subst_type(&s, a), &apply_subst_type(&s, b))?;
-                    s = compose_subst(&s, &s_new);
-                }
-                // Unify return type
-                let s_ret = self.unify(&apply_subst_type(&s, r1), &apply_subst_type(&s, r2))?;
-                s = compose_subst(&s, &s_ret);
-                
-                // Unify effects
-                let s_eff = self.unify(&apply_subst_type(&s, e1), &apply_subst_type(&s, e2))?;
-                s = compose_subst(&s, &s_eff);
-                
+                for (a, b) in p1.iter().zip(p2) { let sn = self.unify(&apply_subst_type(&s, a), &apply_subst_type(&s, b))?; s = compose_subst(&s, &sn); }
+                let sr = self.unify(&apply_subst_type(&s, r1), &apply_subst_type(&s, r2))?; s = compose_subst(&s, &sr);
+                let se = self.unify(&apply_subst_type(&s, e1), &apply_subst_type(&s, e2))?; s = compose_subst(&s, &se);
                 Ok(s)
             }
             (Type::Row(e1, t1), Type::Row(e2, t2)) => {
-                let mut s = HashMap::new();
-                let mut e2_remaining = e2.clone();
-                let mut e1_remaining = Vec::new();
-
-                for h1 in e1 {
-                    let h1_sub = apply_subst_type(&s, h1);
-                    if let Some(idx) = e2_remaining.iter().position(|h2| h1_sub == apply_subst_type(&s, h2)) {
-                        e2_remaining.remove(idx);
-                    } else {
-                        e1_remaining.push(h1.clone());
-                    }
-                }
-
-                let fresh_tail = if t1.is_some() || t2.is_some() || !e1_remaining.is_empty() || !e2_remaining.is_empty() {
-                    Some(Box::new(self.new_var()))
-                } else {
-                    None
-                };
-
-                if let Some(t1_inner) = t1 {
-                    let row = Type::Row(e2_remaining.clone(), fresh_tail.clone());
-                    let s_new = self.unify(&apply_subst_type(&s, t1_inner), &row)?;
-                    s = compose_subst(&s, &s_new);
-                } else if !e2_remaining.is_empty() {
-                    return Err(format!("Row mismatch: extra effects in RHS: {:?}", e2_remaining));
-                }
-
-                if let Some(t2_inner) = t2 {
-                    let row = Type::Row(e1_remaining, fresh_tail);
-                    let s_new = self.unify(&apply_subst_type(&s, t2_inner), &row)?;
-                    s = compose_subst(&s, &s_new);
-                } else if !e1_remaining.is_empty() {
-                    return Err(format!("Row mismatch: extra effects in LHS: {:?}", e1_remaining));
-                }
-
+                let mut s = HashMap::new(); let mut e2r = e2.clone(); let mut e1r = Vec::new();
+                for h1 in e1 { let h1s = apply_subst_type(&s, h1); if let Some(idx) = e2r.iter().position(|h2| h1s == apply_subst_type(&s, h2)) { e2r.remove(idx); } else { e1r.push(h1.clone()); } }
+                let ft = if t1.is_some() || t2.is_some() || !e1r.is_empty() || !e2r.is_empty() { Some(Box::new(self.new_var())) } else { None };
+                if let Some(i) = t1 { let row = Type::Row(e2r, ft.clone()); let sn = self.unify(&apply_subst_type(&s, i), &row)?; s = compose_subst(&s, &sn); }
+                else if !e2r.is_empty() { return Err("Row mismatch".into()); }
+                if let Some(i) = t2 { let row = Type::Row(e1r, ft); let sn = self.unify(&apply_subst_type(&s, i), &row)?; s = compose_subst(&s, &sn); }
+                else if !e1r.is_empty() { return Err("Row mismatch".into()); }
                 Ok(s)
             }
             (Type::Record(f1), Type::Record(f2)) => {
-                if f1.len() != f2.len() {
-                    return Err("Record arity mismatch".into());
-                }
-                let mut f1_sorted = f1.clone();
-                f1_sorted.sort_by(|a, b| a.0.cmp(&b.0));
-                let mut f2_sorted = f2.clone();
-                f2_sorted.sort_by(|a, b| a.0.cmp(&b.0));
-
+                if f1.len() != f2.len() { return Err("Arity mismatch".into()); }
+                let (mut f1s, mut f2s) = (f1.clone(), f2.clone()); f1s.sort_by(|a,b| a.0.cmp(&b.0)); f2s.sort_by(|a,b| a.0.cmp(&b.0));
                 let mut s = HashMap::new();
-                for ((n1, t1), (n2, t2)) in f1_sorted.iter().zip(f2_sorted.iter()) {
-                    if n1 != n2 {
-                        return Err(format!("Record field mismatch: {} vs {}", n1, n2));
-                    }
-                    let s_new = self.unify(&apply_subst_type(&s, t1), &apply_subst_type(&s, t2))?;
-                    s = compose_subst(&s, &s_new);
-                }
+                for ((n1, t1), (n2, t2)) in f1s.iter().zip(f2s.iter()) { if n1 != n2 { return Err("Field mismatch".into()); } let sn = self.unify(&apply_subst_type(&s, t1), &apply_subst_type(&s, t2))?; s = compose_subst(&s, &sn); }
                 Ok(s)
             }
-            (Type::UserDefined(n1, args1), Type::UserDefined(n2, args2)) if n1 == n2 => {
-                if args1.len() != args2.len() {
-                    return Err("Generic arity mismatch".into());
-                }
-                let mut s = HashMap::new();
-                for (a, b) in args1.iter().zip(args2) {
-                    let s_new = self.unify(&apply_subst_type(&s, a), &apply_subst_type(&s, b))?;
-                    s = compose_subst(&s, &s_new);
-                }
+            (Type::UserDefined(n1, a1), Type::UserDefined(n2, a2)) if n1 == n2 => {
+                if a1.len() != a2.len() { return Err("Arity mismatch".into()); }
+                let mut s = HashMap::new(); for (a, b) in a1.iter().zip(a2) { let sn = self.unify(&apply_subst_type(&s, a), &apply_subst_type(&s, b))?; s = compose_subst(&s, &sn); }
                 Ok(s)
             }
-            (Type::Result(ok1, err1), Type::Result(ok2, err2)) => {
-                let s1 = self.unify(ok1, ok2)?;
-                let s2 = self.unify(&apply_subst_type(&s1, err1), &apply_subst_type(&s1, err2))?;
-                Ok(compose_subst(&s1, &s2))
-            }
-            (Type::Ref(t1), Type::Ref(t2)) => self.unify(t1, t2),
-            (Type::Linear(t1), Type::Linear(t2)) => self.unify(t1, t2),
-            _ => Err(format!("Type mismatch: {:?} vs {:?}", t1, t2)),
+            (Type::Result(o1, er1), Type::Result(o2, er2)) => { let s1 = self.unify(o1, o2)?; let s2 = self.unify(&apply_subst_type(&s1, er1), &apply_subst_type(&s1, er2))?; Ok(compose_subst(&s1, &s2)) }
+            (Type::Ref(t1), Type::Ref(t2)) | (Type::Linear(t1), Type::Linear(t2)) | (Type::Borrow(t1), Type::Borrow(t2)) => self.unify(t1, t2),
+            _ => Err(format!("Mismatch: {:?} vs {:?}", t1, t2)),
         }
     }
 }
@@ -1160,147 +547,81 @@ impl TypeChecker {
 pub fn apply_subst_type(subst: &Subst, typ: &Type) -> Type {
     match typ {
         Type::Var(n) => subst.get(n).cloned().unwrap_or(typ.clone()),
-        Type::Arrow(params, ret, effects) => Type::Arrow(
-            params.iter().map(|p| apply_subst_type(subst, p)).collect(),
-            Box::new(apply_subst_type(subst, ret)),
-            Box::new(apply_subst_type(subst, effects)),
-        ),
-        Type::UserDefined(n, args) => Type::UserDefined(
-            n.clone(),
-            args.iter().map(|a| apply_subst_type(subst, a)).collect(),
-        ),
-        Type::Result(ok, err) => Type::Result(
-            Box::new(apply_subst_type(subst, ok)),
-            Box::new(apply_subst_type(subst, err)),
-        ),
-        Type::Ref(inner) => Type::Ref(Box::new(apply_subst_type(subst, inner))),
-        Type::Linear(inner) => Type::Linear(Box::new(apply_subst_type(subst, inner))),
-        Type::Row(effs, tail) => Type::Row(
-            effs.iter().map(|e| apply_subst_type(subst, e)).collect(),
-            tail.as_ref().map(|t| Box::new(apply_subst_type(subst, t))),
-        ),
-        Type::Record(fields) => Type::Record(
-            fields
-                .iter()
-                .map(|(n, t)| (n.clone(), apply_subst_type(subst, t)))
-                .collect(),
-        ),
+        Type::Arrow(p, r, e) => Type::Arrow(p.iter().map(|t| apply_subst_type(subst, t)).collect(), Box::new(apply_subst_type(subst, r)), Box::new(apply_subst_type(subst, e))),
+        Type::UserDefined(n, a) => Type::UserDefined(n.clone(), a.iter().map(|t| apply_subst_type(subst, t)).collect()),
+        Type::Result(o, e) => Type::Result(Box::new(apply_subst_type(subst, o)), Box::new(apply_subst_type(subst, e))),
+        Type::Ref(i) => Type::Ref(Box::new(apply_subst_type(subst, i))),
+        Type::Linear(i) => Type::Linear(Box::new(apply_subst_type(subst, i))),
+        Type::Borrow(i) => Type::Borrow(Box::new(apply_subst_type(subst, i))),
+        Type::Row(es, t) => Type::Row(es.iter().map(|x| apply_subst_type(subst, x)).collect(), t.as_ref().map(|x| Box::new(apply_subst_type(subst, x)))),
+        Type::Record(fs) => Type::Record(fs.iter().map(|(n, t)| (n.clone(), apply_subst_type(subst, t))).collect()),
         _ => typ.clone(),
     }
 }
 
 fn compose_subst(s1: &Subst, s2: &Subst) -> Subst {
-    let mut result = s2.clone();
-    for (k, v) in s1 {
-        result.insert(k.clone(), apply_subst_type(s2, v));
-    }
-    result
+    let mut res = s2.clone(); for (k, v) in s1 { res.insert(k.clone(), apply_subst_type(s2, v)); } res
 }
 
 fn get_free_vars_type(typ: &Type) -> HashSet<String> {
     match typ {
-        Type::Var(n) => {
-            let mut s = HashSet::new();
-            s.insert(n.clone());
-            s
-        }
-        Type::Arrow(params, ret, effects) => {
-            let mut s = get_free_vars_type(ret);
-            for p in params {
-                s.extend(get_free_vars_type(p));
-            }
-            s.extend(get_free_vars_type(effects));
-            s
-        }
-        Type::UserDefined(_, args) => {
-            let mut s = HashSet::new();
-            for a in args {
-                s.extend(get_free_vars_type(a));
-            }
-            s
-        }
-        Type::Result(ok, err) => {
-            let mut s = get_free_vars_type(ok);
-            s.extend(get_free_vars_type(err));
-            s
-        }
-        Type::Ref(inner) => get_free_vars_type(inner),
-        Type::Linear(inner) => get_free_vars_type(inner),
-        Type::Row(effs, tail) => {
-            let mut s = HashSet::new();
-            for e in effs {
-                s.extend(get_free_vars_type(e));
-            }
-            if let Some(t) = tail {
-                s.extend(get_free_vars_type(t));
-            }
-            s
-        }
-        Type::Record(fields) => {
-            let mut s = HashSet::new();
-            for (_, t) in fields {
-                s.extend(get_free_vars_type(t));
-            }
-            s
-        }
+        Type::Var(n) => { let mut s = HashSet::new(); s.insert(n.clone()); s }
+        Type::Arrow(p, r, e) => { let mut s = get_free_vars_type(r); for t in p { s.extend(get_free_vars_type(t)); } s.extend(get_free_vars_type(e)); s }
+        Type::UserDefined(_, a) => { let mut s = HashSet::new(); for t in a { s.extend(get_free_vars_type(t)); } s }
+        Type::Result(o, e) => { let mut s = get_free_vars_type(o); s.extend(get_free_vars_type(e)); s }
+        Type::Ref(i) | Type::Linear(i) | Type::Borrow(i) => get_free_vars_type(i),
+        Type::Row(es, t) => { let mut s = HashSet::new(); for e in es { s.extend(get_free_vars_type(e)); } if let Some(x) = t { s.extend(get_free_vars_type(x)); } s }
+        Type::Record(fs) => { let mut s = HashSet::new(); for (_, t) in fs { s.extend(get_free_vars_type(t)); } s }
         _ => HashSet::new(),
     }
 }
 
 fn get_free_vars_env(env: &TypeEnv) -> HashSet<String> {
-    let mut s = HashSet::new();
-    for scheme in env.vars.values() {
-        let free_in_typ = get_free_vars_type(&scheme.typ);
-        let bound: HashSet<String> = scheme.vars.iter().cloned().collect();
-        s.extend(free_in_typ.difference(&bound).cloned());
-    }
-    s
+    let mut s = HashSet::new(); for sch in env.vars.values() { let ft = get_free_vars_type(&sch.typ); let b: HashSet<_> = sch.vars.iter().cloned().collect(); s.extend(ft.difference(&b).cloned()); } s
 }
 
-fn occurs_check(name: &str, typ: &Type) -> bool {
-    match typ {
-        Type::Var(n) => n == name,
-        Type::Arrow(params, ret, effects) => {
-            occurs_check(name, ret) || params.iter().any(|p| occurs_check(name, p)) || occurs_check(name, effects)
-        }
-        Type::UserDefined(_, args) => args.iter().any(|a| occurs_check(name, a)),
-        Type::Result(ok, err) => occurs_check(name, ok) || occurs_check(name, err),
-        Type::Ref(inner) => occurs_check(name, inner),
-        Type::Linear(inner) => occurs_check(name, inner),
-        Type::Row(effs, tail) => {
-            effs.iter().any(|e| occurs_check(name, e)) || tail.as_ref().map_or(false, |t| occurs_check(name, t))
-        }
-        Type::Record(fields) => fields.iter().any(|(_, t)| occurs_check(name, t)),
+fn occurs_check(n: &str, t: &Type) -> bool {
+    match t {
+        Type::Var(m) => n == m,
+        Type::Arrow(p, r, e) => occurs_check(n, r) || p.iter().any(|x| occurs_check(n, x)) || occurs_check(n, e),
+        Type::UserDefined(_, a) => a.iter().any(|x| occurs_check(n, x)),
+        Type::Result(o, e) => occurs_check(n, o) || occurs_check(n, e),
+        Type::Ref(i) | Type::Linear(i) | Type::Borrow(i) => occurs_check(n, i),
+        Type::Row(es, t) => es.iter().any(|x| occurs_check(n, x)) || t.as_ref().map_or(false, |x| occurs_check(n, x)),
+        Type::Record(fs) => fs.iter().any(|(_, t)| occurs_check(n, t)),
         _ => false,
     }
 }
 
-fn contains_ref(typ: &Type) -> bool {
-    match typ {
+fn contains_ref(t: &Type) -> bool {
+    match t {
         Type::Ref(_) => true,
-        Type::Arrow(params, ret, effects) => contains_ref(ret) || params.iter().any(contains_ref) || contains_ref(effects),
-        Type::UserDefined(_, args) => args.iter().any(contains_ref),
-        Type::Result(ok, err) => contains_ref(ok) || contains_ref(err),
-        Type::Linear(inner) => contains_ref(inner),
-        Type::Row(effs, tail) => {
-            effs.iter().any(contains_ref) || tail.as_ref().map_or(false, |t| contains_ref(t))
-        }
-        Type::Record(fields) => fields.iter().any(|(_, t)| contains_ref(t)),
+        Type::Arrow(p, r, e) => contains_ref(r) || p.iter().any(contains_ref) || contains_ref(e),
+        Type::UserDefined(_, a) => a.iter().any(contains_ref),
+        Type::Result(o, e) => contains_ref(o) || contains_ref(e),
+        Type::Linear(i) | Type::Borrow(i) => contains_ref(i),
+        Type::Row(es, t) => es.iter().any(contains_ref) || t.as_ref().map_or(false, |x| contains_ref(x)),
+        Type::Record(fs) => fs.iter().any(|(_, t)| contains_ref(t)),
         _ => false,
     }
 }
 
-fn contains_linear(typ: &Type) -> bool {
-    match typ {
+fn contains_linear(t: &Type) -> bool {
+    match t {
         Type::Linear(_) => true,
-        Type::Ref(inner) => contains_linear(inner),
-        Type::Arrow(params, ret, effects) => contains_linear(ret) || params.iter().any(contains_linear) || contains_linear(effects),
-        Type::UserDefined(_, args) => args.iter().any(contains_linear),
-        Type::Result(ok, err) => contains_linear(ok) || contains_linear(err),
-        Type::Row(effs, tail) => {
-            effs.iter().any(contains_linear) || tail.as_ref().map_or(false, |t| contains_linear(t))
-        }
-        Type::Record(fields) => fields.iter().any(|(_, t)| contains_linear(t)),
+        Type::Ref(i) | Type::Borrow(i) => contains_linear(i),
+        Type::Arrow(p, r, e) => contains_linear(r) || p.iter().any(contains_linear) || contains_linear(e),
+        Type::UserDefined(_, a) => a.iter().any(contains_linear),
+        Type::Result(o, e) => contains_linear(o) || contains_linear(e),
+        Type::Row(es, t) => es.iter().any(contains_linear) || t.as_ref().map_or(false, |x| contains_linear(x)),
+        Type::Record(fs) => fs.iter().any(|(_, t)| contains_linear(t)),
         _ => false,
     }
+}
+
+#[derive(Clone)]
+enum PatRef<'a> { Original(&'a Spanned<Pattern>), Synthetic(Pattern, Span) }
+impl<'a> PatRef<'a> {
+    fn node(&self) -> &Pattern { match self { PatRef::Original(p) => &p.node, PatRef::Synthetic(p, _) => p } }
+    fn span(&self) -> Span { match self { PatRef::Original(p) => p.span.clone(), PatRef::Synthetic(_, s) => s.clone() } }
 }

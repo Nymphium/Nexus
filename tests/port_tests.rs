@@ -6,7 +6,7 @@ use chumsky::Parser;
 fn run(src: &str) -> Result<Value, String> {
     let p = parser().parse(src).map_err(|e| format!("{:?}", e))?;
     let mut checker = TypeChecker::new();
-    checker.check_program(&p)?;
+    checker.check_program(&p).map_err(|e| e.message)?;
     let mut interpreter = Interpreter::new(p);
     interpreter.run_function("main", vec![])
 }

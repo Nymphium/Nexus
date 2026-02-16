@@ -57,7 +57,7 @@ pub fn start() {
                                     Err(e) => println!("Runtime Error: {}", e),
                                 }
                             },
-                            Err(e) => println!("Type Error: {}", e),
+                            Err(e) => println!("Type Error: {} at {:?}", e.message, e.span),
                         }
                     },
                     Err(errs) => {
