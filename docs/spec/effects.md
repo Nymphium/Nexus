@@ -53,6 +53,43 @@ endtry
 
 The `try-catch` block handles the `Exn` effect, removing it from the resulting effect row of the block.
 
+## Ports and Handlers
+
+Nexus provides a mechanism for defining abstract interfaces (`port`) and their implementations (`handler`). This allows for modular effect handling and dependency injection.
+
+### Port Definition
+
+A `port` defines a set of effectful operations (an interface).
+
+```nexus
+port KeyValueStore do
+  fn get(key: str) -> str
+  fn set(key: str, val: str) -> unit
+endport
+```
+
+Functions in a port implicitly have an effect corresponding to the port itself (e.g., `KeyValueStore`).
+
+### Handler Definition
+
+A `handler` implements a specific port.
+
+```nexus
+handler InMemoryKVS for KeyValueStore do
+  fn get(key: str) -> str do
+    // ... implementation ...
+    return "value"
+  endfn
+
+  fn set(key: str, val: str) -> unit do
+    // ... implementation ...
+    return ()
+  endfn
+endhandler
+```
+
+Currently, Nexus supports **static global dispatch** for handlers. If a handler is defined for a port, calls to that port's functions (e.g., `perform KeyValueStore.get(key: "k")`) are automatically dispatched to the registered handler.
+
 ## Subtyping
 
 Subtyping is **not** supported in the current version of the effect system. All effect matching is done via unification of rows.
