@@ -50,6 +50,7 @@ fn type_parser() -> P<Type> {
     recursive(|t: Recursive<'_, char, Type, Simple<char>>| {
         let base = choice((
             text::keyword("i64").to(Type::I64),
+            text::keyword("float").to(Type::Float),
             text::keyword("bool").to(Type::Bool),
             text::keyword("str").to(Type::Str),
             text::keyword("unit").to(Type::Unit),
@@ -126,10 +127,18 @@ fn type_parser() -> P<Type> {
 }
 
 fn literal() -> impl Parser<char, Literal, Error = Simple<char>> + Clone {
-    let int = just('-').or_not().then(text::int(10)).map(|(sign, s)| {
-        let val = s.parse::<i64>().unwrap();
-        Literal::Int(if sign.is_some() { -val } else { val })
-    });
+    let number = just('-').or_not().then(text::int(10))
+        .then(just('.').ignore_then(text::int(10)).or_not())
+        .map(|((sign, int_part), frac_part)| {
+             let sign_str = if sign.is_some() { "-" } else { "" };
+             if let Some(frac) = frac_part {
+                 let s = format!("{}{}.{}", sign_str, int_part, frac);
+                 Literal::Float(s.parse::<f64>().unwrap())
+             } else {
+                 let s = format!("{}{}", sign_str, int_part);
+                 Literal::Int(s.parse::<i64>().unwrap())
+             }
+        });
 
     let bool_lit = choice((
         text::keyword("true").to(true),
@@ -144,7 +153,7 @@ fn literal() -> impl Parser<char, Literal, Error = Simple<char>> + Clone {
         .collect::<String>()
         .map(Literal::String);
 
-    choice((int, bool_lit, unit_lit, str_lit)).padded()
+    choice((number, bool_lit, unit_lit, str_lit)).padded()
 }
 
 fn expr_parser() -> P<Spanned<Expr>> {
@@ -231,6 +240,19 @@ fn expr_parser() -> P<Spanned<Expr>> {
             });
 
         let op = choice((
+            // Float operators (must come before int operators to handle overlap)
+            just("==.").to("==.".to_string()),
+            just("!=.").to("!=.".to_string()),
+            just("<=.").to("<=.".to_string()),
+            just(">=.").to(">=.".to_string()),
+            just("<.").to("<.".to_string()),
+            just(">.").to(">.".to_string()),
+            just("+.").to("+.".to_string()),
+            just("-.").to("-.".to_string()),
+            just("*.").to("*.".to_string()),
+            just("/.").to("/.".to_string()),
+
+            // Int/Generic operators
             just("==").to("==".to_string()),
             just("!=").to("!=".to_string()),
             just("<=").to("<=".to_string()),

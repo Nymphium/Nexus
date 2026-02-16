@@ -11,6 +11,7 @@ pub struct Spanned<T> {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type {
     I64,
+    Float,
     Bool,
     Str,
     Unit,
@@ -56,6 +57,7 @@ pub struct Param {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Literal {
     Int(i64),
+    Float(f64),
     Bool(bool),
     String(String), // Includes RawString
     Unit,

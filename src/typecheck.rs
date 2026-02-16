@@ -246,7 +246,13 @@ impl TypeChecker {
 
     fn infer(&mut self, env: &mut TypeEnv, e: &Spanned<Expr>, er: &Type, ee: &Type) -> Result<(Subst, Type), TypeError> {
         match &e.node {
-            Expr::Literal(l) => Ok((HashMap::new(), match l { Literal::Int(_) => Type::I64, Literal::Bool(_) => Type::Bool, Literal::String(_) => Type::Str, Literal::Unit => Type::Unit })),
+            Expr::Literal(l) => Ok((HashMap::new(), match l {
+                Literal::Int(_) => Type::I64,
+                Literal::Float(_) => Type::Float,
+                Literal::Bool(_) => Type::Bool,
+                Literal::String(_) => Type::Str,
+                Literal::Unit => Type::Unit,
+            })),
             Expr::Variable(n, s) => {
                 let key = s.get_key(n);
                 if let Some(sch) = env.get(&key).cloned() {
@@ -261,11 +267,37 @@ impl TypeChecker {
                 let (s1, t1) = self.infer(env, l, er, ee)?;
                 let (s2, t2) = self.infer(env, r, er, ee)?;
                 let mut s = compose_subst(&s1, &s2);
-                let is_b = match op.as_str() { "=="|"!="|"<"|">"|"<="|">=" => true, _ => false };
-                let s3 = self.unify(&apply_subst_type(&s, &t1), &Type::I64).map_err(|m| TypeError { message: m, span: l.span.clone() })?;
-                s = compose_subst(&s, &s3);
-                let s4 = self.unify(&apply_subst_type(&s, &t2), &Type::I64).map_err(|m| TypeError { message: m, span: r.span.clone() })?;
-                Ok((compose_subst(&s, &s4), if is_b { Type::Bool } else { Type::I64 }))
+                match op.as_str() {
+                    "+" | "-" | "*" | "/" => {
+                        let s3 = self.unify(&apply_subst_type(&s, &t1), &Type::I64).map_err(|m| TypeError { message: m, span: l.span.clone() })?;
+                        s = compose_subst(&s, &s3);
+                        let s4 = self.unify(&apply_subst_type(&s, &t2), &Type::I64).map_err(|m| TypeError { message: m, span: r.span.clone() })?;
+                        s = compose_subst(&s, &s4);
+                        Ok((s, Type::I64))
+                    }
+                    "+." | "-." | "*." | "/." => {
+                        let s3 = self.unify(&apply_subst_type(&s, &t1), &Type::Float).map_err(|m| TypeError { message: m, span: l.span.clone() })?;
+                        s = compose_subst(&s, &s3);
+                        let s4 = self.unify(&apply_subst_type(&s, &t2), &Type::Float).map_err(|m| TypeError { message: m, span: r.span.clone() })?;
+                        s = compose_subst(&s, &s4);
+                        Ok((s, Type::Float))
+                    }
+                    "==" | "!=" | "<" | ">" | "<=" | ">=" => {
+                        let s3 = self.unify(&apply_subst_type(&s, &t1), &Type::I64).map_err(|m| TypeError { message: m, span: l.span.clone() })?;
+                        s = compose_subst(&s, &s3);
+                        let s4 = self.unify(&apply_subst_type(&s, &t2), &Type::I64).map_err(|m| TypeError { message: m, span: r.span.clone() })?;
+                        s = compose_subst(&s, &s4);
+                        Ok((s, Type::Bool))
+                    }
+                    "==." | "!=." | "<." | ">." | "<=." | ">=." => {
+                        let s3 = self.unify(&apply_subst_type(&s, &t1), &Type::Float).map_err(|m| TypeError { message: m, span: l.span.clone() })?;
+                        s = compose_subst(&s, &s3);
+                        let s4 = self.unify(&apply_subst_type(&s, &t2), &Type::Float).map_err(|m| TypeError { message: m, span: r.span.clone() })?;
+                        s = compose_subst(&s, &s4);
+                        Ok((s, Type::Bool))
+                    }
+                    _ => Err(TypeError { message: format!("Unknown operator {}", op), span: e.span.clone() }),
+                }
             }
             Expr::Borrow(n, s) => {
                 if let Some(sch) = env.get(&s.get_key(n)).cloned() {
@@ -387,7 +419,13 @@ impl TypeChecker {
                 }
             }
             Pattern::Literal(l) => {
-                let tl = match l { Literal::Int(_) => Type::I64, Literal::Bool(_) => Type::Bool, Literal::String(_) => Type::Str, Literal::Unit => Type::Unit };
+                let tl = match l {
+                    Literal::Int(_) => Type::I64,
+                    Literal::Float(_) => Type::Float,
+                    Literal::Bool(_) => Type::Bool,
+                    Literal::String(_) => Type::Str,
+                    Literal::Unit => Type::Unit,
+                };
                 self.unify(tt, &tl).map_err(|m| TypeError { message: m, span: p.span.clone() })
             }
             Pattern::Wildcard => { if contains_linear(tt) { return Err(TypeError { message: "Discard linear".into(), span: p.span.clone() }); } Ok(HashMap::new()) }

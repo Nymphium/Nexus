@@ -8,6 +8,7 @@ mod stdlib;
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Int(i64),
+    Float(f64),
     Bool(bool),
     String(String),
     Unit,
@@ -193,6 +194,7 @@ impl Interpreter {
         match &expr.node {
             Expr::Literal(lit) => Ok(ExprResult::Normal(match lit {
                 Literal::Int(i) => Value::Int(*i),
+                Literal::Float(f) => Value::Float(*f),
                 Literal::Bool(b) => Value::Bool(*b),
                 Literal::String(s) => Value::String(s.clone()),
                 Literal::Unit => Value::Unit,
@@ -247,6 +249,16 @@ impl Interpreter {
                             (Value::Int(a), ">=", Value::Int(b)) => {
                                 Ok(ExprResult::Normal(Value::Bool(a >= b)))
                             }
+                            (Value::Float(a), "+.", Value::Float(b)) => Ok(ExprResult::Normal(Value::Float(a + b))),
+                            (Value::Float(a), "-.", Value::Float(b)) => Ok(ExprResult::Normal(Value::Float(a - b))),
+                            (Value::Float(a), "*.", Value::Float(b)) => Ok(ExprResult::Normal(Value::Float(a * b))),
+                            (Value::Float(a), "/.", Value::Float(b)) => Ok(ExprResult::Normal(Value::Float(a / b))),
+                            (Value::Float(a), "==.", Value::Float(b)) => Ok(ExprResult::Normal(Value::Bool(a == b))),
+                            (Value::Float(a), "!=.", Value::Float(b)) => Ok(ExprResult::Normal(Value::Bool(a != b))),
+                            (Value::Float(a), "<.", Value::Float(b)) => Ok(ExprResult::Normal(Value::Bool(a < b))),
+                            (Value::Float(a), ">.", Value::Float(b)) => Ok(ExprResult::Normal(Value::Bool(a > b))),
+                            (Value::Float(a), "<=.", Value::Float(b)) => Ok(ExprResult::Normal(Value::Bool(a <= b))),
+                            (Value::Float(a), ">=.", Value::Float(b)) => Ok(ExprResult::Normal(Value::Bool(a >= b))),
                             (Value::String(a), "+", Value::String(b)) => {
                                 Ok(ExprResult::Normal(Value::String(a + &b)))
                             }
@@ -408,6 +420,7 @@ impl Interpreter {
             (Pattern::Wildcard, _) => Some(HashMap::new()),
             (Pattern::Literal(lit), v) => match (lit, v) {
                 (Literal::Int(a), Value::Int(b)) if a == b => Some(HashMap::new()),
+                (Literal::Float(a), Value::Float(b)) if (a - b).abs() < f64::EPSILON => Some(HashMap::new()),
                 (Literal::Bool(a), Value::Bool(b)) if a == b => Some(HashMap::new()),
                 (Literal::String(a), Value::String(b)) if a == b => Some(HashMap::new()),
                 (Literal::Unit, Value::Unit) => Some(HashMap::new()),
