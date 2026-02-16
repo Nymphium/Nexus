@@ -5,6 +5,7 @@ Nexus uses a strict type system with Hindley-Milner type inference, structural r
 ## Primitive Types
 
 - `i64`: 64-bit signed integer.
+- `float`: 64-bit floating point number.
 - `bool`: Boolean (`true` / `false`).
 - `str`: UTF-8 string.
 - `unit`: The unit type `()`.
@@ -71,4 +72,10 @@ Function effects are represented as row-polymorphic types `{ E1, E2 | r }`.
 
 ```nexus
 fn g() -> unit effect { IO, Net } do ... endfn
+```
+
+The `perform` keyword can be used to explicitly denote an effectful function call, though it is currently optional.
+
+```nexus
+perform g()
 ```
