@@ -11,7 +11,7 @@ const KEYWORDS: &[&str] = &[
 
     "task", "endtask", "conc", "endconc", "port", "endport", "perform", "type", "import", "from",
 
-    "pub",
+    "pub", "effect", "raise", "try", "catch", "endtry",
 
 ];
 
@@ -157,7 +157,13 @@ fn expr_parser() -> P<Expr> {
             )
             .map(|(name, args)| Expr::Constructor(name, args));
 
+        let raise = text::keyword("raise")
+            .padded()
+            .ignore_then(expr.clone())
+            .map(|e| Expr::Raise(Box::new(e)));
+
         let atom = choice((
+            raise,
             perform_call,
             constructor,
             simple_call,
@@ -309,6 +315,23 @@ pub fn stmt_parser() -> impl Parser<char, Stmt, Error = Simple<char>> {
             .then_ignore(text::keyword("endconc").padded())
             .map(|(_, tasks)| Stmt::Conc(tasks));
 
+        let try_stmt = text::keyword("try")
+            .padded()
+            .ignore_then(stmt.clone().repeated())
+            .then(
+                text::keyword("catch")
+                    .padded()
+                    .ignore_then(ident())
+                    .then_ignore(just("->").padded())
+                    .then(stmt.clone().repeated()),
+            )
+            .then_ignore(text::keyword("endtry").padded())
+            .map(|(body, (catch_param, catch_body))| Stmt::Try {
+                body,
+                catch_param,
+                catch_body,
+            });
+
         let comment = just("//")
             .then(take_until(choice((just('\n'), end().to('\n')))))
             .padded()
@@ -321,6 +344,7 @@ pub fn stmt_parser() -> impl Parser<char, Stmt, Error = Simple<char>> {
             assign_stmt,
             if_stmt,
             match_stmt,
+            try_stmt,
             conc_block,
             expr.map(Stmt::Expr),
         ))
@@ -355,17 +379,27 @@ pub fn parser() -> impl Parser<char, Program, Error = Simple<char>> {
         )
         .then_ignore(just("->").padded())
         .then(type_parser())
+        .then(
+            text::keyword("effect")
+                .padded()
+                .ignore_then(
+                    ident()
+                        .separated_by(just(',').padded())
+                        .delimited_by(just('{'), just('}')),
+                )
+                .or_not(),
+        )
         .then_ignore(text::keyword("do").padded())
         .then(stmt_parser().repeated())
         .then_ignore(text::keyword("endfn").padded())
-        .map(|(((((vis, name), type_params), params), ret_type), body)| {
+        .map(|((((((vis, name), type_params), params), ret_type), effects), body)| {
             TopLevel::Function(Function {
                 name,
                 is_public: vis.is_some(),
                 type_params: type_params.unwrap_or_default(),
                 params,
                 ret_type,
-                effects: vec![],
+                effects: effects.unwrap_or_default(),
                 body,
             })
         });

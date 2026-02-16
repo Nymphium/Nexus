@@ -88,6 +88,7 @@ pub enum Expr {
         target: Box<Expr>,
         cases: Vec<MatchCase>,
     },
+    Raise(Box<Expr>), // raise "error"
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -108,6 +109,11 @@ pub enum Stmt {
     },
     // Concurrent block
     Conc(Vec<Function>), // 'task' blocks look like functions/closures
+    Try {
+        body: Vec<Stmt>,
+        catch_param: String,
+        catch_body: Vec<Stmt>,
+    },
     Comment,
 }
 
