@@ -122,15 +122,15 @@ impl TypeChecker {
                     }
                 }
                 TopLevel::Function(func) => { self.env.insert(func.name.clone(), self.generalize_top_level(func)); }
-                                _ => {}
-                            }
-                        }
-                        self.env.linear_vars.clear();
-                
-                        for def in &program.definitions {
+                _ => {}
+            }
+        }
+        self.env.linear_vars.clear();
+
+        for def in &program.definitions {
             match &def.node {
                 TopLevel::Function(func) => {
-                    if func.name == "main" && func.is_public { return Err(TypeError { message: "main must be private".into(), span: def.span.clone() }); }
+                    if func.name == "main" && func.is_public { return Err(TypeError { message: "main function must be private (remove 'pub')".into(), span: def.span.clone() }); }
                     self.check_function(func, &def.span)?;
                 }
                 TopLevel::Handler(h) => { self.check_handler(h, &def.span)?; }
@@ -156,6 +156,7 @@ impl TypeChecker {
             Type::Ref(i) => Type::Ref(Box::new(self.convert_user_defined_to_var(i, vars))),
             Type::Linear(i) => Type::Linear(Box::new(self.convert_user_defined_to_var(i, vars))),
             Type::Borrow(i) => Type::Borrow(Box::new(self.convert_user_defined_to_var(i, vars))),
+            Type::List(i) => Type::List(Box::new(self.convert_user_defined_to_var(i, vars))),
             Type::Row(es, t) => Type::Row(es.iter().map(|x| self.convert_user_defined_to_var(x, vars)).collect(), t.as_ref().map(|x| Box::new(self.convert_user_defined_to_var(x, vars)))),
             Type::Record(fs) => Type::Record(fs.iter().map(|(n, t)| (n.clone(), self.convert_user_defined_to_var(t, vars))).collect()),
             _ => typ.clone(),
@@ -187,18 +188,16 @@ impl TypeChecker {
             match &s.node {
                 Stmt::Let { name, sigil, typ, value } => {
                     let (s1, t1) = self.infer(env, value, er, ee)?; env.apply(&s1);
-                    
-                    if let Some(ann_type) = typ {
-                        let s_ann = self.unify(&t1, ann_type).map_err(|e| TypeError { message: e, span: value.span.clone() })?;
-                        env.apply(&s_ann);
+                    if let Some(ann) = typ {
+                        let sa = self.unify(&t1, ann).map_err(|e| TypeError { message: e, span: value.span.clone() })?; env.apply(&sa);
                     }
-
                     let ft = match sigil {
                         Sigil::Mutable => { if contains_linear(&t1) { return Err(TypeError { message: "Mutable linear".into(), span: value.span.clone() }); } Type::Ref(Box::new(t1)) }
                         Sigil::Linear => Type::Linear(Box::new(t1)),
                         Sigil::Immutable => { if contains_ref(&t1) { return Err(TypeError { message: "Immutable Ref".into(), span: value.span.clone() }); } t1 }
                     };
                     env.insert(sigil.get_key(name), self.generalize(env, ft));
+                    if name == "_" { env.linear_vars.remove(&sigil.get_key(name)); }
                 }
                 Stmt::Return(e) => {
                     let (s1, t1) = self.infer(env, e, er, ee)?; env.apply(&s1);
@@ -216,8 +215,8 @@ impl TypeChecker {
                 }
                 Stmt::Conc(ts) => { for t in ts { self.check_task(t, env, &s.span)?; } }
                 Stmt::Try { body, catch_param, catch_body } => {
-                    let exn_type = Type::UserDefined("Exn".into(), vec![]);
-                    let try_eff = Type::Row(vec![exn_type], Some(Box::new(ee.clone())));
+                    let exn = Type::UserDefined("Exn".into(), vec![]);
+                    let try_eff = Type::Row(vec![exn], Some(Box::new(ee.clone())));
                     let mut et = env.clone(); self.infer_body(body, &mut et, er, &try_eff)?;
                     let mut ec = env.clone(); ec.insert(catch_param.clone(), Scheme { vars: vec![], typ: Type::Str });
                     self.infer_body(catch_body, &mut ec, er, ee)?;
@@ -238,11 +237,13 @@ impl TypeChecker {
 
     pub fn check_repl_stmt(&mut self, s: &Spanned<Stmt>) -> Result<Type, TypeError> {
         let mut env = std::mem::replace(&mut self.env, TypeEnv::new());
-        let ev = self.new_var();
-        let res = match &s.node {
-            Stmt::Expr(e) => { let (sub, t) = self.infer(&mut env, e, &Type::Unit, &ev)?; env.apply(&sub); Ok(t) }
-            _ => { self.infer_body(&[s.clone()], &mut env, &Type::Unit, &ev)?; Ok(Type::Unit) }
-        };
+        let res = (|| {
+            let ev = self.new_var();
+            match &s.node {
+                Stmt::Expr(e) => { let (sub, t) = self.infer(&mut env, e, &Type::Unit, &ev)?; env.apply(&sub); Ok(t) }
+                _ => { self.infer_body(&[s.clone()], &mut env, &Type::Unit, &ev)?; Ok(Type::Unit) }
+            }
+        })();
         self.env = env; res
     }
 
@@ -298,7 +299,7 @@ impl TypeChecker {
                         s = compose_subst(&s, &s4);
                         Ok((s, Type::Bool))
                     }
-                    _ => Err(TypeError { message: format!("Unknown operator {}", op), span: e.span.clone() }),
+                    _ => Err(TypeError { message: format!("Unknown op {}", op), span: e.span.clone() }),
                 }
             }
             Expr::Borrow(n, s) => {
@@ -360,6 +361,22 @@ impl TypeChecker {
                 for (n, ex) in fs { let (sa, ta) = self.infer(env, ex, er, ee)?; s = compose_subst(&s, &sa); rfs.push((n.clone(), ta)); }
                 Ok((s, Type::Record(rfs)))
             }
+            Expr::List(exprs) => {
+                let elem_type = self.new_var();
+                let mut s = HashMap::new();
+                for ex in exprs {
+                    let (s_ex, t_ex) = self.infer(env, ex, er, ee)?;
+                    s = compose_subst(&s, &s_ex);
+                    let s_unify = self.unify(&t_ex, &apply_subst_type(&s, &elem_type)).map_err(|m| TypeError { message: m, span: ex.span.clone() })?;
+                    s = compose_subst(&s, &s_unify);
+                }
+                // Check linear/ref constraints inside List
+                let final_elem_type = apply_subst_type(&s, &elem_type);
+                if contains_ref(&final_elem_type) {
+                     return Err(TypeError { message: "List cannot contain References".into(), span: e.span.clone() });
+                }
+                Ok((s, Type::List(Box::new(final_elem_type))))
+            }
             Expr::FieldAccess(rec, fnm) => {
                 let (s1, tr) = self.infer(env, rec, er, ee)?; let tr = apply_subst_type(&s1, &tr);
                 if let Type::Record(fs) = &tr { if let Some((_, t)) = fs.iter().find(|(n, _)| n == fnm) { return Ok((s1, t.clone())); } }
@@ -401,7 +418,7 @@ impl TypeChecker {
                 let mut s = compose_subst(&s, &ss);
                 let exn_type = Type::UserDefined("Exn".into(), vec![]);
                 let required_eff = Type::Row(vec![exn_type], Some(Box::new(self.new_var())));
-                let s_eff = self.unify(&apply_subst_type(&s, ee), &required_eff).map_err(|_| TypeError { message: "raise requires 'Exn' effect".into(), span: e.span.clone() })?;
+                let s_eff = self.unify(&apply_subst_type(&s, ee), &required_eff).map_err(|_| TypeError { message: "raise requires 'Exn'".into(), span: e.span.clone() })?;
                 s = compose_subst(&s, &s_eff);
                 Ok((s, self.new_var()))
             }
@@ -438,13 +455,7 @@ impl TypeChecker {
                 }
             }
             Pattern::Literal(l) => {
-                let tl = match l {
-                    Literal::Int(_) => Type::I64,
-                    Literal::Float(_) => Type::Float,
-                    Literal::Bool(_) => Type::Bool,
-                    Literal::String(_) => Type::Str,
-                    Literal::Unit => Type::Unit,
-                };
+                let tl = match l { Literal::Int(_) => Type::I64, Literal::Float(_) => Type::Float, Literal::Bool(_) => Type::Bool, Literal::String(_) => Type::Str, Literal::Unit => Type::Unit };
                 self.unify(tt, &tl).map_err(|m| TypeError { message: m, span: p.span.clone() })
             }
             Pattern::Wildcard => { if contains_linear(tt) { return Err(TypeError { message: "Discard linear".into(), span: p.span.clone() }); } Ok(HashMap::new()) }
@@ -594,6 +605,7 @@ impl TypeChecker {
                 let mut s = HashMap::new(); for (a, b) in a1.iter().zip(a2) { let sn = self.unify(&apply_subst_type(&s, a), &apply_subst_type(&s, b))?; s = compose_subst(&s, &sn); }
                 Ok(s)
             }
+            (Type::List(i1), Type::List(i2)) => self.unify(i1, i2),
             (Type::Result(o1, er1), Type::Result(o2, er2)) => { let s1 = self.unify(o1, o2)?; let s2 = self.unify(&apply_subst_type(&s1, er1), &apply_subst_type(&s1, er2))?; Ok(compose_subst(&s1, &s2)) }
             (Type::Ref(t1), Type::Ref(t2)) | (Type::Linear(t1), Type::Linear(t2)) | (Type::Borrow(t1), Type::Borrow(t2)) => self.unify(t1, t2),
             _ => Err(format!("Mismatch: {:?} vs {:?}", t1, t2)),
@@ -610,6 +622,7 @@ pub fn apply_subst_type(subst: &Subst, typ: &Type) -> Type {
         Type::Ref(i) => Type::Ref(Box::new(apply_subst_type(subst, i))),
         Type::Linear(i) => Type::Linear(Box::new(apply_subst_type(subst, i))),
         Type::Borrow(i) => Type::Borrow(Box::new(apply_subst_type(subst, i))),
+        Type::List(i) => Type::List(Box::new(apply_subst_type(subst, i))),
         Type::Row(es, t) => Type::Row(es.iter().map(|x| apply_subst_type(subst, x)).collect(), t.as_ref().map(|x| Box::new(apply_subst_type(subst, x)))),
         Type::Record(fs) => Type::Record(fs.iter().map(|(n, t)| (n.clone(), apply_subst_type(subst, t))).collect()),
         _ => typ.clone(),
@@ -626,7 +639,7 @@ fn get_free_vars_type(typ: &Type) -> HashSet<String> {
         Type::Arrow(p, r, e) => { let mut s = get_free_vars_type(r); for t in p { s.extend(get_free_vars_type(t)); } s.extend(get_free_vars_type(e)); s }
         Type::UserDefined(_, a) => { let mut s = HashSet::new(); for t in a { s.extend(get_free_vars_type(t)); } s }
         Type::Result(o, e) => { let mut s = get_free_vars_type(o); s.extend(get_free_vars_type(e)); s }
-        Type::Ref(i) | Type::Linear(i) | Type::Borrow(i) => get_free_vars_type(i),
+        Type::Ref(i) | Type::Linear(i) | Type::Borrow(i) | Type::List(i) => get_free_vars_type(i),
         Type::Row(es, t) => { let mut s = HashSet::new(); for e in es { s.extend(get_free_vars_type(e)); } if let Some(x) = t { s.extend(get_free_vars_type(x)); } s }
         Type::Record(fs) => { let mut s = HashSet::new(); for (_, t) in fs { s.extend(get_free_vars_type(t)); } s }
         _ => HashSet::new(),
@@ -643,7 +656,7 @@ fn occurs_check(n: &str, t: &Type) -> bool {
         Type::Arrow(p, r, e) => occurs_check(n, r) || p.iter().any(|x| occurs_check(n, x)) || occurs_check(n, e),
         Type::UserDefined(_, a) => a.iter().any(|x| occurs_check(n, x)),
         Type::Result(o, e) => occurs_check(n, o) || occurs_check(n, e),
-        Type::Ref(i) | Type::Linear(i) | Type::Borrow(i) => occurs_check(n, i),
+        Type::Ref(i) | Type::Linear(i) | Type::Borrow(i) | Type::List(i) => occurs_check(n, i),
         Type::Row(es, t) => es.iter().any(|x| occurs_check(n, x)) || t.as_ref().map_or(false, |x| occurs_check(n, x)),
         Type::Record(fs) => fs.iter().any(|(_, t)| occurs_check(n, t)),
         _ => false,
@@ -656,7 +669,7 @@ fn contains_ref(t: &Type) -> bool {
         Type::Arrow(p, r, e) => contains_ref(r) || p.iter().any(contains_ref) || contains_ref(e),
         Type::UserDefined(_, a) => a.iter().any(contains_ref),
         Type::Result(o, e) => contains_ref(o) || contains_ref(e),
-        Type::Linear(i) | Type::Borrow(i) => contains_ref(i),
+        Type::Linear(i) | Type::Borrow(i) | Type::List(i) => contains_ref(i),
         Type::Row(es, t) => es.iter().any(contains_ref) || t.as_ref().map_or(false, |x| contains_ref(x)),
         Type::Record(fs) => fs.iter().any(|(_, t)| contains_ref(t)),
         _ => false,
@@ -666,7 +679,7 @@ fn contains_ref(t: &Type) -> bool {
 fn contains_linear(t: &Type) -> bool {
     match t {
         Type::Linear(_) => true,
-        Type::Ref(i) | Type::Borrow(i) => contains_linear(i),
+        Type::Ref(i) | Type::Borrow(i) | Type::List(i) => contains_linear(i),
         Type::Arrow(p, r, e) => contains_linear(r) || p.iter().any(contains_linear) || contains_linear(e),
         Type::UserDefined(_, a) => a.iter().any(contains_linear),
         Type::Result(o, e) => contains_linear(o) || contains_linear(e),

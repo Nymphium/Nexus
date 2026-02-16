@@ -34,6 +34,17 @@ enum Option<T> {
 }
 ```
 
+### Lists
+
+Immutable lists (vectors) are supported.
+
+```nexus
+let l: [i64] = [1, 2, 3]
+let nested = [[1], [2]]
+```
+
+Lists cannot contain mutable references (`Ref<T>`).
+
 ## Memory Management
 
 ### Linear Types

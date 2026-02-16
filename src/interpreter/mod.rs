@@ -14,6 +14,7 @@ pub enum Value {
     Unit,
     Record(HashMap<String, Value>),
     Variant(String, Vec<Value>),
+    List(Vec<Value>),
     Ref(Rc<RefCell<Value>>),
 }
 
@@ -339,6 +340,16 @@ impl Interpreter {
                     }
                 }
                 Ok(ExprResult::Normal(Value::Record(map)))
+            }
+            Expr::List(exprs) => {
+                let mut vals = Vec::new();
+                for e in exprs {
+                    match self.eval_expr(e, env)? {
+                        ExprResult::Normal(v) => vals.push(v),
+                        ExprResult::EarlyReturn(v) => return Ok(ExprResult::EarlyReturn(v)),
+                    }
+                }
+                Ok(ExprResult::Normal(Value::List(vals)))
             }
             Expr::FieldAccess(receiver, field_name) => {
                 let res = self.eval_expr(receiver, env)?;

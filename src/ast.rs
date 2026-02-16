@@ -23,6 +23,7 @@ pub enum Type {
     Linear(Box<Type>), // %T
     Row(Vec<Type>, Option<Box<Type>>), // { E1, E2 | r }
     Record(Vec<(String, Type)>), // { x: i64, y: str }
+    List(Box<Type>), // [T]
     Borrow(Box<Type>), // &T
 }
 
@@ -93,6 +94,7 @@ pub enum Expr {
     },
     Constructor(String, Vec<Spanned<Expr>>),
     Record(Vec<(String, Spanned<Expr>)>),
+    List(Vec<Spanned<Expr>>), // [1, 2, 3]
     FieldAccess(Box<Spanned<Expr>>, String),
     // If and Match can be expressions or statements.
     // In many FP languages they are expressions.

@@ -72,6 +72,9 @@ fn type_parser() -> P<Type> {
                 .separated_by(just(',').padded())
                 .delimited_by(just('{'), just('}'))
                 .map(Type::Record),
+            t.clone()
+                .delimited_by(just('['), just(']'))
+                .map(|inner| Type::List(Box::new(inner))),
             ident().map(|n| Type::UserDefined(n, vec![])),
         ));
 
@@ -190,6 +193,13 @@ fn expr_parser() -> P<Spanned<Expr>> {
             .delimited_by(just('{'), just('}'))
             .map(Expr::Record);
 
+        let list = expr
+            .clone()
+            .separated_by(just(',').padded())
+            .allow_trailing()
+            .delimited_by(just('['), just(']'))
+            .map(Expr::List);
+
         let var = sigil().then(ident()).map(|(s, n)| Expr::Variable(n, s));
 
         let constructor = ident()
@@ -218,6 +228,7 @@ fn expr_parser() -> P<Spanned<Expr>> {
             constructor,
             simple_call,
             record,
+            list,
             literal().map(Expr::Literal),
             var,
         ))
