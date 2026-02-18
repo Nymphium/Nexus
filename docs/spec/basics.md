@@ -18,10 +18,11 @@ nexus <file.nx>
 
 A Nexus program consists of top-level definitions:
 - Functions (`fn`)
+- External Functions (`external`)
 - Type definitions (`type` and `enum`)
 - Ports (`port`)
 - Handlers (`handler`)
-- Imports (`import`) - *Reserved syntax, module system not yet implemented.*
+- Imports (`import`)
 
 ## Entrypoint
 

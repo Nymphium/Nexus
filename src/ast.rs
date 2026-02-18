@@ -20,12 +20,12 @@ pub enum Type {
     Var(String),
     Arrow(Vec<(String, Type)>, Box<Type>, Box<Type>),
     Ref(Box<Type>),
-    Linear(Box<Type>), // %T
+    Linear(Box<Type>),                 // %T
     Row(Vec<Type>, Option<Box<Type>>), // { E1, E2 | r }
-    Record(Vec<(String, Type)>), // { x: i64, y: string }
-    List(Box<Type>), // [T]
-    Array(Box<Type>), // [| T |]
-    Borrow(Box<Type>), // &T
+    Record(Vec<(String, Type)>),       // { x: i64, y: string }
+    List(Box<Type>),                   // [T]
+    Array(Box<Type>),                  // [| T |]
+    Borrow(Box<Type>),                 // &T
 }
 
 impl std::fmt::Display for Type {
@@ -42,7 +42,9 @@ impl std::fmt::Display for Type {
                 if !args.is_empty() {
                     write!(f, "<")?;
                     for (i, arg) in args.iter().enumerate() {
-                        if i > 0 { write!(f, ", ")?; }
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
                         write!(f, "{}", arg)?;
                     }
                     write!(f, ">")?;
@@ -53,12 +55,14 @@ impl std::fmt::Display for Type {
             Type::Arrow(params, ret, eff) => {
                 write!(f, "(")?;
                 for (i, (name, typ)) in params.iter().enumerate() {
-                    if i > 0 { write!(f, ", ")?; }
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
                     write!(f, "{}: {}", name, typ)?;
                 }
                 write!(f, ") -> {}", ret)?;
                 match &**eff {
-                    Type::Row(effs, tail) if effs.is_empty() && tail.is_none() => {},
+                    Type::Row(effs, tail) if effs.is_empty() && tail.is_none() => {}
                     _ => write!(f, " effect {}", eff)?,
                 }
                 Ok(())
@@ -68,11 +72,15 @@ impl std::fmt::Display for Type {
             Type::Row(effs, tail) => {
                 write!(f, "{{")?;
                 for (i, eff) in effs.iter().enumerate() {
-                    if i > 0 { write!(f, ", ")?; }
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
                     write!(f, "{}", eff)?;
                 }
                 if let Some(t) = tail {
-                    if !effs.is_empty() { write!(f, " | ")?; }
+                    if !effs.is_empty() {
+                        write!(f, " | ")?;
+                    }
                     write!(f, "{}", t)?;
                 }
                 write!(f, "}}")
@@ -80,7 +88,9 @@ impl std::fmt::Display for Type {
             Type::Record(fields) => {
                 write!(f, "{{")?;
                 for (i, (name, typ)) in fields.iter().enumerate() {
-                    if i > 0 { write!(f, ", ")?; }
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
                     write!(f, "{}: {}", name, typ)?;
                 }
                 write!(f, "}}")
@@ -155,12 +165,12 @@ pub enum Expr {
     Call {
         func: String,
         args: Vec<(String, Spanned<Expr>)>, // label, value
-        perform: bool,             // true if 'perform' keyword is used
+        perform: bool,                      // true if 'perform' keyword is used
     },
     Constructor(String, Vec<Spanned<Expr>>),
     Record(Vec<(String, Spanned<Expr>)>),
-    List(Vec<Spanned<Expr>>), // [1, 2, 3]
-    Array(Vec<Spanned<Expr>>), // [| 1, 2, 3 |]
+    List(Vec<Spanned<Expr>>),                      // [1, 2, 3]
+    Array(Vec<Spanned<Expr>>),                     // [| 1, 2, 3 |]
     Index(Box<Spanned<Expr>>, Box<Spanned<Expr>>), // a[i]
     FieldAccess(Box<Spanned<Expr>>, String),
     // If and Match can be expressions or statements.
@@ -235,8 +245,10 @@ pub struct VariantDef {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Import {
-    pub module: String, // quoted string
+    pub path: String,
+    pub alias: Option<String>,
     pub items: Vec<String>,
+    pub is_external: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -261,8 +273,19 @@ pub struct FunctionSignature {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct ExternalFn {
+    pub name: String,
+    pub is_public: bool,
+    pub params: Vec<Param>,
+    pub ret_type: Type,
+    pub effects: Type,
+    pub wasm_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum TopLevel {
     Function(Function),
+    ExternalFn(ExternalFn),
     TypeDef(TypeDef),
     Enum(EnumDef),
     Import(Import),
