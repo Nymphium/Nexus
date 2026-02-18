@@ -1131,12 +1131,35 @@ impl TypeChecker {
                 for ((_, pt), (_, ae)) in pts.iter().zip(args) {
                     let (sa, ta) = self.infer(env, ae, er, ee)?;
                     s = compose_subst(&s, &sa);
-                    let su = self
-                        .unify(&ta, &apply_subst_type(&s, pt))
-                        .map_err(|m| TypeError {
-                            message: m,
-                            span: ae.span.clone(),
-                        })?;
+                    let expected = apply_subst_type(&s, pt);
+                    let actual = apply_subst_type(&s, &ta);
+                    let su = match self.unify(&actual, &expected) {
+                        Ok(subst) => subst,
+                        Err(primary_err) => {
+                            // Linearity weakening at call sites:
+                            // allow passing a plain value T to a linear parameter %T.
+                            if let Type::Linear(inner) = expected {
+                                if contains_linear(&actual) {
+                                    return Err(TypeError {
+                                        message: primary_err,
+                                        span: ae.span.clone(),
+                                    });
+                                }
+                                self.unify(&actual, &inner).map_err(|m| TypeError {
+                                    message: format!(
+                                        "{} (and linear weakening failed: {})",
+                                        primary_err, m
+                                    ),
+                                    span: ae.span.clone(),
+                                })?
+                            } else {
+                                return Err(TypeError {
+                                    message: primary_err,
+                                    span: ae.span.clone(),
+                                });
+                            }
+                        }
+                    };
                     s = compose_subst(&s, &su);
                 }
                 Ok((s.clone(), apply_subst_type(&s, &rt)))

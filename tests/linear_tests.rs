@@ -29,6 +29,21 @@ fn test_linear_basic_pass() {
 }
 
 #[test]
+fn test_linear_param_accepts_plain_value_via_weakening() {
+    let src = r#"
+    fn consume(x: %i64) -> i64 do
+        drop_i64(val: x)
+        return 1
+    endfn
+
+    fn main() -> i64 do
+        return consume(x: 10)
+    endfn
+    "#;
+    assert!(check(src).is_ok());
+}
+
+#[test]
 fn test_linear_wildcard_fail() {
     let src = r#"
     fn main() -> unit do
