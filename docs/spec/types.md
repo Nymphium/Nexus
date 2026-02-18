@@ -4,11 +4,16 @@ Nexus uses a strict type system with Hindley-Milner type inference, structural r
 
 ## Primitive Types
 
+- `i32`: 32-bit signed integer.
 - `i64`: 64-bit signed integer.
-- `float`: 64-bit floating point number.
+- `f32`: 32-bit floating point number.
+- `f64`: 64-bit floating point number.
+- `float`: Alias of `f64`.
 - `bool`: Boolean (`true` / `false`).
 - `string`: UTF-8 string.
 - `unit`: The unit type `()`.
+
+Numeric literals default to `i64` (integers) and `f64` (floats) unless constrained by annotations or surrounding type context.
 
 ## Compound Types
 
@@ -77,7 +82,7 @@ fn peek(x: &i64) -> unit do ... endfn
 
 let %x = 10
 perform peek(x: borrow %x) // %x is NOT consumed
-perform drop_i64(x: %x)    // %x is consumed here
+drop_i64(val: %x)          // %x is consumed here
 ```
 
 ### Mutable References
@@ -97,8 +102,25 @@ Function effects are represented as row-polymorphic types `{ E1, E2 | r }`.
 fn g() -> unit effect { IO, Net } do ... endfn
 ```
 
-The `perform` keyword can be used to explicitly denote an effectful function call, though it is currently optional.
+The `perform` keyword is mandatory for effectful calls and forbidden for pure calls.
 
 ```nexus
 perform g()
 ```
+
+## Function Values and Closures
+
+Functions are first-class values, including inline lambda literals.
+
+```nexus
+let f = fn (x: i64) -> i64 do
+  return x + 1
+endfn
+```
+
+Closure rules:
+
+- Closures cannot capture mutable references (`Ref<T>`).
+- If a closure captures a linear value, the closure itself becomes linear (`%((...) -> ...)` conceptually).
+- A recursive local lambda requires an immutable `let` binding and an explicit type annotation.
+- Linearity weakening at call sites is supported: a plain `T` can be passed to a parameter of type `%T`.

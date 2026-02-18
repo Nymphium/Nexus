@@ -1,54 +1,12 @@
 use ariadne::{Color, Label, Report, ReportKind, Source};
 use chumsky::prelude::*;
-use rustyline::completion::{Completer, Pair};
 use rustyline::error::ReadlineError;
-use rustyline::highlight::Highlighter;
-use rustyline::hint::Hinter;
-use rustyline::validate::Validator;
-use rustyline::{Config, Helper};
-use std::cell::RefCell;
-use std::collections::HashSet;
-use std::rc::Rc;
+use rustyline::Config;
 
 use crate::ast::{Program, Spanned, Stmt, TopLevel};
 use crate::interpreter::{Env, ExprResult, Interpreter};
 use crate::parser::{parser, stmt_parser};
 use crate::typecheck::TypeChecker;
-
-struct NexusHelper {
-    vars: Rc<RefCell<HashSet<String>>>,
-}
-
-impl Completer for NexusHelper {
-    type Candidate = Pair;
-    fn complete(
-        &self,
-        line: &str,
-        pos: usize,
-        _ctx: &rustyline::Context<'_>,
-    ) -> rustyline::Result<(usize, Vec<Pair>)> {
-        let (start, word) =
-            rustyline::completion::extract_word(line, pos, None, |c| " \t\n\r(){}[],.".contains(c));
-        let mut candidates = Vec::new();
-        let vars = self.vars.borrow();
-        for var in vars.iter() {
-            if var.starts_with(word) {
-                candidates.push(Pair {
-                    display: var.clone(),
-                    replacement: var.clone(),
-                });
-            }
-        }
-        Ok((start, candidates))
-    }
-}
-
-impl Hinter for NexusHelper {
-    type Hint = String;
-}
-impl Highlighter for NexusHelper {}
-impl Validator for NexusHelper {}
-impl Helper for NexusHelper {}
 
 enum ReplInput {
     Stmt(Spanned<Stmt>),
@@ -108,60 +66,11 @@ fn is_incomplete_input(input: &str, errors: &[Simple<char>]) -> bool {
     })
 }
 
-fn default_alias_from_path(path: &str) -> String {
-    std::path::Path::new(path)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or(path)
-        .to_string()
-}
-
-fn register_completion_names(vars: &Rc<RefCell<HashSet<String>>>, defs: &[Spanned<TopLevel>]) {
-    for def in defs {
-        match &def.node {
-            TopLevel::Function(func) => {
-                vars.borrow_mut().insert(func.name.clone());
-            }
-            TopLevel::ExternalFn(ext) => {
-                vars.borrow_mut().insert(ext.name.clone());
-            }
-            TopLevel::Port(port) => {
-                for sig in &port.functions {
-                    vars.borrow_mut()
-                        .insert(format!("{}.{}", port.name, sig.name));
-                }
-            }
-            TopLevel::Import(import) => {
-                if import.is_external {
-                    continue;
-                }
-                if !import.items.is_empty() {
-                    for item in &import.items {
-                        vars.borrow_mut().insert(item.clone());
-                    }
-                } else {
-                    let alias = import
-                        .alias
-                        .clone()
-                        .unwrap_or_else(|| default_alias_from_path(&import.path));
-                    vars.borrow_mut().insert(alias);
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
 pub fn start() {
     let config = Config::builder().history_ignore_space(true).build();
 
-    let vars = Rc::new(RefCell::new(HashSet::new()));
-    let helper = NexusHelper { vars: vars.clone() };
-
     let mut rl =
-        rustyline::Editor::<NexusHelper, rustyline::history::DefaultHistory>::with_config(config)
-            .unwrap();
-    rl.set_helper(Some(helper));
+        rustyline::Editor::<(), rustyline::history::DefaultHistory>::with_config(config).unwrap();
 
     let history_file = ".nexus_history";
     if rl.load_history(history_file).is_err() {
@@ -170,27 +79,12 @@ pub fn start() {
 
     // Initialize environment
     let mut env = Env::new();
-    let stdlib_names = vec![
-        "print",
-        "i64_to_string",
-        "float_to_string",
-        "bool_to_string",
-        "drop_i64",
-        "drop_array",
-    ];
-    for name in &stdlib_names {
-        vars.borrow_mut().insert(name.to_string());
-    }
-
     let program = Program {
         definitions: vec![],
     };
     let mut interpreter = Interpreter::new(program);
     let mut checker = TypeChecker::new();
     let mut top_level_defs: Vec<Spanned<TopLevel>> = Vec::new();
-
-    println!("Nexus REPL v0.1.0");
-    println!("Type ':exit' or Ctrl-D to quit. Type ':help' for commands.");
 
     let mut buffer = String::new();
 
@@ -208,14 +102,6 @@ pub fn start() {
                             println!("Available commands:");
                             println!("  :exit, :quit  Exit the REPL");
                             println!("  :help         Show this help message");
-                            println!("  :vars         Show loaded variables");
-                            continue;
-                        }
-                        ":vars" => {
-                            let v = vars.borrow();
-                            let mut list: Vec<_> = v.iter().collect();
-                            list.sort();
-                            println!("Variables: {:?}", list);
                             continue;
                         }
                         _ => {
@@ -236,49 +122,41 @@ pub fn start() {
                     ParseState::Complete(input) => {
                         let _ = rl.add_history_entry(buffer.trim_end());
                         match input {
-                            ReplInput::Stmt(stmt) => {
-                                if let Stmt::Let { name, sigil, .. } = &stmt.node {
-                                    vars.borrow_mut().insert(sigil.get_key(name));
-                                }
-
-                                match checker.check_repl_stmt(&stmt) {
-                                    Ok(typ) => match interpreter.eval_repl_stmt(&stmt, &mut env) {
-                                        Ok(res) => match res {
-                                            ExprResult::Normal(val) => {
-                                                println!("{} : {}", val, typ);
-                                            }
-                                            ExprResult::EarlyReturn(val) => {
-                                                println!("returned {} : {}", val, typ);
-                                            }
-                                        },
-                                        Err(e) => println!("Runtime Error: {}", e),
+                            ReplInput::Stmt(stmt) => match checker.check_repl_stmt(&stmt) {
+                                Ok(typ) => match interpreter.eval_repl_stmt(&stmt, &mut env) {
+                                    Ok(res) => match res {
+                                        ExprResult::Normal(val) => {
+                                            println!("{} : {}", val, typ);
+                                        }
+                                        ExprResult::EarlyReturn(val) => {
+                                            println!("returned {} : {}", val, typ);
+                                        }
                                     },
-                                    Err(e) => {
-                                        Report::build(ReportKind::Error, "<repl>", e.span.start)
-                                            .with_message(e.message.clone())
-                                            .with_label(
-                                                Label::new(("<repl>", e.span))
-                                                    .with_message(e.message)
-                                                    .with_color(Color::Red),
-                                            )
-                                            .finish()
-                                            .print(("<repl>", Source::from(&buffer)))
-                                            .unwrap();
-                                    }
+                                    Err(e) => println!("Runtime Error: {}", e),
+                                },
+                                Err(e) => {
+                                    Report::build(ReportKind::Error, "<repl>", e.span.start)
+                                        .with_message(e.message.clone())
+                                        .with_label(
+                                            Label::new(("<repl>", e.span))
+                                                .with_message(e.message)
+                                                .with_color(Color::Red),
+                                        )
+                                        .finish()
+                                        .print(("<repl>", Source::from(&buffer)))
+                                        .unwrap();
                                 }
-                            }
+                            },
                             ReplInput::TopLevels(defs) => {
                                 let program = Program {
                                     definitions: defs.clone(),
                                 };
                                 match checker.check_program(&program) {
                                     Ok(()) => {
-                                        register_completion_names(&vars, &defs);
                                         top_level_defs.extend(defs);
                                         interpreter = Interpreter::new(Program {
                                             definitions: top_level_defs.clone(),
                                         });
-                                        println!("ok : definition");
                                     }
                                     Err(e) => {
                                         Report::build(ReportKind::Error, "<repl>", e.span.start)
@@ -317,25 +195,22 @@ pub fn start() {
             }
             Err(ReadlineError::Interrupted) => {
                 if buffer.is_empty() {
-                    println!("CTRL-C");
                     break;
                 }
-                println!("Input canceled");
                 buffer.clear();
             }
             Err(ReadlineError::Eof) => {
-                println!("CTRL-D");
                 break;
             }
             Err(err) => {
-                println!("Error: {:?}", err);
+                eprintln!("Readline Error: {:?}", err);
                 break;
             }
         }
     }
 
     if let Err(e) = rl.save_history(history_file) {
-        println!("Error saving history: {}", e);
+        eprintln!("Error saving history: {}", e);
     }
 }
 

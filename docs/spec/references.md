@@ -29,6 +29,7 @@ let ~counter = 0
 
 - A function returning a reference (`Ref<T>`) is generally disallowed to prevent escaping stack references (Gravity Rules).
 - References cannot be captured by concurrent tasks (`conc`).
+- References cannot be captured by closures (lambda literals).
 - Immutable variables cannot hold mutable references.
 
 ## Linear Types (`%`)
@@ -50,3 +51,5 @@ perform consume(r: %res)
 - **Exactly Once**: A linear variable must be used exactly once.
 - **No Discard**: The wildcard pattern `_` cannot be used to discard a linear value. This ensures that every resource is explicitly consumed or handled.
 - **No Ref**: Mutable references to linear types (`Ref<Linear<T>>`) are strictly forbidden to prevent aliasing violations.
+- **Weakening at Calls**: A plain `T` value can be passed to a `%T` parameter; it is treated as a linear argument for that call.
+- **Closure Interaction**: If a closure captures a linear value, the closure itself is linear and can only be consumed once.

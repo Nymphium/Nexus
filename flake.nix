@@ -61,6 +61,12 @@
           pkgs.rust-bin.stable.latest.rust-analyzer
         ];
 
+        treeSitterNexus = pkgs.tree-sitter.buildGrammar {
+          language = "nexus";
+          version = "0.1.0";
+          src = ./tree-sitter-nexus;
+        };
+
         formatter = pkgs.nixfmt-tree;
 
         devShells.default = pkgs.mkShellNoCC {
@@ -69,6 +75,7 @@
             pkgs.actionlint
             pkgs.nil
             formatter
+            pkgs.tree-sitter
           ];
         };
       in
@@ -76,6 +83,7 @@
         packages = {
           # default = graft;
           # inherit gen-supported-languages;
+          tree-sitter-nexus = treeSitterNexus;
         };
         legacyPackages = pkgs;
         inherit formatter devShells;

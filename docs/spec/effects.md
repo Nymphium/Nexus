@@ -2,6 +2,11 @@
 
 Nexus uses a row-based effect system to track and manage side effects.
 
+## `perform` Discipline
+
+- Effectful calls must use `perform`.
+- Pure calls must not use `perform`.
+
 ## Syntax
 
 Effects are declared using the `effect` keyword in function signatures.

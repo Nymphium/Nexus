@@ -30,7 +30,7 @@ fn test_ref_creation_and_type() {
 // So immutable variable cannot hold Ref unless a function returns Ref.
 // And functions cannot return Ref.
 // So this Gravity Rule is implicitly enforced by syntax + return check.
-// I will change this test to ensure we CANNOT assign to immutable var later? 
+// I will change this test to ensure we CANNOT assign to immutable var later?
 // No, immutable var cannot be assigned.
 // Maybe I should test that `let c = ~x` (implicit deref) results in value, not ref.
 #[test]
@@ -55,7 +55,7 @@ fn test_gravity_rule_immutable_holds_value() {
 }
 
 // Since `ref()` is gone, we cannot construct a ref to return.
-// But we can try to return `~c`? 
+// But we can try to return `~c`?
 // `~c` evaluates to value.
 // Can we return the reference itself?
 // If we use just `c` (without tilde)?
@@ -86,7 +86,6 @@ fn test_cannot_return_ref() {
         Err(e) => panic!("Type check failed: {}", e),
     }
 }
-
 
 #[test]
 fn test_ref_assignment() {

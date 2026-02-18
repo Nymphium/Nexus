@@ -1,7 +1,7 @@
-use nexus::interpreter::{Interpreter, Value};
-use nexus::typecheck::TypeChecker;
-use nexus::parser::parser;
 use chumsky::Parser;
+use nexus::interpreter::{Interpreter, Value};
+use nexus::parser::parser;
+use nexus::typecheck::TypeChecker;
 
 fn run(src: &str) -> Result<Value, String> {
     let p = parser().parse(src).map_err(|e| format!("{:?}", e))?;

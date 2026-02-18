@@ -1,7 +1,6 @@
-use nexus::ast::{Type, Program, Sigil};
-use nexus::typecheck::{TypeChecker, TypeEnv};
-use nexus::parser::parser;
 use chumsky::Parser;
+use nexus::parser::parser;
+use nexus::typecheck::TypeChecker;
 
 fn check(src: &str) -> Result<(), String> {
     let p = parser().parse(src).map_err(|e| format!("{:?}", e))?;
@@ -40,7 +39,10 @@ fn test_float_int_mismatch() {
         return ()
     endfn
     "#;
-    assert!(check(src).is_err(), "Should fail: mixing int and float with float op");
+    assert!(
+        check(src).is_err(),
+        "Should fail: mixing int and float with float op"
+    );
 }
 
 #[test]
@@ -50,6 +52,20 @@ fn test_float_literal_type() {
         let x: float = 3.14
         let y: float = 0.01
         let z: float = 123.456789
+        return ()
+    endfn
+    "#;
+    assert!(check(src).is_ok());
+}
+
+#[test]
+fn test_f32_and_f64_keywords() {
+    let src = r#"
+    fn main() -> unit do
+        let x: f32 = 1.5
+        let y: f64 = 2.0
+        let z = x +. 3.5
+        let w = y +. 4.0
         return ()
     endfn
     "#;

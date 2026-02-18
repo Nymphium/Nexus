@@ -25,11 +25,9 @@ fn main() {
 
     match result {
         Ok(program) => {
-            println!("Parsing successful!");
-
             let mut checker = typecheck::TypeChecker::new();
             match checker.check_program(&program) {
-                Ok(_) => println!("Type checking successful!"),
+                Ok(_) => {}
                 Err(e) => {
                     Report::build(ReportKind::Error, filename, e.span.start)
                         .with_message(e.message.clone())
@@ -50,10 +48,7 @@ fn main() {
                 Ok(interpreter::Value::Unit) => {} // Do not print Unit result
                 Ok(res) => println!("Result: {:?}", res),
                 Err(e) => {
-                    // Check if error is just missing main
-                    if e.contains("not found") {
-                        println!("No 'main' function found. (Analysis complete)");
-                    } else {
+                    if !e.contains("not found") {
                         eprintln!("Runtime Error: {}", e);
                     }
                 }

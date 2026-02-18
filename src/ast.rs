@@ -10,8 +10,12 @@ pub struct Spanned<T> {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type {
+    I32,
     I64,
-    Float,
+    F32,
+    F64,
+    IntLit,
+    FloatLit,
     Bool,
     String,
     Unit,
@@ -31,8 +35,12 @@ pub enum Type {
 impl std::fmt::Display for Type {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Type::I32 => write!(f, "i32"),
             Type::I64 => write!(f, "i64"),
-            Type::Float => write!(f, "float"),
+            Type::F32 => write!(f, "f32"),
+            Type::F64 => write!(f, "f64"),
+            Type::IntLit => write!(f, "i64"),
+            Type::FloatLit => write!(f, "f64"),
             Type::Bool => write!(f, "bool"),
             Type::String => write!(f, "string"),
             Type::Unit => write!(f, "unit"),
@@ -183,6 +191,12 @@ pub enum Expr {
     Match {
         target: Box<Spanned<Expr>>,
         cases: Vec<MatchCase>,
+    },
+    Lambda {
+        params: Vec<Param>,
+        ret_type: Type,
+        effects: Type,
+        body: Vec<Spanned<Stmt>>,
     },
     Raise(Box<Spanned<Expr>>), // raise "error"
 }
