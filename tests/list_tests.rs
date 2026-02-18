@@ -1,8 +1,6 @@
-
-use nexus::ast::*;
-use nexus::typecheck::{TypeChecker, TypeError};
-use nexus::parser::parser;
 use chumsky::Parser;
+use nexus::parser::parser;
+use nexus::typecheck::TypeChecker;
 
 fn check(src: &str) -> Result<(), String> {
     let p = parser().parse(src).map_err(|e| format!("{:?}", e))?;
@@ -45,7 +43,7 @@ fn test_list_nested() {
 
 #[test]
 fn test_list_of_linear() {
-    let src = r#"
+    let _src = r#"
     fn main() -> unit do
         let %l = [%1, %2] // Assuming integers can be linear for test
         // This fails because integers are not linear by default unless cast/annotated?

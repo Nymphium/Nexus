@@ -1,7 +1,6 @@
-use nexus::ast::{Type, Program, Sigil};
-use nexus::typecheck::{TypeChecker, TypeEnv};
-use nexus::parser::parser;
 use chumsky::Parser;
+use nexus::parser::parser;
+use nexus::typecheck::TypeChecker;
 
 fn check(src: &str) -> Result<(), String> {
     let p = parser().parse(src).map_err(|e| format!("{:?}", e))?;
@@ -40,7 +39,10 @@ fn test_linear_wildcard_fail() {
         return ()
     endfn
     "#;
-    assert!(check(src).is_err(), "Should fail because _ (bound to linear) is unused");
+    assert!(
+        check(src).is_err(),
+        "Should fail because _ (bound to linear) is unused"
+    );
 }
 
 #[test]
@@ -52,7 +54,10 @@ fn test_linear_in_ref_fail() {
         return ()
     endfn
     "#;
-    assert!(check(src).is_err(), "Should fail because Ref cannot contain Linear type");
+    assert!(
+        check(src).is_err(),
+        "Should fail because Ref cannot contain Linear type"
+    );
 }
 
 #[test]
@@ -65,7 +70,10 @@ fn test_linear_match_wildcard_fail() {
         endmatch
     endfn
     "#;
-    assert!(check(src).is_err(), "Should fail because wildcard match drops linear value");
+    assert!(
+        check(src).is_err(),
+        "Should fail because wildcard match drops linear value"
+    );
 }
 
 #[test]
@@ -134,5 +142,8 @@ fn test_linear_branch_mismatch() {
         endif
     endfn
     "#;
-    assert!(check(src).is_err(), "Should fail because %x is not consumed in else branch");
+    assert!(
+        check(src).is_err(),
+        "Should fail because %x is not consumed in else branch"
+    );
 }

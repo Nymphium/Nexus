@@ -1,7 +1,6 @@
-use nexus::ast::{Type, Program, Sigil};
-use nexus::typecheck::{TypeChecker, TypeEnv};
-use nexus::parser::parser;
 use chumsky::Parser;
+use nexus::parser::parser;
+use nexus::typecheck::TypeChecker;
 
 fn check(src: &str) -> Result<(), String> {
     let p = parser().parse(src).map_err(|e| format!("{:?}", e))?;

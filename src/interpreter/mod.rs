@@ -124,12 +124,14 @@ impl Env {
 
 pub struct Interpreter {
     pub functions: HashMap<String, Function>,
+    pub closures: HashMap<String, Env>,
     pub handlers: HashMap<String, Handler>,
     pub native_functions: HashMap<String, Box<dyn Fn(&[Value]) -> Result<ExprResult, String>>>,
     pub external_functions: HashMap<String, ExternalFn>,
     pub wasm_store: RefCell<Store<WasiCtx>>,
     pub wasm_instances: Vec<Instance>,
     pub modules: HashMap<String, Interpreter>,
+    pub lambda_counter: usize,
 }
 
 impl Interpreter {
@@ -313,12 +315,14 @@ impl Interpreter {
 
         Interpreter {
             functions,
+            closures: HashMap::new(),
             handlers,
             native_functions,
             external_functions,
             wasm_store: RefCell::new(store),
             wasm_instances,
             modules,
+            lambda_counter: 0,
         }
     }
 
@@ -327,6 +331,25 @@ impl Interpreter {
             Stmt::Expr(expr) => self.eval_expr(expr, env),
             _ => self.eval_body(&[stmt.clone()], env),
         }
+    }
+
+    fn register_lambda(
+        &mut self,
+        function: Function,
+        mut captured_env: Env,
+        self_binding: Option<String>,
+    ) -> String {
+        let name = format!("__lambda_{}", self.lambda_counter);
+        self.lambda_counter += 1;
+
+        let mut lambda_fn = function;
+        lambda_fn.name = name.clone();
+        if let Some(binding_name) = self_binding {
+            captured_env.define(binding_name, Value::Function(name.clone()));
+        }
+        self.functions.insert(name.clone(), lambda_fn);
+        self.closures.insert(name.clone(), captured_env);
+        name
     }
 
     pub fn run_function(&mut self, name: &str, args: Vec<Value>) -> Result<Value, String> {
@@ -344,7 +367,11 @@ impl Interpreter {
             ));
         }
 
-        let mut env = Env::new();
+        let mut env = if let Some(captured_env) = self.closures.get(name).cloned() {
+            Env::extend(captured_env)
+        } else {
+            Env::new()
+        };
         for (param, arg) in func.params.iter().zip(args.iter()) {
             env.define(param.name.clone(), arg.clone());
         }
@@ -374,33 +401,72 @@ impl Interpreter {
             )
         })?;
 
+        if args.len() != ext.params.len() {
+            return Err(format!(
+                "Arity mismatch: expected {}, got {}",
+                ext.params.len(),
+                args.len()
+            ));
+        }
+
         let mut wasm_args = Vec::new();
-        for v in args {
-            match v {
-                Value::Int(i) => wasm_args.push(Val::I64(i)),
-                Value::Float(f) => wasm_args.push(Val::F64(f.to_bits())),
-                Value::String(s) => {
+        for (param, v) in ext.params.iter().zip(args.into_iter()) {
+            match (&param.typ, v) {
+                (Type::I32, Value::Int(i)) => {
+                    let converted = i32::try_from(i).map_err(|_| {
+                        format!(
+                            "Parameter '{}' expects i32, but {} overflows i32",
+                            param.name, i
+                        )
+                    })?;
+                    wasm_args.push(Val::I32(converted));
+                }
+                (Type::I64, Value::Int(i)) => wasm_args.push(Val::I64(i)),
+                (Type::F32, Value::Float(f)) => wasm_args.push(Val::F32((f as f32).to_bits())),
+                (Type::F64, Value::Float(f)) => wasm_args.push(Val::F64(f.to_bits())),
+                (Type::String, Value::String(s)) => {
                     let ptr = self.pass_string_to_wasm(&s, &mut *store, &func_instance)?;
                     wasm_args.push(Val::I32(ptr));
                     wasm_args.push(Val::I32(s.len() as i32));
                 }
-                _ => return Err("Unsupported FFI type".to_string()),
+                (expected, actual) => {
+                    return Err(format!(
+                        "Unsupported FFI arg for '{}': expected {}, got {:?}",
+                        param.name, expected, actual
+                    ))
+                }
             }
         }
 
-        let mut results = vec![Val::I64(0); func.ty(&mut *store).results().len()];
+        let mut results: Vec<Val> = func
+            .ty(&mut *store)
+            .results()
+            .map(|vt| match vt {
+                ValType::I32 => Val::I32(0),
+                ValType::I64 => Val::I64(0),
+                ValType::F32 => Val::F32(0),
+                ValType::F64 => Val::F64(0),
+                _ => Val::I64(0),
+            })
+            .collect();
         func.call(&mut *store, &wasm_args, &mut results)
             .map_err(|e| format!("Wasm call failed: {}", e))?;
 
         if results.is_empty() {
             Ok(ExprResult::Normal(Value::Unit))
         } else {
-            match results[0] {
-                Val::I64(i) => Ok(ExprResult::Normal(Value::Int(i))),
-                Val::F64(f) => Ok(ExprResult::Normal(Value::Float(f64::from_bits(f)))),
-                Val::I32(i) => Ok(ExprResult::Normal(Value::Int(i as i64))),
-                Val::F32(f) => Ok(ExprResult::Normal(Value::Float(f32::from_bits(f) as f64))),
-                _ => Err("Unsupported Wasm return type".to_string()),
+            match (&ext.ret_type, results[0].clone()) {
+                (Type::I32, Val::I32(i)) => Ok(ExprResult::Normal(Value::Int(i as i64))),
+                (Type::I64, Val::I64(i)) => Ok(ExprResult::Normal(Value::Int(i))),
+                (Type::F32, Val::F32(f)) => {
+                    Ok(ExprResult::Normal(Value::Float(f32::from_bits(f) as f64)))
+                }
+                (Type::F64, Val::F64(f)) => Ok(ExprResult::Normal(Value::Float(f64::from_bits(f)))),
+                (Type::Unit, _) => Ok(ExprResult::Normal(Value::Unit)),
+                (expected, actual) => Err(format!(
+                    "Wasm return type mismatch: declared {}, actual {:?}",
+                    expected, actual
+                )),
             }
         }
     }
@@ -441,6 +507,41 @@ impl Interpreter {
                 Stmt::Let {
                     name, sigil, value, ..
                 } => {
+                    if let Expr::Lambda {
+                        params,
+                        ret_type,
+                        effects,
+                        body,
+                    } = &value.node
+                    {
+                        let self_binding = if matches!(sigil, Sigil::Immutable) {
+                            Some(name.clone())
+                        } else {
+                            None
+                        };
+                        let fn_name = self.register_lambda(
+                            Function {
+                                name: String::new(),
+                                is_public: false,
+                                type_params: vec![],
+                                params: params.clone(),
+                                ret_type: ret_type.clone(),
+                                effects: effects.clone(),
+                                body: body.clone(),
+                            },
+                            env.clone(),
+                            self_binding,
+                        );
+                        let val = Value::Function(fn_name);
+                        let final_val = if let Sigil::Mutable = sigil {
+                            Value::Ref(Rc::new(RefCell::new(val)))
+                        } else {
+                            val
+                        };
+                        env.define(sigil.get_key(name), final_val);
+                        continue;
+                    }
+
                     let res = self.eval_expr(value, env)?;
                     match res {
                         ExprResult::Normal(val) => {
@@ -560,17 +661,27 @@ impl Interpreter {
             })),
             Expr::Variable(name, sigil) => {
                 let key = sigil.get_key(name);
-                let val = env
-                    .get(&key)
-                    .ok_or_else(|| format!("Variable '{}' not found", key))?;
-                match (sigil, &val) {
-                    (Sigil::Mutable, Value::Ref(r)) => Ok(ExprResult::Normal(r.borrow().clone())),
-                    (Sigil::Mutable, _) => Err(format!(
-                        "Variable {} is not a ref, cannot dereference with ~",
-                        name
-                    )),
-                    _ => Ok(ExprResult::Normal(val)),
+                if let Some(val) = env.get(&key) {
+                    match (sigil, &val) {
+                        (Sigil::Mutable, Value::Ref(r)) => {
+                            return Ok(ExprResult::Normal(r.borrow().clone()))
+                        }
+                        (Sigil::Mutable, _) => {
+                            return Err(format!(
+                                "Variable {} is not a ref, cannot dereference with ~",
+                                name
+                            ))
+                        }
+                        _ => return Ok(ExprResult::Normal(val)),
+                    }
                 }
+                if self.functions.contains_key(&key) {
+                    return Ok(ExprResult::Normal(Value::Function(key)));
+                }
+                if self.native_functions.contains_key(&key) {
+                    return Ok(ExprResult::Normal(Value::NativeFunction(key)));
+                }
+                Err(format!("Variable '{}' not found", key))
             }
             Expr::BinaryOp(lhs, op, rhs) => {
                 let l = self.eval_expr(lhs, env)?;
@@ -857,6 +968,27 @@ impl Interpreter {
                     }
                 }
                 Err("No match found".to_string())
+            }
+            Expr::Lambda {
+                params,
+                ret_type,
+                effects,
+                body,
+            } => {
+                let fn_name = self.register_lambda(
+                    Function {
+                        name: String::new(),
+                        is_public: false,
+                        type_params: vec![],
+                        params: params.clone(),
+                        ret_type: ret_type.clone(),
+                        effects: effects.clone(),
+                        body: body.clone(),
+                    },
+                    env.clone(),
+                    None,
+                );
+                Ok(ExprResult::Normal(Value::Function(fn_name)))
             }
             Expr::Raise(expr) => {
                 let val_res = self.eval_expr(expr, env)?;

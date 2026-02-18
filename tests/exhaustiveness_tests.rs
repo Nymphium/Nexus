@@ -1,7 +1,6 @@
-use nexus::ast::{Type, Program, Sigil};
-use nexus::typecheck::{TypeChecker, TypeEnv};
-use nexus::parser::parser;
 use chumsky::Parser;
+use nexus::parser::parser;
+use nexus::typecheck::TypeChecker;
 
 fn check(src: &str) -> Result<(), String> {
     let p = parser().parse(src).map_err(|e| format!("{:?}", e))?;
@@ -38,7 +37,10 @@ fn test_nested_result_non_exhaustive() {
         endmatch
     endfn
     "#;
-    assert!(check(src).is_err(), "Should fail due to missing Ok(Err(_)) case");
+    assert!(
+        check(src).is_err(),
+        "Should fail due to missing Ok(Err(_)) case"
+    );
 }
 
 #[test]
@@ -95,7 +97,10 @@ fn test_int_non_exhaustive() {
         endmatch
     endfn
     "#;
-    assert!(check(src).is_err(), "Should fail because int cannot be exhausted by literals");
+    assert!(
+        check(src).is_err(),
+        "Should fail because int cannot be exhausted by literals"
+    );
 }
 
 #[test]
@@ -154,5 +159,8 @@ fn test_enum_non_exhaustive() {
         endmatch
     endfn
     "#;
-    assert!(check(src).is_err(), "Should fail due to missing Green and Blue");
+    assert!(
+        check(src).is_err(),
+        "Should fail due to missing Green and Blue"
+    );
 }

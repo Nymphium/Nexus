@@ -57,8 +57,11 @@ fn sigil() -> impl Parser<char, Sigil, Error = Simple<char>> + Clone {
 fn type_parser() -> P<Type> {
     recursive(|t: Recursive<'_, char, Type, Simple<char>>| {
         let base = choice((
+            text::keyword("i32").to(Type::I32),
             text::keyword("i64").to(Type::I64),
-            text::keyword("float").to(Type::Float),
+            text::keyword("f32").to(Type::F32),
+            text::keyword("f64").to(Type::F64),
+            text::keyword("float").to(Type::F64), // backward-compatible alias
             text::keyword("bool").to(Type::Bool),
             text::keyword("string").to(Type::String),
             text::keyword("unit").to(Type::Unit),
@@ -241,7 +244,293 @@ fn expr_parser() -> P<Spanned<Expr>> {
 
         let var = sigil().then(ident()).map(|(s, n)| Expr::Variable(n, s));
 
+        let lambda_param = sigil()
+            .then(ident())
+            .then_ignore(just(':').padded())
+            .then(type_parser())
+            .map(|((sigil, name), typ)| Param { name, sigil, typ });
+
+        let lambda_stmt = recursive(|stmt| {
+            let let_stmt = text::keyword("let")
+                .padded()
+                .ignore_then(sigil())
+                .then(ident())
+                .then(just(':').padded().ignore_then(type_parser()).or_not())
+                .then(just('=').padded().ignore_then(expr.clone()))
+                .map_with_span(|(((s, n), t), v), span| Spanned {
+                    node: Stmt::Let {
+                        name: n,
+                        sigil: s,
+                        typ: t,
+                        value: v,
+                    },
+                    span,
+                });
+
+            let return_stmt = text::keyword("return")
+                .padded()
+                .ignore_then(expr.clone())
+                .map_with_span(|v, span| Spanned {
+                    node: Stmt::Return(v),
+                    span,
+                });
+
+            let assign_stmt = expr
+                .clone()
+                .then_ignore(just("<-").padded())
+                .then(expr.clone())
+                .map_with_span(|(target, value), span| Spanned {
+                    node: Stmt::Assign { target, value },
+                    span,
+                });
+
+            let if_stmt = text::keyword("if")
+                .padded()
+                .ignore_then(expr.clone())
+                .then_ignore(text::keyword("then").padded())
+                .then(stmt.clone().repeated())
+                .then(
+                    text::keyword("else")
+                        .padded()
+                        .ignore_then(stmt.clone().repeated())
+                        .or_not(),
+                )
+                .then_ignore(text::keyword("endif").padded())
+                .map_with_span(|((cond, then_branch), else_branch), span| Spanned {
+                    node: Stmt::Expr(Spanned {
+                        node: Expr::If {
+                            cond: Box::new(cond),
+                            then_branch,
+                            else_branch,
+                        },
+                        span: span.clone(),
+                    }),
+                    span,
+                });
+
+            let pattern = recursive(|p: Recursive<'_, char, Spanned<Pattern>, Simple<char>>| {
+                let variable = sigil().then(ident()).map_with_span(|(s, n), span| Spanned {
+                    node: Pattern::Variable(n, s),
+                    span,
+                });
+                let lit = literal().map_with_span(|l, span| Spanned {
+                    node: Pattern::Literal(l),
+                    span,
+                });
+                let wildcard = just('_').padded().map_with_span(|_, span| Spanned {
+                    node: Pattern::Wildcard,
+                    span,
+                });
+
+                let constructor = ident()
+                    .then(
+                        p.clone()
+                            .separated_by(just(',').padded())
+                            .delimited_by(just('('), just(')')),
+                    )
+                    .map_with_span(|(c, args), span| Spanned {
+                        node: Pattern::Constructor(c, args),
+                        span,
+                    });
+
+                let record_pat = choice((
+                    just('_').padded().to(None),
+                    ident()
+                        .then_ignore(just(':').padded())
+                        .then(p.clone())
+                        .map(Some),
+                ))
+                .separated_by(just(',').padded())
+                .allow_trailing()
+                .delimited_by(just('{'), just('}'))
+                .try_map(|entries, span| {
+                    let mut fields = Vec::new();
+                    let mut open = false;
+                    for e in entries {
+                        match e {
+                            Some(f) => {
+                                if open {
+                                    return Err(Simple::custom(span, "_ must be the last element"));
+                                }
+                                fields.push(f);
+                            }
+                            None => {
+                                if open {
+                                    return Err(Simple::custom(span, "duplicate _"));
+                                }
+                                open = true;
+                            }
+                        }
+                    }
+                    Ok(Spanned {
+                        node: Pattern::Record(fields, open),
+                        span,
+                    })
+                });
+
+                choice((constructor, record_pat, lit, wildcard, variable))
+            });
+
+            let match_case = text::keyword("case")
+                .padded()
+                .ignore_then(pattern)
+                .then_ignore(just("->").padded())
+                .then(stmt.clone().repeated())
+                .map(|(pattern, body)| MatchCase { pattern, body });
+
+            let match_stmt = text::keyword("match")
+                .padded()
+                .ignore_then(expr.clone())
+                .then_ignore(text::keyword("do").padded())
+                .then(match_case.repeated())
+                .then_ignore(text::keyword("endmatch").padded())
+                .map_with_span(|(target, cases), span| Spanned {
+                    node: Stmt::Expr(Spanned {
+                        node: Expr::Match {
+                            target: Box::new(target),
+                            cases,
+                        },
+                        span: span.clone(),
+                    }),
+                    span,
+                });
+
+            let conc_block = text::keyword("conc")
+                .padded()
+                .ignore_then(text::keyword("do").padded())
+                .then(
+                    text::keyword("task")
+                        .padded()
+                        .ignore_then(
+                            just('"')
+                                .ignore_then(take_until(just('"')))
+                                .map(|(s, _)| s.into_iter().collect::<String>()),
+                        )
+                        .then_ignore(text::keyword("do").padded())
+                        .then(stmt.clone().repeated())
+                        .then_ignore(text::keyword("endtask").padded())
+                        .map(|(name, body)| Function {
+                            name,
+                            is_public: false,
+                            params: vec![],
+                            ret_type: Type::Unit,
+                            effects: Type::Row(vec![], None),
+                            body,
+                            type_params: vec![],
+                        })
+                        .repeated(),
+                )
+                .then_ignore(text::keyword("endconc").padded())
+                .map_with_span(|(_, tasks), span| Spanned {
+                    node: Stmt::Conc(tasks),
+                    span,
+                });
+
+            let try_stmt = text::keyword("try")
+                .padded()
+                .ignore_then(stmt.clone().repeated())
+                .then(
+                    text::keyword("catch")
+                        .padded()
+                        .ignore_then(ident())
+                        .then_ignore(just("->").padded())
+                        .then(stmt.clone().repeated()),
+                )
+                .then_ignore(text::keyword("endtry").padded())
+                .map_with_span(|(body, (catch_param, catch_body)), span| Spanned {
+                    node: Stmt::Try {
+                        body,
+                        catch_param,
+                        catch_body,
+                    },
+                    span,
+                });
+
+            let comment = just("//")
+                .then(take_until(choice((just('\n'), end().to('\n')))))
+                .padded()
+                .map_with_span(|_, span| Spanned {
+                    node: Stmt::Comment,
+                    span,
+                });
+
+            let basic_stmt = choice((
+                comment.boxed(),
+                let_stmt.boxed(),
+                return_stmt.boxed(),
+                assign_stmt.boxed(),
+            ));
+
+            let complex_stmt = choice((
+                if_stmt.boxed(),
+                match_stmt.boxed(),
+                try_stmt.boxed(),
+                conc_block.boxed(),
+            ));
+
+            basic_stmt
+                .or(complex_stmt)
+                .or(expr
+                    .clone()
+                    .map(|v| {
+                        let span = v.span.clone();
+                        Spanned {
+                            node: Stmt::Expr(v),
+                            span,
+                        }
+                    })
+                    .boxed())
+                .padded()
+        });
+
+        let lambda = text::keyword("fn")
+            .padded()
+            .ignore_then(
+                lambda_param
+                    .separated_by(just(','))
+                    .delimited_by(just('('), just(')')),
+            )
+            .then_ignore(just("->").padded())
+            .then(type_parser())
+            .then(
+                text::keyword("effect")
+                    .padded()
+                    .ignore_then(choice((
+                        type_parser()
+                            .separated_by(just(',').padded())
+                            .then(just('|').padded().ignore_then(type_parser()).or_not())
+                            .delimited_by(just('{'), just('}'))
+                            .map(|(effs, tail)| Type::Row(effs, tail.map(Box::new))),
+                        type_parser(),
+                    )))
+                    .or_not(),
+            )
+            .then_ignore(text::keyword("do").padded())
+            .then(lambda_stmt.repeated())
+            .then_ignore(text::keyword("endfn").padded())
+            .map(|(((params, ret_type), effects), body)| Expr::Lambda {
+                params,
+                ret_type,
+                effects: effects.unwrap_or(Type::Row(vec![], None)),
+                body,
+            });
+
         let constructor = ident()
+            .try_map(|name, span| {
+                if name
+                    .chars()
+                    .next()
+                    .map(|c| c.is_ascii_uppercase())
+                    .unwrap_or(false)
+                {
+                    Ok(name)
+                } else {
+                    Err(Simple::custom(
+                        span,
+                        "constructor must start with uppercase letter",
+                    ))
+                }
+            })
             .then(
                 expr.clone()
                     .separated_by(just(','))
@@ -260,12 +549,13 @@ fn expr_parser() -> P<Spanned<Expr>> {
             .then(ident())
             .map(|(s, n)| Expr::Borrow(n, s));
 
-        let atom = choice((
+        let atom: P<Spanned<Expr>> = choice((
             expr.clone()
                 .delimited_by(just('('), just(')'))
                 .map(|s| s.node),
             raise,
             borrow_expr,
+            lambda,
             perform_call,
             constructor,
             simple_call,
@@ -276,7 +566,8 @@ fn expr_parser() -> P<Spanned<Expr>> {
             var,
         ))
         .padded()
-        .map_with_span(|node, span| Spanned { node, span });
+        .map_with_span(|node, span| Spanned { node, span })
+        .boxed();
 
         enum Postfix {
             Field(String, Span),

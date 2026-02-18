@@ -203,3 +203,157 @@ fn test_label_mismatch() {
     "#;
     assert!(check_code(src).is_err());
 }
+
+#[test]
+fn test_int_literal_defaults_to_i64() {
+    let src = r#"
+    fn main() -> i64 do
+        let x = 1
+        return x
+    endfn
+    "#;
+    assert!(check_code(src).is_ok());
+}
+
+#[test]
+fn test_int_literal_is_not_i32_without_annotation() {
+    let src = r#"
+    fn main() -> i32 do
+        let x = 1
+        return x
+    endfn
+    "#;
+    assert!(check_code(src).is_err());
+}
+
+#[test]
+fn test_int_literal_annotation_can_select_i32() {
+    let src = r#"
+    fn main() -> i32 do
+        let x: i32 = 1
+        let y = x + 2
+        return y
+    endfn
+    "#;
+    assert!(check_code(src).is_ok());
+}
+
+#[test]
+fn test_float_literal_annotation_can_select_f32() {
+    let src = r#"
+    fn main() -> f32 do
+        let x: f32 = 1.25
+        let y = x +. 2.0
+        return y
+    endfn
+    "#;
+    assert!(check_code(src).is_ok());
+}
+
+#[test]
+fn test_named_function_can_be_used_as_value() {
+    let src = r#"
+    fn id(x: i64) -> i64 do
+        return x
+    endfn
+
+    fn main() -> i64 do
+        let f = id
+        return f(x: 42)
+    endfn
+    "#;
+    assert!(check_code(src).is_ok());
+}
+
+#[test]
+fn test_inline_lambda_literal_typechecks() {
+    let src = r#"
+    fn main() -> i64 do
+        let f = fn (x: i64) -> i64 do
+            return x + 1
+        endfn
+        return f(x: 41)
+    endfn
+    "#;
+    assert!(check_code(src).is_ok());
+}
+
+#[test]
+fn test_lambda_cannot_capture_ref() {
+    let src = r#"
+    fn main() -> i64 do
+        let ~counter = 1
+        let read_counter = fn () -> i64 do
+            return ~counter
+        endfn
+        return read_counter()
+    endfn
+    "#;
+    let err = check_code(src).unwrap_err();
+    assert!(
+        err.contains("capture Ref"),
+        "expected capture Ref error, got: {}",
+        err
+    );
+}
+
+#[test]
+fn test_linear_capture_makes_lambda_linear_and_single_use() {
+    let src = r#"
+    fn main() -> i64 do
+        let %x = 7
+        let f = fn () -> i64 do
+            drop_i64(val: %x)
+            return 1
+        endfn
+        let y = f()
+        return y
+    endfn
+    "#;
+    match check_code(src) {
+        Ok(_) => (),
+        Err(e) => panic!("Type check failed: {}", e),
+    }
+}
+
+#[test]
+fn test_linear_capturing_lambda_cannot_be_called_twice() {
+    let src = r#"
+    fn main() -> i64 do
+        let %x = 7
+        let f = fn () -> i64 do
+            drop_i64(val: %x)
+            return 1
+        endfn
+        let _a = f()
+        let _b = f()
+        return 0
+    endfn
+    "#;
+    let err = check_code(src).unwrap_err();
+    assert!(
+        err.contains("already consumed"),
+        "expected linear consume error, got: {}",
+        err
+    );
+}
+
+#[test]
+fn test_recursive_lambda_with_annotation_typechecks() {
+    let src = r#"
+    fn main() -> i64 do
+        let fact: (n: i64) -> i64 = fn (n: i64) -> i64 do
+            if n == 0 then
+                return 1
+            else
+                return n * fact(n: n - 1)
+            endif
+        endfn
+        return fact(n: 5)
+    endfn
+    "#;
+    match check_code(src) {
+        Ok(_) => (),
+        Err(e) => panic!("Type check failed: {}", e),
+    }
+}

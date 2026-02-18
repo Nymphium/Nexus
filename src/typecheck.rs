@@ -53,13 +53,15 @@ impl TypeEnv {
     }
 
     pub fn get(&self, name: &str) -> Option<&Scheme> {
+        if let Some(scheme) = self.vars.get(name) {
+            return Some(scheme);
+        }
         if let Some(pos) = name.find('.') {
             let mod_name = &name[..pos];
             let item_name = &name[pos + 1..];
-            self.modules.get(mod_name).and_then(|m| m.get(item_name))
-        } else {
-            self.vars.get(name)
+            return self.modules.get(mod_name).and_then(|m| m.get(item_name));
         }
+        None
     }
 
     pub fn get_type(&self, name: &str) -> Option<&TypeDef> {
@@ -125,6 +127,73 @@ fn get_default_alias(path: &str) -> String {
         .to_string()
 }
 
+fn default_numeric_literals(typ: &Type) -> Type {
+    match typ {
+        Type::IntLit => Type::I64,
+        Type::FloatLit => Type::F64,
+        Type::Arrow(params, ret, eff) => Type::Arrow(
+            params
+                .iter()
+                .map(|(name, t)| (name.clone(), default_numeric_literals(t)))
+                .collect(),
+            Box::new(default_numeric_literals(ret)),
+            Box::new(default_numeric_literals(eff)),
+        ),
+        Type::Result(ok, err) => Type::Result(
+            Box::new(default_numeric_literals(ok)),
+            Box::new(default_numeric_literals(err)),
+        ),
+        Type::UserDefined(name, args) => Type::UserDefined(
+            name.clone(),
+            args.iter().map(default_numeric_literals).collect(),
+        ),
+        Type::Ref(inner) => Type::Ref(Box::new(default_numeric_literals(inner))),
+        Type::Linear(inner) => Type::Linear(Box::new(default_numeric_literals(inner))),
+        Type::Borrow(inner) => Type::Borrow(Box::new(default_numeric_literals(inner))),
+        Type::List(inner) => Type::List(Box::new(default_numeric_literals(inner))),
+        Type::Array(inner) => Type::Array(Box::new(default_numeric_literals(inner))),
+        Type::Row(effs, tail) => Type::Row(
+            effs.iter().map(default_numeric_literals).collect(),
+            tail.as_ref().map(|t| Box::new(default_numeric_literals(t))),
+        ),
+        Type::Record(fields) => Type::Record(
+            fields
+                .iter()
+                .map(|(name, t)| (name.clone(), default_numeric_literals(t)))
+                .collect(),
+        ),
+        _ => typ.clone(),
+    }
+}
+
+fn select_int_type(left: &Type, right: &Type) -> Option<Type> {
+    if matches!(left, Type::I32) || matches!(right, Type::I32) {
+        return Some(Type::I32);
+    }
+    if matches!(left, Type::I64) || matches!(right, Type::I64) {
+        return Some(Type::I64);
+    }
+    if matches!(left, Type::IntLit | Type::Var(_)) && matches!(right, Type::IntLit | Type::Var(_)) {
+        return Some(Type::I64);
+    }
+    None
+}
+
+fn select_float_type(left: &Type, right: &Type) -> Option<Type> {
+    if matches!(left, Type::F32) || matches!(right, Type::F32) {
+        return Some(Type::F32);
+    }
+    if matches!(left, Type::F64) || matches!(right, Type::F64) {
+        return Some(Type::F64);
+    }
+    if matches!(left, Type::FloatLit | Type::Var(_))
+        && matches!(right, Type::FloatLit | Type::Var(_))
+    {
+        return Some(Type::F64);
+    }
+    None
+}
+
 impl TypeChecker {
     pub fn new() -> Self {
         let mut env = TypeEnv::new();
@@ -166,7 +235,7 @@ impl TypeChecker {
             Scheme {
                 vars: vec![],
                 typ: Type::Arrow(
-                    vec![("val".into(), Type::Float)],
+                    vec![("val".into(), Type::F64)],
                     Box::new(Type::String),
                     Box::new(Type::Row(vec![], None)),
                 ),
@@ -560,14 +629,40 @@ impl TypeChecker {
                     typ,
                     value,
                 } => {
+                    let is_recursive_lambda = matches!(&value.node, Expr::Lambda { params, body, .. }
+                        if lambda_references_name(body, params, name));
+                    let key = sigil.get_key(name);
+                    if is_recursive_lambda {
+                        if !matches!(sigil, Sigil::Immutable) {
+                            return Err(TypeError {
+                                message: "Recursive lambda binding must be immutable".into(),
+                                span: value.span.clone(),
+                            });
+                        }
+                        let ann = typ.clone().ok_or_else(|| TypeError {
+                            message: "Recursive lambda requires an explicit type annotation".into(),
+                            span: value.span.clone(),
+                        })?;
+                        env.insert(
+                            key.clone(),
+                            Scheme {
+                                vars: vec![],
+                                typ: ann,
+                            },
+                        );
+                    }
                     let (s1, t1) = self.infer(env, value, er, ee)?;
                     env.apply(&s1);
+                    let mut t1 = apply_subst_type(&s1, &t1);
                     if let Some(ann) = typ {
                         let sa = self.unify(&t1, ann).map_err(|e| TypeError {
                             message: e,
                             span: value.span.clone(),
                         })?;
                         env.apply(&sa);
+                        t1 = apply_subst_type(&sa, ann);
+                    } else {
+                        t1 = default_numeric_literals(&t1);
                     }
                     let ft = match sigil {
                         Sigil::Mutable => {
@@ -596,7 +691,7 @@ impl TypeChecker {
                             t1
                         }
                     };
-                    env.insert(sigil.get_key(name), self.generalize(env, ft));
+                    env.insert(key, self.generalize(env, ft));
                 }
                 Stmt::Return(e) => {
                     let (s1, t1) = self.infer(env, e, er, ee)?;
@@ -768,7 +863,7 @@ impl TypeChecker {
                 Stmt::Expr(e) => {
                     let (sub, t) = self.infer(&mut env, e, &Type::Unit, &ev)?;
                     env.apply(&sub);
-                    Ok(t)
+                    Ok(default_numeric_literals(&apply_subst_type(&sub, &t)))
                 }
                 _ => {
                     self.infer_body(&[s.clone()], &mut env, &Type::Unit, &ev)?;
@@ -791,8 +886,8 @@ impl TypeChecker {
             Expr::Literal(l) => Ok((
                 HashMap::new(),
                 match l {
-                    Literal::Int(_) => Type::I64,
-                    Literal::Float(_) => Type::Float,
+                    Literal::Int(_) => Type::IntLit,
+                    Literal::Float(_) => Type::FloatLit,
                     Literal::Bool(_) => Type::Bool,
                     Literal::String(_) => Type::String,
                     Literal::Unit => Type::Unit,
@@ -829,21 +924,26 @@ impl TypeChecker {
                 let mut s = compose_subst(&s1, &s2);
                 match op.as_str() {
                     "+" | "-" | "*" | "/" => {
-                        let s3 =
-                            self.unify(&apply_subst_type(&s, &t1), &Type::I64)
-                                .map_err(|m| TypeError {
-                                    message: m,
-                                    span: l.span.clone(),
-                                })?;
+                        let lt = apply_subst_type(&s, &t1);
+                        let rt = apply_subst_type(&s, &t2);
+                        let target = select_int_type(&lt, &rt).ok_or_else(|| TypeError {
+                            message: format!("Integer op expects i32/i64, got {} and {}", lt, rt),
+                            span: e.span.clone(),
+                        })?;
+
+                        let s3 = self.unify(&lt, &target).map_err(|m| TypeError {
+                            message: m,
+                            span: l.span.clone(),
+                        })?;
                         s = compose_subst(&s, &s3);
-                        let s4 =
-                            self.unify(&apply_subst_type(&s, &t2), &Type::I64)
-                                .map_err(|m| TypeError {
-                                    message: m,
-                                    span: r.span.clone(),
-                                })?;
+                        let s4 = self
+                            .unify(&apply_subst_type(&s, &t2), &target)
+                            .map_err(|m| TypeError {
+                                message: m,
+                                span: r.span.clone(),
+                            })?;
                         s = compose_subst(&s, &s4);
-                        Ok((s, Type::I64))
+                        Ok((s, target))
                     }
                     "++" => {
                         let s3 = self
@@ -863,49 +963,70 @@ impl TypeChecker {
                         Ok((s, Type::String))
                     }
                     "+." | "-." | "*." | "/." => {
-                        let s3 = self
-                            .unify(&apply_subst_type(&s, &t1), &Type::Float)
-                            .map_err(|m| TypeError {
-                                message: m,
-                                span: l.span.clone(),
-                            })?;
+                        let lt = apply_subst_type(&s, &t1);
+                        let rt = apply_subst_type(&s, &t2);
+                        let target = select_float_type(&lt, &rt).ok_or_else(|| TypeError {
+                            message: format!("Float op expects f32/f64, got {} and {}", lt, rt),
+                            span: e.span.clone(),
+                        })?;
+
+                        let s3 = self.unify(&lt, &target).map_err(|m| TypeError {
+                            message: m,
+                            span: l.span.clone(),
+                        })?;
                         s = compose_subst(&s, &s3);
                         let s4 = self
-                            .unify(&apply_subst_type(&s, &t2), &Type::Float)
+                            .unify(&apply_subst_type(&s, &t2), &target)
                             .map_err(|m| TypeError {
                                 message: m,
                                 span: r.span.clone(),
                             })?;
                         s = compose_subst(&s, &s4);
-                        Ok((s, Type::Float))
+                        Ok((s, target))
                     }
                     "==" | "!=" | "<" | ">" | "<=" | ">=" => {
-                        let s3 =
-                            self.unify(&apply_subst_type(&s, &t1), &Type::I64)
-                                .map_err(|m| TypeError {
-                                    message: m,
-                                    span: l.span.clone(),
-                                })?;
+                        let lt = apply_subst_type(&s, &t1);
+                        let rt = apply_subst_type(&s, &t2);
+                        let target = select_int_type(&lt, &rt).ok_or_else(|| TypeError {
+                            message: format!(
+                                "Integer comparison expects i32/i64, got {} and {}",
+                                lt, rt
+                            ),
+                            span: e.span.clone(),
+                        })?;
+
+                        let s3 = self.unify(&lt, &target).map_err(|m| TypeError {
+                            message: m,
+                            span: l.span.clone(),
+                        })?;
                         s = compose_subst(&s, &s3);
-                        let s4 =
-                            self.unify(&apply_subst_type(&s, &t2), &Type::I64)
-                                .map_err(|m| TypeError {
-                                    message: m,
-                                    span: r.span.clone(),
-                                })?;
+                        let s4 = self
+                            .unify(&apply_subst_type(&s, &t2), &target)
+                            .map_err(|m| TypeError {
+                                message: m,
+                                span: r.span.clone(),
+                            })?;
                         s = compose_subst(&s, &s4);
                         Ok((s, Type::Bool))
                     }
                     "==." | "!=." | "<." | ">." | "<=." | ">=." => {
-                        let s3 = self
-                            .unify(&apply_subst_type(&s, &t1), &Type::Float)
-                            .map_err(|m| TypeError {
-                                message: m,
-                                span: l.span.clone(),
-                            })?;
+                        let lt = apply_subst_type(&s, &t1);
+                        let rt = apply_subst_type(&s, &t2);
+                        let target = select_float_type(&lt, &rt).ok_or_else(|| TypeError {
+                            message: format!(
+                                "Float comparison expects f32/f64, got {} and {}",
+                                lt, rt
+                            ),
+                            span: e.span.clone(),
+                        })?;
+
+                        let s3 = self.unify(&lt, &target).map_err(|m| TypeError {
+                            message: m,
+                            span: l.span.clone(),
+                        })?;
                         s = compose_subst(&s, &s3);
                         let s4 = self
-                            .unify(&apply_subst_type(&s, &t2), &Type::Float)
+                            .unify(&apply_subst_type(&s, &t2), &target)
                             .map_err(|m| TypeError {
                                 message: m,
                                 span: r.span.clone(),
@@ -939,13 +1060,23 @@ impl TypeChecker {
                 args,
                 perform,
             } => {
-                let (mut s, ft) = if let Some(sch) = env.get(func).cloned() {
+                let (mut s, ft_raw) = if let Some(sch) = env.get(func).cloned() {
                     (HashMap::new(), self.instantiate(&sch))
                 } else {
                     return Err(TypeError {
                         message: format!("Fn {} not found", func),
                         span: e.span.clone(),
                     });
+                };
+                let ft = match ft_raw {
+                    Type::Linear(inner) => {
+                        env.consume(func).map_err(|m| TypeError {
+                            message: m,
+                            span: e.span.clone(),
+                        })?;
+                        *inner
+                    }
+                    other => other,
                 };
                 let rt = self.new_var();
                 let pts: Vec<(String, Type)> = args
@@ -1247,6 +1378,94 @@ impl TypeChecker {
                 }
                 Ok((s, Type::Unit))
             }
+            Expr::Lambda {
+                params,
+                ret_type,
+                effects,
+                body,
+            } => {
+                if contains_ref(ret_type) {
+                    return Err(TypeError {
+                        message: "Cannot return Ref".into(),
+                        span: e.span.clone(),
+                    });
+                }
+
+                let mut lambda_env = env.clone();
+                let outer_keys: HashSet<String> = env.vars.keys().cloned().collect();
+                let captured = collect_lambda_captures(body, params, &outer_keys);
+                let mut captured_linear_keys = HashSet::new();
+                for key in &captured {
+                    if let Some(sch) = env.get(key) {
+                        if contains_ref(&sch.typ) {
+                            return Err(TypeError {
+                                message: format!("Lambda cannot capture Ref value '{}'", key),
+                                span: e.span.clone(),
+                            });
+                        }
+                        if contains_linear(&sch.typ) {
+                            captured_linear_keys.insert(key.clone());
+                        }
+                    }
+                }
+                let before_linear = lambda_env.linear_vars.clone();
+                for p in params {
+                    lambda_env.insert(
+                        p.sigil.get_key(&p.name),
+                        Scheme {
+                            vars: vec![],
+                            typ: p.typ.clone(),
+                        },
+                    );
+                }
+                self.infer_body(body, &mut lambda_env, ret_type, effects)?;
+                let remaining_lambda_linear: HashSet<String> = lambda_env
+                    .linear_vars
+                    .difference(&before_linear)
+                    .cloned()
+                    .collect();
+                if !remaining_lambda_linear.is_empty() {
+                    return Err(TypeError {
+                        message: format!("Unused linear in lambda: {:?}", remaining_lambda_linear),
+                        span: e.span.clone(),
+                    });
+                }
+                let consumed_outer_linear: HashSet<String> = before_linear
+                    .difference(&lambda_env.linear_vars)
+                    .cloned()
+                    .collect();
+                captured_linear_keys.extend(consumed_outer_linear);
+                let has_linear_capture = !captured_linear_keys.is_empty();
+                for key in captured_linear_keys {
+                    env.consume(&key).map_err(|m| TypeError {
+                        message: m,
+                        span: e.span.clone(),
+                    })?;
+                }
+
+                Ok((
+                    HashMap::new(),
+                    if has_linear_capture {
+                        Type::Linear(Box::new(Type::Arrow(
+                            params
+                                .iter()
+                                .map(|p| (p.name.clone(), p.typ.clone()))
+                                .collect(),
+                            Box::new(ret_type.clone()),
+                            Box::new(effects.clone()),
+                        )))
+                    } else {
+                        Type::Arrow(
+                            params
+                                .iter()
+                                .map(|p| (p.name.clone(), p.typ.clone()))
+                                .collect(),
+                            Box::new(ret_type.clone()),
+                            Box::new(effects.clone()),
+                        )
+                    },
+                ))
+            }
             Expr::Raise(ex) => {
                 let (s, t) = self.infer(env, ex, er, ee)?;
                 let ss = self.unify(&t, &Type::String).map_err(|m| TypeError {
@@ -1347,8 +1566,8 @@ impl TypeChecker {
             }
             Pattern::Literal(l) => {
                 let tl = match l {
-                    Literal::Int(_) => Type::I64,
-                    Literal::Float(_) => Type::Float,
+                    Literal::Int(_) => Type::IntLit,
+                    Literal::Float(_) => Type::FloatLit,
                     Literal::Bool(_) => Type::Bool,
                     Literal::String(_) => Type::String,
                     Literal::Unit => Type::Unit,
@@ -1599,6 +1818,14 @@ impl TypeChecker {
     fn unify(&mut self, t1: &Type, t2: &Type) -> Result<Subst, String> {
         match (t1, t2) {
             (t1, t2) if t1 == t2 => Ok(HashMap::new()),
+            (Type::IntLit, Type::I32)
+            | (Type::I32, Type::IntLit)
+            | (Type::IntLit, Type::I64)
+            | (Type::I64, Type::IntLit) => Ok(HashMap::new()),
+            (Type::FloatLit, Type::F32)
+            | (Type::F32, Type::FloatLit)
+            | (Type::FloatLit, Type::F64)
+            | (Type::F64, Type::FloatLit) => Ok(HashMap::new()),
             (Type::Var(n), t) | (t, Type::Var(n)) => {
                 if occurs_check(n, t) {
                     return Err("Recursive".into());
@@ -1856,6 +2083,282 @@ fn contains_linear(t: &Type) -> bool {
         }
         Type::Record(fs) => fs.iter().any(|(_, t)| contains_linear(t)),
         _ => false,
+    }
+}
+
+fn lambda_references_name(body: &[Spanned<Stmt>], params: &[Param], name: &str) -> bool {
+    let mut outer_keys = HashSet::new();
+    outer_keys.insert(name.to_string());
+    collect_lambda_captures(body, params, &outer_keys).contains(name)
+}
+
+fn collect_lambda_captures(
+    body: &[Spanned<Stmt>],
+    params: &[Param],
+    outer_keys: &HashSet<String>,
+) -> HashSet<String> {
+    let mut bound_keys = HashSet::new();
+    let mut bound_call_names = HashSet::new();
+    for p in params {
+        register_bound_name(&mut bound_keys, &mut bound_call_names, &p.name, &p.sigil);
+    }
+    let mut captures = HashSet::new();
+    collect_stmt_captures(
+        body,
+        outer_keys,
+        &bound_keys,
+        &bound_call_names,
+        &mut captures,
+    );
+    captures
+}
+
+fn register_bound_name(
+    bound_keys: &mut HashSet<String>,
+    bound_call_names: &mut HashSet<String>,
+    name: &str,
+    sigil: &Sigil,
+) {
+    bound_keys.insert(sigil.get_key(name));
+    if matches!(sigil, Sigil::Immutable) {
+        bound_call_names.insert(name.to_string());
+    }
+}
+
+fn bind_pattern_names(
+    pattern: &Spanned<Pattern>,
+    bound_keys: &mut HashSet<String>,
+    bound_call_names: &mut HashSet<String>,
+) {
+    match &pattern.node {
+        Pattern::Variable(name, sigil) => {
+            register_bound_name(bound_keys, bound_call_names, name, sigil);
+        }
+        Pattern::Constructor(_, args) => {
+            for arg in args {
+                bind_pattern_names(arg, bound_keys, bound_call_names);
+            }
+        }
+        Pattern::Record(fields, _) => {
+            for (_, pat) in fields {
+                bind_pattern_names(pat, bound_keys, bound_call_names);
+            }
+        }
+        Pattern::Literal(_) | Pattern::Wildcard => {}
+    }
+}
+
+fn collect_stmt_captures(
+    stmts: &[Spanned<Stmt>],
+    outer_keys: &HashSet<String>,
+    bound_keys: &HashSet<String>,
+    bound_call_names: &HashSet<String>,
+    captures: &mut HashSet<String>,
+) {
+    let mut local_bound_keys = bound_keys.clone();
+    let mut local_bound_call_names = bound_call_names.clone();
+    for stmt in stmts {
+        match &stmt.node {
+            Stmt::Let {
+                name, sigil, value, ..
+            } => {
+                collect_expr_captures(
+                    value,
+                    outer_keys,
+                    &local_bound_keys,
+                    &local_bound_call_names,
+                    captures,
+                );
+                register_bound_name(
+                    &mut local_bound_keys,
+                    &mut local_bound_call_names,
+                    name,
+                    sigil,
+                );
+            }
+            Stmt::Expr(expr) | Stmt::Return(expr) => {
+                collect_expr_captures(
+                    expr,
+                    outer_keys,
+                    &local_bound_keys,
+                    &local_bound_call_names,
+                    captures,
+                );
+            }
+            Stmt::Assign { target, value } => {
+                collect_expr_captures(
+                    target,
+                    outer_keys,
+                    &local_bound_keys,
+                    &local_bound_call_names,
+                    captures,
+                );
+                collect_expr_captures(
+                    value,
+                    outer_keys,
+                    &local_bound_keys,
+                    &local_bound_call_names,
+                    captures,
+                );
+            }
+            Stmt::Conc(tasks) => {
+                for task in tasks {
+                    let mut task_bound_keys = HashSet::new();
+                    let mut task_bound_call_names = HashSet::new();
+                    for p in &task.params {
+                        register_bound_name(
+                            &mut task_bound_keys,
+                            &mut task_bound_call_names,
+                            &p.name,
+                            &p.sigil,
+                        );
+                    }
+                    collect_stmt_captures(
+                        &task.body,
+                        outer_keys,
+                        &task_bound_keys,
+                        &task_bound_call_names,
+                        captures,
+                    );
+                }
+            }
+            Stmt::Try {
+                body,
+                catch_param,
+                catch_body,
+            } => {
+                collect_stmt_captures(
+                    body,
+                    outer_keys,
+                    &local_bound_keys,
+                    &local_bound_call_names,
+                    captures,
+                );
+                let mut catch_bound_keys = local_bound_keys.clone();
+                let mut catch_bound_call_names = local_bound_call_names.clone();
+                register_bound_name(
+                    &mut catch_bound_keys,
+                    &mut catch_bound_call_names,
+                    catch_param,
+                    &Sigil::Immutable,
+                );
+                collect_stmt_captures(
+                    catch_body,
+                    outer_keys,
+                    &catch_bound_keys,
+                    &catch_bound_call_names,
+                    captures,
+                );
+            }
+            Stmt::Comment => {}
+        }
+    }
+}
+
+fn collect_expr_captures(
+    expr: &Spanned<Expr>,
+    outer_keys: &HashSet<String>,
+    bound_keys: &HashSet<String>,
+    bound_call_names: &HashSet<String>,
+    captures: &mut HashSet<String>,
+) {
+    match &expr.node {
+        Expr::Literal(_) => {}
+        Expr::Variable(name, sigil) | Expr::Borrow(name, sigil) => {
+            let key = sigil.get_key(name);
+            if outer_keys.contains(&key) && !bound_keys.contains(&key) {
+                captures.insert(key);
+            }
+        }
+        Expr::BinaryOp(lhs, _, rhs) | Expr::Index(lhs, rhs) => {
+            collect_expr_captures(lhs, outer_keys, bound_keys, bound_call_names, captures);
+            collect_expr_captures(rhs, outer_keys, bound_keys, bound_call_names, captures);
+        }
+        Expr::Call { func, args, .. } => {
+            if !func.contains('.')
+                && outer_keys.contains(func)
+                && !bound_call_names.contains(func.as_str())
+            {
+                captures.insert(func.clone());
+            }
+            for (_, arg) in args {
+                collect_expr_captures(arg, outer_keys, bound_keys, bound_call_names, captures);
+            }
+        }
+        Expr::Constructor(_, args) | Expr::List(args) | Expr::Array(args) => {
+            for arg in args {
+                collect_expr_captures(arg, outer_keys, bound_keys, bound_call_names, captures);
+            }
+        }
+        Expr::Record(fields) => {
+            for (_, value) in fields {
+                collect_expr_captures(value, outer_keys, bound_keys, bound_call_names, captures);
+            }
+        }
+        Expr::FieldAccess(receiver, _) | Expr::Raise(receiver) => {
+            collect_expr_captures(receiver, outer_keys, bound_keys, bound_call_names, captures);
+        }
+        Expr::If {
+            cond,
+            then_branch,
+            else_branch,
+        } => {
+            collect_expr_captures(cond, outer_keys, bound_keys, bound_call_names, captures);
+            collect_stmt_captures(
+                then_branch,
+                outer_keys,
+                bound_keys,
+                bound_call_names,
+                captures,
+            );
+            if let Some(else_branch) = else_branch {
+                collect_stmt_captures(
+                    else_branch,
+                    outer_keys,
+                    bound_keys,
+                    bound_call_names,
+                    captures,
+                );
+            }
+        }
+        Expr::Match { target, cases } => {
+            collect_expr_captures(target, outer_keys, bound_keys, bound_call_names, captures);
+            for case in cases {
+                let mut case_bound_keys = bound_keys.clone();
+                let mut case_bound_call_names = bound_call_names.clone();
+                bind_pattern_names(
+                    &case.pattern,
+                    &mut case_bound_keys,
+                    &mut case_bound_call_names,
+                );
+                collect_stmt_captures(
+                    &case.body,
+                    outer_keys,
+                    &case_bound_keys,
+                    &case_bound_call_names,
+                    captures,
+                );
+            }
+        }
+        Expr::Lambda { params, body, .. } => {
+            let mut nested_bound_keys = bound_keys.clone();
+            let mut nested_bound_call_names = bound_call_names.clone();
+            for p in params {
+                register_bound_name(
+                    &mut nested_bound_keys,
+                    &mut nested_bound_call_names,
+                    &p.name,
+                    &p.sigil,
+                );
+            }
+            collect_stmt_captures(
+                body,
+                outer_keys,
+                &nested_bound_keys,
+                &nested_bound_call_names,
+                captures,
+            );
+        }
     }
 }
 

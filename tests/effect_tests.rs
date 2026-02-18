@@ -1,7 +1,6 @@
-use nexus::ast::{Type, Program, Sigil};
-use nexus::typecheck::{TypeChecker, TypeEnv};
-use nexus::parser::parser;
 use chumsky::Parser;
+use nexus::parser::parser;
+use nexus::typecheck::TypeChecker;
 
 fn check(src: &str) -> Result<(), String> {
     let p = parser().parse(src).map_err(|e| format!("{:?}", e))?;
@@ -158,5 +157,8 @@ fn test_effect_polymorphism_mismatch() {
         return ()
     endfn
     "#;
-    assert!(check(src).is_err(), "Should fail because apply instantiates E=IO, so call becomes IO");
+    assert!(
+        check(src).is_err(),
+        "Should fail because apply instantiates E=IO, so call becomes IO"
+    );
 }
