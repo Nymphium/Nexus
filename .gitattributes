@@ -1,0 +1,24 @@
+# Normalize line endings on checkout
+* text=auto eol=lf
+
+# Source files
+*.rs    text eol=lf
+*.nix   text eol=lf
+*.js    text eol=lf
+*.json  text eol=lf
+*.toml  text eol=lf
+*.md    text eol=lf
+*.nx    text eol=lf
+*.scm   text eol=lf
+*.yaml  text eol=lf
+*.yml   text eol=lf
+
+# Tree-sitter: auto-generated — exclude from diffs and language stats
+tree-sitter-nexus/src/parser.c          linguist-generated=true -diff
+tree-sitter-nexus/src/grammar.json      linguist-generated=true -diff
+tree-sitter-nexus/src/node-types.json   linguist-generated=true
+tree-sitter-nexus/src/tree_sitter/*.h   linguist-generated=true -diff
+
+# Binary
+*.pdb  binary
+*.wasm binary

@@ -54,6 +54,20 @@ fn sigil() -> impl Parser<char, Sigil, Error = Simple<char>> + Clone {
         .or(empty().to(Sigil::Immutable))
 }
 
+fn line_comment_parser() -> impl Parser<char, (), Error = Simple<char>> + Clone {
+    just("//")
+        .then(take_until(choice((just('\n'), end().to('\n')))))
+        .ignored()
+}
+
+fn block_comment_parser() -> impl Parser<char, (), Error = Simple<char>> + Clone {
+    just("/*").then(take_until(just("*/"))).ignored()
+}
+
+fn comment_parser() -> impl Parser<char, (), Error = Simple<char>> + Clone {
+    choice((line_comment_parser(), block_comment_parser())).padded()
+}
+
 fn type_parser() -> P<Type> {
     recursive(|t: Recursive<'_, char, Type, Simple<char>>| {
         let base = choice((
@@ -446,13 +460,10 @@ fn expr_parser() -> P<Spanned<Expr>> {
                     span,
                 });
 
-            let comment = just("//")
-                .then(take_until(choice((just('\n'), end().to('\n')))))
-                .padded()
-                .map_with_span(|_, span| Spanned {
-                    node: Stmt::Comment,
-                    span,
-                });
+            let comment = comment_parser().map_with_span(|_, span| Spanned {
+                node: Stmt::Comment,
+                span,
+            });
 
             let basic_stmt = choice((
                 comment.boxed(),
@@ -839,13 +850,10 @@ pub fn stmt_parser() -> impl Parser<char, Spanned<Stmt>, Error = Simple<char>> {
                 span,
             });
 
-        let comment = just("//")
-            .then(take_until(choice((just('\n'), end().to('\n')))))
-            .padded()
-            .map_with_span(|_, span| Spanned {
-                node: Stmt::Comment,
-                span,
-            });
+        let comment = comment_parser().map_with_span(|_, span| Spanned {
+            node: Stmt::Comment,
+            span,
+        });
 
         let basic_stmt = choice((
             comment.boxed(),
@@ -1144,10 +1152,7 @@ pub fn parser() -> impl Parser<char, Program, Error = Simple<char>> {
             })
         });
 
-    let comment = just("//")
-        .then(take_until(just('\n')))
-        .padded()
-        .map(|_| TopLevel::Comment);
+    let comment = comment_parser().map(|_| TopLevel::Comment);
 
     choice((
         func_def,
