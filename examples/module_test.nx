@@ -1,7 +1,9 @@
-import as math from [=[examples/math.nx]=]
+import as math from examples/math.nx
+import { i64_to_string } from nxlib/stdlib/string.nx
+import { print } from nxlib/stdlib/stdio.nx
 
-let main = fn () -> unit effect { IO } do
+let main = fn () -> unit effect { Console } do
   let res = math.add(a: 10, b: 20)
   let msg = i64_to_string(val: res)
-  perform print(val: msg)
+  print(val: msg)
 endfn

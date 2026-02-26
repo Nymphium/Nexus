@@ -11,13 +11,15 @@ fn check(src: &str) -> Result<(), String> {
 #[test]
 fn test_anonymous_record() {
     let src = r#"
-    let main = fn () -> unit effect { IO } do
+    import { print } from nxlib/stdlib/stdio.nx
+    import { i64_to_string } from nxlib/stdlib/string.nx
+    let main = fn () -> unit effect { Console } do
         let r = { x: 1, y: [=[hello]=] }
         let i = r.x
         // let s = r.y // Type of s is Str. Unused variable? (No check yet)
         let i_s = i64_to_string(val: i)
         let msg = [=[i=]=] ++ i_s
-        perform print(val: msg)
+        print(val: msg)
         return ()
     endfn
     "#;

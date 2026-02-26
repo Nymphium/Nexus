@@ -1,79 +1,83 @@
-import external [=[nxlib/stdlib/string.wasm]=]
+/**
+ * string: String inspection and manipulation functions.
+ *
+ * Most operations delegate to native WASM implementations via FFI.
+ * string_split is the only function implemented in Nexus; it
+ * recursively splits by a separator using string_index_of and
+ * string_substring, producing a List<string>.
+ */
+import external nxlib/stdlib/string.wasm
 
-let __nx_string_length = external [=[__nx_string_length]=] : (s: string) -> i64
-let __nx_string_contains = external [=[__nx_string_contains]=] : (s: string, sub: string) -> bool
-let __nx_string_substring = external [=[__nx_string_substring]=] : (s: string, start: i64, len: i64) -> string
-let __nx_string_index_of = external [=[__nx_string_index_of]=] : (s: string, sub: string) -> i64
-let __nx_string_starts_with = external [=[__nx_string_starts_with]=] : (s: string, prefix: string) -> bool
-let __nx_string_ends_with = external [=[__nx_string_ends_with]=] : (s: string, suffix: string) -> bool
-let __nx_string_trim = external [=[__nx_string_trim]=] : (s: string) -> string
-let __nx_string_to_upper = external [=[__nx_string_to_upper]=] : (s: string) -> string
-let __nx_string_to_lower = external [=[__nx_string_to_lower]=] : (s: string) -> string
-let __nx_string_replace = external [=[__nx_string_replace]=] : (s: string, from_str: string, to_str: string) -> string
-let __nx_string_char_at = external [=[__nx_string_char_at]=] : (s: string, idx: i64) -> string
+/// Returns the number of characters in the string.
+pub external string_length = [=[__nx_string_length]=] : (s: string) -> i64
 
-pub let string_length = fn (s: string) -> i64 do
-  return __nx_string_length(s: s)
-endfn
+/// Returns true if s contains the substring sub.
+pub external string_contains = [=[__nx_string_contains]=] : (s: string, sub: string) -> bool
 
-pub let string_contains = fn (s: string, sub: string) -> bool do
-  return __nx_string_contains(s: s, sub: sub)
-endfn
+/// Extracts a substring starting at start with the given length.
+pub external string_substring = [=[__nx_string_substring]=] : (s: string, start: i64, len: i64) -> string
 
-pub let string_substring = fn (s: string, start: i64, len: i64) -> string do
-  return __nx_string_substring(s: s, start: start, len: len)
-endfn
+/// Returns the index of the first occurrence of sub in s, or -1 if not found.
+pub external string_index_of = [=[__nx_string_index_of]=] : (s: string, sub: string) -> i64
 
-pub let string_index_of = fn (s: string, sub: string) -> i64 do
-  return __nx_string_index_of(s: s, sub: sub)
-endfn
+/// Returns true if s starts with the given prefix.
+pub external string_starts_with = [=[__nx_string_starts_with]=] : (s: string, prefix: string) -> bool
 
-pub let string_starts_with = fn (s: string, prefix: string) -> bool do
-  return __nx_string_starts_with(s: s, prefix: prefix)
-endfn
+/// Returns true if s ends with the given suffix.
+pub external string_ends_with = [=[__nx_string_ends_with]=] : (s: string, suffix: string) -> bool
 
-pub let string_ends_with = fn (s: string, suffix: string) -> bool do
-  return __nx_string_ends_with(s: s, suffix: suffix)
-endfn
+/// Returns s with leading and trailing whitespace removed.
+pub external string_trim = [=[__nx_string_trim]=] : (s: string) -> string
 
-pub let string_trim = fn (s: string) -> string do
-  return __nx_string_trim(s: s)
-endfn
+/// Returns s with all characters converted to uppercase.
+pub external string_to_upper = [=[__nx_string_to_upper]=] : (s: string) -> string
 
-pub let string_to_upper = fn (s: string) -> string do
-  return __nx_string_to_upper(s: s)
-endfn
+/// Returns s with all characters converted to lowercase.
+pub external string_to_lower = [=[__nx_string_to_lower]=] : (s: string) -> string
 
-pub let string_to_lower = fn (s: string) -> string do
-  return __nx_string_to_lower(s: s)
-endfn
+/// Replaces all occurrences of from_str with to_str in s.
+pub external string_replace = [=[__nx_string_replace]=] : (s: string, from_str: string, to_str: string) -> string
 
-pub let string_replace = fn (s: string, from_str: string, to_str: string) -> string do
-  return __nx_string_replace(s: s, from_str: from_str, to_str: to_str)
-endfn
+/// Returns the character at the given index as a single-character string.
+pub external string_char_at = [=[__nx_string_char_at]=] : (s: string, idx: i64) -> string
+
+/// Converts an i64 integer to its string representation.
+pub external i64_to_string = [=[__nx_i64_to_string]=] : (val: i64) -> string
+
+/// Converts a float to its string representation.
+pub external float_to_string = [=[__nx_float_to_string]=] : (val: float) -> string
+
+/// Converts a bool to "true" or "false".
+pub external bool_to_string = [=[__nx_bool_to_string]=] : (val: bool) -> string
+
+/// Parses a string as an i64.
+pub external string_to_i64 = [=[__nx_string_to_i64]=] : (s: string) -> i64
 
 let string_split_go = fn (s: string, sep: string) -> List<string> do
-  let idx = __nx_string_index_of(s: s, sub: sep)
+  let idx = string_index_of(s: s, sub: sep)
   if idx < 0 then
     return Cons(v: s, rest: Nil())
   else
-    let head = __nx_string_substring(s: s, start: 0, len: idx)
-    let sep_len = __nx_string_length(s: sep)
+    let head = string_substring(s: s, start: 0, len: idx)
+    let sep_len = string_length(s: sep)
     let tail_start = idx + sep_len
-    let tail_len = __nx_string_length(s: s) - tail_start
-    let tail = __nx_string_substring(s: s, start: tail_start, len: tail_len)
+    let tail_len = string_length(s: s) - tail_start
+    let tail = string_substring(s: s, start: tail_start, len: tail_len)
     return Cons(v: head, rest: string_split_go(s: tail, sep: sep))
   endif
 endfn
 
+/**
+ * Splits s by the given separator and returns a list of substrings.
+ * Returns a single-element list if sep is empty or not found.
+ * Implemented by recursively finding the next occurrence of sep via
+ * string_index_of, extracting the head substring, and recurring on
+ * the tail. Produces segments in left-to-right order.
+ */
 pub let string_split = fn (s: string, sep: string) -> List<string> do
-  if __nx_string_length(s: sep) == 0 then
+  if string_length(s: sep) == 0 then
     return Cons(v: s, rest: Nil())
   else
     return string_split_go(s: s, sep: sep)
   endif
-endfn
-
-pub let string_char_at = fn (s: string, idx: i64) -> string do
-  return __nx_string_char_at(s: s, idx: idx)
 endfn

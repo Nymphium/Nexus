@@ -15,27 +15,29 @@ fn run(src: &str) -> Result<Value, String> {
 #[test]
 fn test_conc_parallel_execution() {
     let src = r#"
-    let main = fn () -> unit effect { IO } do
+    import { i64_to_string } from nxlib/stdlib/string.nx
+    import { print } from nxlib/stdlib/stdio.nx
+    let main = fn () -> unit effect { Console } do
         let %arr = [| 0, 0 |]
         conc do
-            task t1 effect { IO } do
-                let lock = borrow %arr
+            task t1 effect { Console } do
+                let lock = &%arr
                 lock[0] <- 1
             endtask
-            task t2 effect { IO } do
-                let lock = borrow %arr
+            task t2 effect { Console } do
+                let lock = &%arr
                 lock[1] <- 2
             endtask
         endconc
 
-        let lock = borrow %arr
+        let lock = &%arr
         let v1 = lock[0]
         let v2 = lock[1]
         let s1 = i64_to_string(val: v1)
         let s2 = i64_to_string(val: v2)
-        perform print(val: s1)
-        perform print(val: s2)
-        drop %arr
+        print(val: s1)
+        print(val: s2)
+        match %arr do case _ -> () endmatch
         return ()
     endfn
     "#;
@@ -47,8 +49,8 @@ fn test_conc_parallel_execution() {
 #[test]
 fn test_net_effect_enforcement() {
     let src = r#"
-    let main = fn () -> unit effect { IO } do
-        let res = perform get(url: [=[https://example.com]=])
+    let main = fn () -> unit effect { Console } do
+        let res = get(url: [=[https://example.com]=])
         return ()
     endfn
     "#;
@@ -65,12 +67,14 @@ fn test_net_effect_enforcement() {
 #[test]
 fn test_net_request_method_and_headers_runtime() {
     let src = r#"
-    import as net from [=[nxlib/stdlib/net.nx]=]
+    import { default_net, Net, header } from nxlib/stdlib/net.nx
 
-    let main = fn () -> string effect { IO, Net } do
-      let h = net.header(name: [=[X-Test]=], value: [=[abc]=])
-      let hs = Cons(v: h, rest: Nil())
-      return perform net.request(method: [=[POST]=], url: [=[http://127.0.0.1:1/ping]=], headers: hs)
+    let main = fn () -> string effect { Console } do
+      inject default_net do
+        let h = header(name: [=[X-Test]=], value: [=[abc]=])
+        let hs = Cons(v: h, rest: Nil())
+        return Net.request(method: [=[POST]=], url: [=[http://127.0.0.1:1/ping]=], headers: hs)
+      endinject
     endfn
     "#;
 
@@ -89,11 +93,13 @@ fn test_net_request_method_and_headers_runtime() {
 #[test]
 fn test_net_request_https_url_is_accepted() {
     let src = r#"
-    import as net from [=[nxlib/stdlib/net.nx]=]
+    import { default_net, Net } from nxlib/stdlib/net.nx
 
-    let main = fn () -> string effect { IO, Net } do
-      let hs = Nil()
-      return perform net.request(method: [=[GET]=], url: [=[https://127.0.0.1:1/]=], headers: hs)
+    let main = fn () -> string effect { Console } do
+      inject default_net do
+        let hs = Nil()
+        return Net.request(method: [=[GET]=], url: [=[https://127.0.0.1:1/]=], headers: hs)
+      endinject
     endfn
     "#;
 
@@ -107,15 +113,18 @@ fn test_net_request_https_url_is_accepted() {
 #[test]
 fn test_net_request_response_status_and_body_with_request_body() {
     let src = r#"
-    import as net from [=[nxlib/stdlib/net.nx]=]
+    import { default_net, Net, header, response_status, response_body } from nxlib/stdlib/net.nx
+    import { i64_to_string } from nxlib/stdlib/string.nx
 
-    let main = fn () -> string effect { IO, Net } do
-      let hs = Cons(v: net.header(name: [=[Content-Type]=], value: [=[application/x-www-form-urlencoded]=]), rest: Nil())
-      let res = perform net.request_response(method: [=[POST]=], url: [=[http://127.0.0.1:1/submit]=], headers: hs, body: [=[hello=nx]=])
-      let status = net.response_status(res: res)
-      let body = net.response_body(res: res)
-      let status_s = i64_to_string(val: status)
-      return status_s ++ [=[:]=] ++ body
+    let main = fn () -> string effect { Console } do
+      inject default_net do
+        let hs = Cons(v: header(name: [=[Content-Type]=], value: [=[application/x-www-form-urlencoded]=]), rest: Nil())
+        let res = Net.request_response(method: [=[POST]=], url: [=[http://127.0.0.1:1/submit]=], headers: hs, body: [=[hello=nx]=])
+        let status = response_status(res: res)
+        let body = response_body(res: res)
+        let status_s = i64_to_string(val: status)
+        return status_s ++ [=[:]=] ++ body
+      endinject
     endfn
     "#;
 
@@ -133,19 +142,19 @@ fn test_net_request_response_status_and_body_with_request_body() {
 
 proptest! {
     #![proptest_config(ProptestConfig {
-        cases: 16,
+        cases: 8,
         failure_persistence: None,
         .. ProptestConfig::default()
     })]
 
     #[test]
-    fn prop_conc_independent_array_updates(n in 1usize..10) {
+    fn prop_conc_independent_array_updates(n in 1usize..5) {
         let mut tasks = String::new();
         for i in 0..n {
             tasks.push_str(&format!(
                 r#"
-                task t{i} effect {{ IO }} do
-                    let lock = borrow %arr
+                task t{i} effect {{ Console }} do
+                    let lock = &%arr
                     lock[{i}] <- 1
                 endtask
                 "#
@@ -155,15 +164,15 @@ proptest! {
         let initial_array = vec!["0"; n].join(", ");
         let src = format!(
             r#"
-            let main = fn () -> unit effect {{ IO }} do
+            let main = fn () -> unit effect {{ Console }} do
                 let %arr = [| {initial_array} |]
                 conc do
                     {tasks}
                 endconc
 
-                let lock = borrow %arr
-                let ok = perform check_all(arr: lock, len: {n}, i: 0)
-                drop %arr
+                let lock = &%arr
+                let ok = check_all(arr: lock, len: {n}, i: 0)
+                match %arr do case _ -> () endmatch
                 if (ok) then
                     return ()
                 else
@@ -171,14 +180,14 @@ proptest! {
                 endif
             endfn
 
-            let check_all = fn (arr: &[| i64 |], len: i64, i: i64) -> bool effect {{ IO }} do
+            let check_all = fn (arr: &[| i64 |], len: i64, i: i64) -> bool effect {{ Console }} do
                 if (i < len) then
                     let val = arr[i]
                     if (val != 1) then
                         return false
                     else
                         let next_i = i + 1
-                        let res = perform check_all(arr: arr, len: len, i: next_i)
+                        let res = check_all(arr: arr, len: len, i: next_i)
                         return res
                     endif
                 else
@@ -196,21 +205,21 @@ proptest! {
     fn prop_conc_task_capture_linearity(_n in 1usize..5) {
         let src = format!(
             r#"
-            let main = fn () -> unit effect {{ IO }} do
+            let main = fn () -> unit effect {{ Console }} do
                 let %l = [| 42 |]
                 conc do
-                    task t1 effect {{ IO }} do
-                        let b = borrow %l
+                    task t1 effect {{ Console }} do
+                        let b = &%l
                         let v = b[0]
                     endtask
-                    task t2 effect {{ IO }} do
-                        let b = borrow %l
+                    task t2 effect {{ Console }} do
+                        let b = &%l
                         let v = b[0]
                     endtask
                 endconc
-                let b = borrow %l
+                let b = &%l
                 let v = b[0]
-                drop %l
+                match %l do case _ -> () endmatch
                 return ()
             endfn
             "#

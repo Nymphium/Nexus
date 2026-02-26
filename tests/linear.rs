@@ -9,6 +9,13 @@ fn check(src: &str) -> Result<(), String> {
     checker.check_program(&p).map_err(|e| e.message)
 }
 
+fn check_warnings(src: &str) -> Vec<String> {
+    let p = parser().parse(src).unwrap();
+    let mut checker = TypeChecker::new();
+    checker.check_program(&p).unwrap();
+    checker.take_warnings().into_iter().map(|w| w.message).collect()
+}
+
 fn check_program(program: &Program) -> Result<(), String> {
     let mut checker = TypeChecker::new();
     checker.check_program(program).map_err(|e| e.message)
@@ -18,48 +25,28 @@ fn sp<T>(node: T) -> Spanned<T> {
     Spanned { node, span: 0..0 }
 }
 
-fn resource_program(drop_resource: bool) -> Program {
+fn resource_program(consume_resource: bool) -> Program {
     let mut body = vec![sp(Stmt::Let {
         name: "r".to_string(),
-        sigil: Sigil::Immutable,
+        sigil: Sigil::Linear,
         typ: None,
-        value: sp(Expr::Constructor(
-            "Open".to_string(),
-            vec![(
-                None,
-                sp(Expr::Array(vec![
-                    sp(Expr::Literal(Literal::Int(1))),
-                    sp(Expr::Literal(Literal::Int(2))),
-                    sp(Expr::Literal(Literal::Int(3))),
-                ])),
-            )],
-        )),
+        value: sp(Expr::Record(vec![
+            ("id".to_string(), sp(Expr::Literal(Literal::Int(1)))),
+        ])),
     })];
-    if drop_resource {
-        body.push(sp(Stmt::Drop(sp(Expr::Variable(
-            "r".to_string(),
-            Sigil::Immutable,
-        )))));
+    if consume_resource {
+        body.push(sp(Stmt::Expr(sp(Expr::Match {
+            target: Box::new(sp(Expr::Variable("r".to_string(), Sigil::Linear))),
+            cases: vec![MatchCase {
+                pattern: sp(Pattern::Wildcard),
+                body: vec![],
+            }],
+        }))));
     }
     body.push(sp(Stmt::Return(sp(Expr::Literal(Literal::Unit)))));
 
     Program {
         definitions: vec![
-            sp(TopLevel::Enum(EnumDef {
-                name: "Resource".to_string(),
-                is_public: false,
-                type_params: vec![],
-                variants: vec![
-                    VariantDef {
-                        name: "Open".to_string(),
-                        fields: vec![(None, Type::Array(Box::new(Type::I64)))],
-                    },
-                    VariantDef {
-                        name: "Closed".to_string(),
-                        fields: vec![],
-                    },
-                ],
-            })),
             sp(TopLevel::Let(GlobalLet {
                 name: "main".to_string(),
                 is_public: false,
@@ -68,6 +55,7 @@ fn resource_program(drop_resource: bool) -> Program {
                     type_params: vec![],
                     params: vec![],
                     ret_type: Type::Unit,
+                    requires: Type::Row(vec![], None),
                     effects: Type::Row(vec![], None),
                     body,
                 }),
@@ -80,7 +68,6 @@ fn resource_program(drop_resource: bool) -> Program {
 fn test_linear_basic_pass() {
     let src = r#"
     let consume = fn (x: %i64) -> unit do
-        drop x
         return ()
     endfn
 
@@ -100,13 +87,11 @@ fn test_linear_basic_pass() {
 fn test_linear_param_accepts_plain_value_via_weakening() {
     let src = r#"
     let consume = fn (x: %i64) -> i64 do
-        drop x
         return 1
     endfn
 
     let main = fn () -> unit do
         let y = consume(x: 10)
-        drop y
         return ()
     endfn
     "#;
@@ -114,65 +99,64 @@ fn test_linear_param_accepts_plain_value_via_weakening() {
 }
 
 #[test]
-fn test_linear_wildcard_fail() {
+fn test_linear_primitive_auto_drop_pass() {
     let src = r#"
     let main = fn () -> unit do
         let %x = 10
-        let _ = %x // Consumes %x, but binds to _, which cannot be used
-        // _ is linear, so it must be used, but cannot be referred to.
-        // Thus, it should fail at end of scope.
+        // No explicit consumption needed for primitives
         return ()
     endfn
     "#;
-    assert!(
-        check(src).is_err(),
-        "Should fail because _ (bound to linear) is unused"
-    );
+    assert!(check(src).is_ok());
 }
 
-// test_linear_in_ref_fail: covered by prop_linear_cannot_be_stored_in_ref
+#[test]
+fn test_linear_primitive_wildcard_pass() {
+    let src = r#"
+    let main = fn () -> unit do
+        let %x = 10
+        let _ = %x // Allowed for primitives
+        return ()
+    endfn
+    "#;
+    assert!(check(src).is_ok());
+}
 
 #[test]
-fn test_linear_match_wildcard_fail() {
+fn test_linear_primitive_match_wildcard_pass() {
     let src = r#"
     let main = fn () -> unit do
         let %x = 10
         match %x do
-            case _ -> return () // Implicitly drops %x
+            case _ -> return () // Allowed for primitives
         endmatch
     endfn
     "#;
-    assert!(
-        check(src).is_err(),
-        "Should fail because wildcard match drops linear value"
-    );
+    assert!(check(src).is_ok());
 }
 
 #[test]
 fn test_linear_borrow_basic() {
     let src = r#"
-    let peek = fn (x: &i64) -> unit effect { IO } do
+    import { print } from nxlib/stdlib/stdio.nx
+    import { i64_to_string } from nxlib/stdlib/string.nx
+    let peek = fn (x: &i64) -> unit effect { Console } do
         let msg = i64_to_string(val: x)
-        perform print(val: msg)
+        print(val: msg)
         return ()
     endfn
 
-    let main = fn () -> unit effect { IO } do
+    let main = fn () -> unit effect { Console } do
         let %x = 10
-        let x_ref1 = borrow %x
-        perform peek(x: x_ref1)
-        let x_ref2 = borrow %x
-        perform peek(x: x_ref2) // Borrow again
-        drop %x    // Finally consume
+        let x_ref1 = &%x
+        peek(x: x_ref1)
+        let x_ref2 = &%x
+        peek(x: x_ref2) // Borrow again
         return ()
     endfn
     "#;
     assert!(check(src).is_ok());
 }
-
-// test_linear_unused_fail: covered by prop_linear_unused_is_error
-// test_linear_double_use_fail: covered by prop_linear_double_consume_is_error
-// test_linear_branch_mismatch: covered by prop_linear_branch_mismatch_is_error
 
 #[test]
 fn test_generic_drop_accepts_non_linear_primitives() {
@@ -181,10 +165,6 @@ fn test_generic_drop_accepts_non_linear_primitives() {
         let x: i32 = 1
         let y: f64 = 2.0
         let s = [=[hello]=]
-        drop x
-        drop y
-        drop s
-        drop true
         return ()
     endfn
     "#;
@@ -200,8 +180,6 @@ fn test_generic_drop_user_defined_linear_consumes_once() {
 
     let main = fn () -> unit do
         let %t: Token = { id: 1 }
-        drop %t
-        drop %t
         return ()
     endfn
     "#;
@@ -215,7 +193,82 @@ fn test_enum_constructor_with_linear_arg_requires_consumption() {
 }
 
 #[test]
-fn test_enum_constructor_with_linear_arg_can_be_dropped_once() {
+fn test_enum_constructor_with_linear_arg_can_be_consumed_once() {
     let p = resource_program(true);
     assert!(check_program(&p).is_ok());
+}
+
+#[test]
+fn test_linear_primitive_emits_unnecessary_warning() {
+    let warnings = check_warnings(
+        r#"
+let main = fn () -> unit do
+    let %x = 42
+    return ()
+endfn
+"#,
+    );
+    assert!(
+        warnings.iter().any(|w| w.contains("unnecessary")),
+        "expected warning about unnecessary linear sigil on primitive, got: {:?}",
+        warnings,
+    );
+}
+
+#[test]
+fn test_linear_record_does_not_emit_unnecessary_warning() {
+    let warnings = check_warnings(
+        r#"
+    let main = fn () -> unit do
+        let %r = { id: 1 }
+        match %r do case _ -> () endmatch
+        return ()
+    endfn
+"#,
+    );
+    assert!(
+        !warnings.iter().any(|w| w.contains("unnecessary")),
+        "unexpected warning for linear record: {:?}",
+        warnings,
+    );
+}
+
+#[test]
+fn test_adt_with_linear_arg_is_promoted_to_linear() {
+    // An ADT that wraps a linear value should itself be linear,
+    // even without explicit % on the outer binding.
+    let src = r#"
+    type Wrapper<T> = Wrap(val: T)
+
+    let main = fn () -> unit do
+        let %r = { id: 1 }
+        let w = Wrap(val: %r)
+        return ()
+    endfn
+    "#;
+    assert!(
+        check(src).is_err(),
+        "Expected error: ADT wrapping linear value should require consumption"
+    );
+}
+
+#[test]
+fn test_adt_with_linear_arg_consumed_once_passes() {
+    let src = r#"
+    type Wrapper<T> = Wrap(val: T)
+
+    let main = fn () -> unit do
+        let %r = { id: 1 }
+        let w = Wrap(val: %r)
+        match w do
+            case Wrap(val: inner) ->
+                match inner do case { id: _ } -> () endmatch
+        endmatch
+        return ()
+    endfn
+    "#;
+    match check(src) {
+        Ok(_) => (),
+        Err(e) => panic!("Expected OK but got: {}", e),
+    }
 }

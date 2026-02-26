@@ -1,58 +1,43 @@
-import external [=[nxlib/stdlib/fs.wasm]=]
+/** fs: File system operations gated by the Fs port (capability).
+  *
+  * All operations — stateless path-level and stateful fd-based — are defined
+  * in `port Fs` and dispatched via handler.
+  * Use `inject default_fs do ... endinject` for real filesystem access,
+  * or inject a mock handler for testing.
+  *
+  * Stateful fd operations use the consume-and-return pattern:
+  *   fn read(handle: %Handle) -> { content: string, handle: %Handle }
+  * The caller destructures the result to get the new handle.
+  */
 
-pub type Closer = Closer(path: string, mode: i64)
+import external nxlib/stdlib/fs.wasm
+import { string_length, string_substring, string_index_of } from nxlib/stdlib/string.nx
 
-pub let read_to_string = external [=[read_to_string]=] : (path: string) -> string effect { IO }
-pub let write_string = external [=[write_string]=] : (path: string, content: string) -> bool effect { IO }
-pub let append_string = external [=[append_string]=] : (path: string, content: string) -> bool effect { IO }
-pub let exists = external [=[exists]=] : (path: string) -> bool effect { IO }
-pub let remove_file = external [=[remove_file]=] : (path: string) -> bool effect { IO }
-pub let create_dir_all = external [=[create_dir_all]=] : (path: string) -> bool effect { IO }
-let __nx_read_dir = external [=[read_dir]=] : (path: string) -> string effect { IO }
-let __nx_string_length = external [=[__nx_string_length]=] : (s: string) -> i64
-let __nx_string_substring = external [=[__nx_string_substring]=] : (s: string, start: i64, len: i64) -> string
-let __nx_string_index_of = external [=[__nx_string_index_of]=] : (s: string, sub: string) -> i64
+/** Linear file handle backed by a real file descriptor.
+ * Created by open_*, consumed by close.
+ */
+pub type Handle = Handle(id: i64)
 
-pub let open_read = fn (path: string) -> %Closer effect { IO, Exn } do
-  let ok = perform exists(path: path)
-  if ok then
-    let c = Closer(path: path, mode: 0)
-    let %lc = c
-    return %lc
-  else
-    let msg = [=[fs.open_read: path not found: ]=] ++ path
-    raise RuntimeError(val: msg)
-  endif
-endfn
+// --- Raw FFI (internal, no require) ---
 
-pub let open_write = fn (path: string) -> %Closer effect { IO, Exn } do
-  let ok = perform write_string(path: path, content: [=[]=])
-  if ok then
-    let c = Closer(path: path, mode: 1)
-    let %lc = c
-    return %lc
-  else
-    let msg = [=[fs.open_write: cannot open path: ]=] ++ path
-    raise RuntimeError(val: msg)
-  endif
-endfn
+external __nx_exists = [=[__nx_exists]=] : (path: string) -> bool
+external __nx_is_file = [=[__nx_is_file]=] : (path: string) -> bool
+external __nx_read_to_string = [=[__nx_read_to_string]=] : (path: string) -> string
+external __nx_write_string = [=[__nx_write_string]=] : (path: string, content: string) -> bool
+external __nx_append_string = [=[__nx_append_string]=] : (path: string, content: string) -> bool
+external __nx_remove_file = [=[__nx_remove_file]=] : (path: string) -> bool
+external __nx_create_dir_all = [=[__nx_create_dir_all]=] : (path: string) -> bool
+external __nx_read_dir = [=[__nx_read_dir]=] : (path: string) -> string
 
-pub let open_append = fn (path: string) -> %Closer effect { IO, Exn } do
-  let ok = perform append_string(path: path, content: [=[]=])
-  if ok then
-    let c = Closer(path: path, mode: 2)
-    let %lc = c
-    return %lc
-  else
-    let msg = [=[fs.open_append: cannot open path: ]=] ++ path
-    raise RuntimeError(val: msg)
-  endif
-endfn
+external __nx_fd_open_read = [=[__nx_fd_open_read]=] : (path: string) -> i64
+external __nx_fd_open_write = [=[__nx_fd_open_write]=] : (path: string) -> i64
+external __nx_fd_open_append = [=[__nx_fd_open_append]=] : (path: string) -> i64
+external __nx_fd_close = [=[__nx_fd_close]=] : (fd: i64) -> bool
+external __nx_fd_read = [=[__nx_fd_read]=] : (fd: i64) -> string
+external __nx_fd_write = [=[__nx_fd_write]=] : (fd: i64, content: string) -> bool
+external __nx_fd_path = [=[__nx_fd_path]=] : (fd: i64) -> string
 
-pub let close = fn (closer: %Closer) -> unit do
-  drop closer
-  return ()
-endfn
+// --- Helpers (pure, no require) ---
 
 let reverse_go = fn <T>(xs: List<T>, acc: List<T>) -> List<T> do
   match xs do
@@ -69,22 +54,22 @@ let reverse = fn <T>(xs: List<T>) -> List<T> do
 endfn
 
 let split_lines_rev = fn (s: string, acc: List<string>) -> List<string> do
-  let idx = __nx_string_index_of(s: s, sub: [=[\n]=])
+  let idx = string_index_of(s: s, sub: [=[\n]=])
   if idx < 0 then
     let next = Cons(v: s, rest: acc)
     return next
   else
-    let head = __nx_string_substring(s: s, start: 0, len: idx)
+    let head = string_substring(s: s, start: 0, len: idx)
     let tail_start = idx + 1
-    let tail_len = __nx_string_length(s: s) - tail_start
-    let tail = __nx_string_substring(s: s, start: tail_start, len: tail_len)
+    let tail_len = string_length(s: s) - tail_start
+    let tail = string_substring(s: s, start: tail_start, len: tail_len)
     let next = Cons(v: head, rest: acc)
     return split_lines_rev(s: tail, acc: next)
   endif
 endfn
 
 let decode_entries = fn (raw: string) -> List<string> do
-  if __nx_string_length(s: raw) == 0 then
+  if string_length(s: raw) == 0 then
     return Nil()
   else
     let empty = Nil()
@@ -93,7 +78,182 @@ let decode_entries = fn (raw: string) -> List<string> do
   endif
 endfn
 
-pub let read_dir = fn (path: string) -> List<string> effect { IO } do
-  let raw = perform __nx_read_dir(path: path)
-  return decode_entries(raw: raw)
+let close_handles = fn (handles: List<Handle>) -> unit do
+  match handles do
+    case Nil() -> return ()
+    case Cons(v: h, rest: rest) ->
+      match h do case Handle(id: id) ->
+        let _ = __nx_fd_close(fd: id)
+        return close_handles(handles: rest)
+      endmatch
+  endmatch
 endfn
+
+let open_entries_rev = fn (names: List<string>, dir: string, acc: List<Handle>) -> List<Handle> do
+  match names do
+    case Nil() -> return acc
+    case Cons(v: name, rest: rest) ->
+      let full = dir ++ [=[/]=] ++ name
+      let is_file = __nx_is_file(path: full)
+      if is_file then
+        let fd = __nx_fd_open_read(path: full)
+        if fd < 0 then
+          return open_entries_rev(names: rest, dir: dir, acc: acc)
+        else
+          let h = Handle(id: fd)
+          let next = Cons(v: h, rest: acc)
+          return open_entries_rev(names: rest, dir: dir, acc: next)
+        endif
+      else
+        return open_entries_rev(names: rest, dir: dir, acc: acc)
+      endif
+  endmatch
+endfn
+
+// --- Port definition: stateless + stateful operations ---
+
+pub port Fs do
+  fn exists(path: string) -> bool
+  fn read_to_string(path: string) -> string
+  fn write_string(path: string, content: string) -> unit effect { Exn }
+  fn append_string(path: string, content: string) -> unit effect { Exn }
+  fn remove_file(path: string) -> unit effect { Exn }
+  fn create_dir_all(path: string) -> unit effect { Exn }
+  fn read_dir(path: string) -> List<Handle> effect { Exn }
+  fn open_read(path: string) -> %Handle effect { Exn }
+  fn open_write(path: string) -> %Handle effect { Exn }
+  fn open_append(path: string) -> %Handle effect { Exn }
+  fn read(handle: %Handle) -> { content: string, handle: %Handle }
+  fn fd_write(handle: %Handle, content: string) -> { ok: bool, handle: %Handle }
+  fn fd_path(handle: %Handle) -> { path: string, handle: %Handle }
+  fn close(handle: %Handle) -> unit
+endport
+
+/// Default Fs handler — real filesystem access via WASM FFI.
+pub let default_fs = handler Fs do
+  fn exists(path: string) -> bool do
+    return __nx_exists(path: path)
+  endfn
+
+  fn read_to_string(path: string) -> string do
+    return __nx_read_to_string(path: path)
+  endfn
+
+  fn write_string(path: string, content: string) -> unit effect { Exn } do
+    let ok = __nx_write_string(path: path, content: content)
+    if ok then
+      return ()
+    else
+      raise RuntimeError(val: [=[fs.write_string: failed: ]=] ++ path)
+    endif
+  endfn
+
+  fn append_string(path: string, content: string) -> unit effect { Exn } do
+    let ok = __nx_append_string(path: path, content: content)
+    if ok then
+      return ()
+    else
+      raise RuntimeError(val: [=[fs.append_string: failed: ]=] ++ path)
+    endif
+  endfn
+
+  fn remove_file(path: string) -> unit effect { Exn } do
+    let ok = __nx_remove_file(path: path)
+    if ok then
+      return ()
+    else
+      raise RuntimeError(val: [=[fs.remove_file: failed: ]=] ++ path)
+    endif
+  endfn
+
+  fn create_dir_all(path: string) -> unit effect { Exn } do
+    let ok = __nx_create_dir_all(path: path)
+    if ok then
+      return ()
+    else
+      raise RuntimeError(val: [=[fs.create_dir_all: failed: ]=] ++ path)
+    endif
+  endfn
+
+  fn read_dir(path: string) -> List<Handle> effect { Exn } do
+    let exists = __nx_exists(path: path)
+    if exists then
+      let raw = __nx_read_dir(path: path)
+      let names = decode_entries(raw: raw)
+      let empty = Nil()
+      let rev = open_entries_rev(names: names, dir: path, acc: empty)
+      return reverse(xs: rev)
+    else
+      raise RuntimeError(val: [=[fs.read_dir: path not found: ]=] ++ path)
+    endif
+  endfn
+
+  fn open_read(path: string) -> %Handle effect { Exn } do
+    let fd = __nx_fd_open_read(path: path)
+    if fd < 0 then
+      raise RuntimeError(val: [=[fs.open_read: path not found: ]=] ++ path)
+    else
+      let h = Handle(id: fd)
+      let %lh = h
+      return %lh
+    endif
+  endfn
+
+  fn open_write(path: string) -> %Handle effect { Exn } do
+    let fd = __nx_fd_open_write(path: path)
+    if fd < 0 then
+      let msg = [=[fs.open_write: cannot open path: ]=] ++ path
+      raise RuntimeError(val: msg)
+    else
+      let h = Handle(id: fd)
+      let %lh = h
+      return %lh
+    endif
+  endfn
+
+  fn open_append(path: string) -> %Handle effect { Exn } do
+    let fd = __nx_fd_open_append(path: path)
+    if fd < 0 then
+      let msg = [=[fs.open_append: cannot open path: ]=] ++ path
+      raise RuntimeError(val: msg)
+    else
+      let h = Handle(id: fd)
+      let %lh = h
+      return %lh
+    endif
+  endfn
+
+  fn read(handle: %Handle) -> { content: string, handle: %Handle } do
+    match handle do case Handle(id: id) ->
+      let c = __nx_fd_read(fd: id)
+      let h = Handle(id: id)
+      let %lh = h
+      return { content: c, handle: %lh }
+    endmatch
+  endfn
+
+  fn fd_write(handle: %Handle, content: string) -> { ok: bool, handle: %Handle } do
+    match handle do case Handle(id: id) ->
+      let ok = __nx_fd_write(fd: id, content: content)
+      let h = Handle(id: id)
+      let %lh = h
+      return { ok: ok, handle: %lh }
+    endmatch
+  endfn
+
+  fn fd_path(handle: %Handle) -> { path: string, handle: %Handle } do
+    match handle do case Handle(id: id) ->
+      let p = __nx_fd_path(fd: id)
+      let h = Handle(id: id)
+      let %lh = h
+      return { path: p, handle: %lh }
+    endmatch
+  endfn
+
+  fn close(handle: %Handle) -> unit do
+    match handle do case Handle(id: id) ->
+      let _ = __nx_fd_close(fd: id)
+      return ()
+    endmatch
+  endfn
+endhandler

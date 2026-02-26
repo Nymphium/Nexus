@@ -14,19 +14,22 @@ fn run(src: &str) -> Result<Value, String> {
 #[test]
 fn test_port_basic() {
     let src = r#"
+    import { print } from nxlib/stdlib/stdio.nx
     port Logger do
-      fn log(msg: string) -> unit effect { IO }
+      fn log(msg: string) -> unit effect { Console }
     endport
 
-    handler StdoutLogger for Logger do
-      fn log(msg: string) -> unit effect { IO } do
-        perform print(val: msg)
-        return ()
-      endfn
-    endhandler
+    let main = fn () -> unit effect { Console } do
+      let stdout_logger = handler Logger do
+        fn log(msg: string) -> unit effect { Console } do
+          print(val: msg)
+          return ()
+        endfn
+      endhandler
 
-    let main = fn () -> unit effect { IO } do
-      perform Logger.log(msg: [=[test message]=])
+      inject stdout_logger do
+        Logger.log(msg: [=[test message]=])
+      endinject
       return ()
     endfn
     "#;
@@ -37,26 +40,30 @@ fn test_port_basic() {
 #[test]
 fn test_port_redefinition_wins() {
     let src = r#"
+    import { print } from nxlib/stdlib/stdio.nx
+    import { i64_to_string } from nxlib/stdlib/string.nx
     port Adder do
       fn add_one(n: i64) -> i64
     endport
 
-    handler NormalAdder for Adder do
-      fn add_one(n: i64) -> i64 do
-        return n + 1
-      endfn
-    endhandler
+    let main = fn () -> unit effect { Console } do
+      let normal_adder = handler Adder do
+        fn add_one(n: i64) -> i64 do
+          return n + 1
+        endfn
+      endhandler
 
-    handler WeirdAdder for Adder do
-      fn add_one(n: i64) -> i64 do
-        return n + 2
-      endfn
-    endhandler
+      let weird_adder = handler Adder do
+        fn add_one(n: i64) -> i64 do
+          return n + 2
+        endfn
+      endhandler
 
-    let main = fn () -> unit effect { IO } do
-      let result = Adder.add_one(n: 10)
-      let msg = i64_to_string(val: result)
-      perform print(val: msg)
+      inject weird_adder do
+        let result = Adder.add_one(n: 10)
+        let msg = i64_to_string(val: result)
+        print(val: msg)
+      endinject
       return ()
     endfn
     "#;

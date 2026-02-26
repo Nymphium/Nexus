@@ -10,20 +10,20 @@ fn check(src: &str) -> Result<(), String> {
 
 #[test]
 fn test_effect_propagation() {
-    // f has IO effect. g calls f, so g must have IO effect.
+    // f has Console effect. g calls f, so g must have Console effect.
     let src = r#"
-    type IO = {} // Dummy type for effect
+    type Console = {} // Dummy type for effect
 
-    let f = fn () -> unit effect { IO } do
+    let f = fn () -> unit effect { Console } do
         return ()
     endfn
 
-    let g = fn () -> unit effect { IO } do
-        perform f()
+    let g = fn () -> unit effect { Console } do
+        f()
     endfn
 
-    let main = fn () -> unit effect { IO } do
-        perform g()
+    let main = fn () -> unit effect { Console } do
+        g()
     endfn
     "#;
     assert!(check(src).is_ok());
@@ -32,14 +32,13 @@ fn test_effect_propagation() {
 #[test]
 fn test_call_pure_from_impure() {
     let src = r#"
-    type IO = {}
+    type Console = {}
     let pure_fn = fn () -> unit do return () endfn
-    let impure_fn = fn () -> unit effect { IO } do
-        pure_fn() // Should be allowed without perform
-        return ()
+    let impure_fn = fn () -> unit effect { Console } do
+        pure_fn() // Should be allowed without return ()
     endfn
-    let main = fn () -> unit effect { IO } do
-        perform impure_fn()
+    let main = fn () -> unit effect { Console } do
+        impure_fn()
         return ()
     endfn
     "#;
@@ -49,6 +48,8 @@ fn test_call_pure_from_impure() {
 #[test]
 fn test_try_catch_removes_exn() {
     let src = r#"
+    import { print } from nxlib/stdlib/stdio.nx
+    import { i64_to_string } from nxlib/stdlib/string.nx
     exception Oops(string)
 
     let risky = fn () -> unit effect { Exn } do
@@ -56,16 +57,16 @@ fn test_try_catch_removes_exn() {
         return ()
     endfn
 
-    let main = fn () -> unit effect { IO } do
+    let main = fn () -> unit effect { Console } do
         try
-            perform risky()
+            risky()
         catch e ->
             match e do
-                case Oops(msg) -> perform print(val: msg)
-                case RuntimeError(msg) -> perform print(val: msg)
+                case Oops(msg) -> print(val: msg)
+                case RuntimeError(msg) -> print(val: msg)
                 case InvalidIndex(i) ->
                     let m = i64_to_string(val: i)
-                    perform print(val: m)
+                    print(val: m)
             endmatch
         endtry
         return ()
@@ -90,7 +91,7 @@ fn test_raise_requires_exn() {
 #[test]
 fn test_main_cannot_declare_exn_effect() {
     let src = r#"
-    let main = fn () -> unit effect { IO, Exn } do
+    let main = fn () -> unit effect { Console, Exn } do
         return ()
     endfn
     "#;
@@ -115,31 +116,31 @@ fn test_main_effect_net_only_is_rejected() {
     endfn
     "#;
     let err = check(src).expect_err("main with { Net } must fail");
-    assert!(err.contains("main function effects must be one of"));
+    assert!(err.contains("main function effects must be {}, or { Console }"));
 }
 
 #[test]
-fn test_main_effect_io_net_is_allowed() {
+fn test_main_require_net_is_rejected() {
     let src = r#"
-    let main = fn () -> unit effect { IO, Net } do
+    let main = fn () -> unit require { Net } effect { Console } do
         return ()
     endfn
     "#;
-    assert!(check(src).is_ok());
+    assert!(check(src).is_err(), "main with require {{ Net }} should be rejected");
 }
 
 #[test]
 fn test_effect_mismatch() {
-    // g is declared pure but calls f (IO). Should fail.
+    // g is declared pure but calls f (Console). Should fail.
     let src = r#"
-    type IO = {}
+    type Console = {}
 
-    let f = fn () -> unit effect { IO } do
+    let f = fn () -> unit effect { Console } do
         return ()
     endfn
 
     let g = fn () -> unit effect {} do // Pure
-        perform f()
+        f()
     endfn
 
     let main = fn () -> unit do
@@ -155,17 +156,17 @@ fn test_effect_polymorphism() {
     // Calling it with pure function -> result is pure.
     // Calling it with impure function -> result is impure.
     let src = r#"
-    type IO = {}
+    type Console = {}
 
     let apply = fn <E>(f: () -> unit effect E) -> unit effect E do
-        perform f()
+        f()
     endfn
 
     let pure_fn = fn () -> unit effect {} do
         return ()
     endfn
 
-    let impure_fn = fn () -> unit effect { IO } do
+    let impure_fn = fn () -> unit effect { Console } do
         return ()
     endfn
 
@@ -173,8 +174,8 @@ fn test_effect_polymorphism() {
         apply(f: pure_fn)
     endfn
 
-    let test_impure = fn () -> unit effect { IO } do
-        perform apply(f: impure_fn)
+    let test_impure = fn () -> unit effect { Console } do
+        apply(f: impure_fn)
     endfn
 
     let main = fn () -> unit do
@@ -188,18 +189,18 @@ fn test_effect_polymorphism() {
 fn test_effect_polymorphism_mismatch() {
     // Calling apply with impure function in pure context.
     let src = r#"
-    type IO = {}
+    type Console = {}
 
     let apply = fn <E>(f: () -> unit effect E) -> unit effect E do
-        perform f()
+        f()
     endfn
 
-    let impure_fn = fn () -> unit effect { IO } do
+    let impure_fn = fn () -> unit effect { Console } do
         return ()
     endfn
 
     let test_fail = fn () -> unit effect {} do // Declared Pure
-        perform apply(f: impure_fn)     // Call is Impure (IO)
+        apply(f: impure_fn)     // Call is Impure (Console)
     endfn
 
     let main = fn () -> unit do
@@ -208,6 +209,6 @@ fn test_effect_polymorphism_mismatch() {
     "#;
     assert!(
         check(src).is_err(),
-        "Should fail because apply instantiates E=IO, so call becomes IO"
+        "Should fail because apply instantiates E=Console, so call becomes Console"
     );
 }

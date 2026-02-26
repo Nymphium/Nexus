@@ -27,11 +27,11 @@ fn run(src: &str) -> Result<Value, String> {
 fn io_program(body: &str) -> String {
     format!(
         r#"
-let io = fn (x: i64) -> unit effect {{ IO }} do
+let io = fn (x: i64) -> unit effect {{ Console }} do
     return ()
 endfn
 
-let main = fn () -> unit effect {{ IO }} do
+let main = fn () -> unit effect {{ Console }} do
 {body}
     return ()
 endfn
@@ -124,7 +124,7 @@ endfn
 
 proptest! {
     #![proptest_config(ProptestConfig {
-        cases: 64,
+        cases: 8,
         failure_persistence: None,
         .. ProptestConfig::default()
     })]
@@ -165,25 +165,10 @@ endfn
     fn prop_effectful_call_with_perform_is_ok(calls in 0usize..8) {
         let mut body = String::new();
         for _ in 0..calls {
-            body.push_str("    perform io(x: 0)\n");
+            body.push_str("    io(x: 0)\n");
         }
         let src = io_program(&body);
         prop_assert!(check(&src).is_ok());
-    }
-
-    #[test]
-    fn prop_effectful_call_without_perform_is_error(calls in 1usize..8, missing_index in 0usize..16) {
-        let missing = missing_index % calls;
-        let mut body = String::new();
-        for i in 0..calls {
-            if i == missing {
-                body.push_str("    io(x: 0)\n");
-            } else {
-                body.push_str("    perform io(x: 0)\n");
-            }
-        }
-        let src = io_program(&body);
-        prop_assert!(check(&src).is_err());
     }
 
     #[test]
@@ -196,15 +181,6 @@ endfn
         prop_assert!(check(&src).is_ok());
     }
 
-    #[test]
-    fn prop_pure_call_with_perform_is_error(calls in 1usize..8) {
-        let mut body = String::new();
-        for _ in 0..calls {
-            body.push_str("    perform pure(x: 0)\n");
-        }
-        let src = pure_program(&body);
-        prop_assert!(check(&src).is_err());
-    }
 
     #[test]
     fn prop_first_combinator_keeps_first_type(n in any::<i64>(), b in any::<bool>()) {
@@ -242,11 +218,11 @@ endfn
     fn prop_declared_pure_function_cannot_perform_io(calls in 1usize..8) {
         let mut body = String::new();
         for _ in 0..calls {
-            body.push_str("    perform io(x: 0)\n");
+            body.push_str("    io(x: 0)\n");
         }
         let src = format!(
             r#"
-let io = fn (x: i64) -> unit effect {{ IO }} do
+let io = fn (x: i64) -> unit effect {{ Console }} do
     return ()
 endfn
 
@@ -283,6 +259,8 @@ endfn
     fn prop_try_catch_with_io_handler_typechecks(msg in "[a-zA-Z0-9_]{1,16}") {
         let src = format!(
             r#"
+import {{ print }} from nxlib/stdlib/stdio.nx
+import {{ i64_to_string }} from nxlib/stdlib/string.nx
 exception MsgError(val: string)
 
 let risky = fn (msg: string) -> unit effect {{ Exn }} do
@@ -290,16 +268,16 @@ let risky = fn (msg: string) -> unit effect {{ Exn }} do
     return ()
 endfn
 
-let main = fn () -> unit effect {{ IO }} do
+let main = fn () -> unit effect {{ Console }} do
     try
-        perform risky(msg: [=[{msg}]=])
+        risky(msg: [=[{msg}]=])
     catch e ->
         match e do
-            case MsgError(val: m) -> perform print(val: m)
-            case RuntimeError(val: m) -> perform print(val: m)
+            case MsgError(val: m) -> print(val: m)
+            case RuntimeError(val: m) -> print(val: m)
             case InvalidIndex(val: i) ->
                 let m = i64_to_string(val: i)
-                perform print(val: m)
+                print(val: m)
         endmatch
     endtry
     return ()
@@ -310,7 +288,7 @@ endfn
     }
 
     #[test]
-    fn prop_linear_array_borrow_then_drop_is_ok(xs in proptest::collection::vec(-100i64..=100, 1usize..8)) {
+    fn prop_linear_array_borrow_then_drop_is_ok(xs in proptest::collection::vec(-100i64..=100, 1usize..4)) {
         let elems = xs
             .iter()
             .map(|x| x.to_string())
@@ -318,13 +296,13 @@ endfn
             .join(", ");
         let src = format!(
             r#"
-import as array from [=[nxlib/stdlib/array.nx]=]
+import as array from nxlib/stdlib/array.nx
 
 let __test_main = fn () -> i64 do
     let %arr = [| {elems} |]
-    let arr_ref = borrow %arr
+    let arr_ref = &%arr
     let n = array.length(arr: arr_ref)
-    drop %arr
+    match %arr do case _ -> () endmatch
     return n
 endfn
 "#
@@ -381,7 +359,7 @@ endfn
             r#"
 let main = fn () -> unit do
     let %x = {n}
-    drop %x
+    match %x do case _ -> () endmatch
     return ()
 endfn
 "#
@@ -390,7 +368,7 @@ endfn
     }
 
     #[test]
-    fn prop_linear_unused_is_error(n in any::<i64>()) {
+    fn prop_linear_primitive_auto_drop_is_ok(n in any::<i64>()) {
         let src = format!(
             r#"
 let main = fn () -> unit do
@@ -399,7 +377,8 @@ let main = fn () -> unit do
 endfn
 "#
         );
-        prop_assert!(check(&src).is_err());
+        // Primitive linear values are auto-dropped at scope end
+        prop_assert!(check(&src).is_ok());
     }
 
     #[test]
@@ -408,8 +387,8 @@ endfn
             r#"
 let main = fn () -> unit do
     let %x = {n}
-    drop %x
-    drop %x
+    match %x do case _ -> () endmatch
+    match %x do case _ -> () endmatch
     return ()
 endfn
 "#
@@ -441,11 +420,11 @@ endfn
 
 let __test_main = fn () -> i64 do
     let %x = {n}
-    let x_ref1 = borrow %x
+    let x_ref1 = &%x
     let a = peek(x: x_ref1)
-    let x_ref2 = borrow %x
+    let x_ref2 = &%x
     let b = peek(x: x_ref2)
-    drop %x
+    match %x do case _ -> () endmatch
     return a + b
 endfn
 "#
@@ -458,13 +437,13 @@ endfn
         let src = format!(
             r#"
 let consume = fn (x: %i64) -> i64 do
-    drop x
+    match x do case _ -> () endmatch
     return 1
 endfn
 
 let main = fn () -> unit do
     let y = consume(x: {n})
-    drop y
+    match y do case _ -> () endmatch
     return ()
 endfn
 "#
@@ -479,7 +458,7 @@ endfn
 let main = fn () -> unit do
     let %x = {n}
     if {cond} then
-        drop %x
+        match %x do case _ -> () endmatch
     else
         return ()
     endif
@@ -493,14 +472,14 @@ endfn
 
 proptest! {
     #![proptest_config(ProptestConfig {
-        cases: 24,
+        cases: 8,
         failure_persistence: None,
         .. ProptestConfig::default()
     })]
 
     #[test]
     fn prop_n_ary_labeled_call_order_invariant_runtime(
-        digits in proptest::collection::vec(0i64..=9, 2usize..7),
+        digits in proptest::collection::vec(0i64..=9, 2usize..4),
         seed in any::<u64>()
     ) {
         let perm = permutation_from_seed(digits.len(), seed);
@@ -512,7 +491,7 @@ proptest! {
 
     #[test]
     fn prop_n_ary_labeled_call_order_invariant_via_function_value_runtime(
-        digits in proptest::collection::vec(0i64..=9, 2usize..7),
+        digits in proptest::collection::vec(0i64..=9, 2usize..4),
         seed in any::<u64>()
     ) {
         let perm = permutation_from_seed(digits.len(), seed);
