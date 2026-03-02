@@ -1,11 +1,13 @@
-use chumsky::Parser;
+#![allow(dead_code)]
+
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::Path;
 
+use crate::constants::ENTRYPOINT;
 use crate::lang::ast::{
-    EnumDef, ExceptionDef, Expr, Function, Import, Literal, MatchCase, Pattern, Program, Sigil,
-    Span, Spanned, Stmt, TopLevel, Type,
+    BinaryOp, EnumDef, ExceptionDef, Expr, Function, Import, Literal, MatchCase, Pattern, Program,
+    Sigil, Span, Spanned, Stmt, TopLevel, Type,
 };
 use crate::lang::parser;
 use crate::lang::stdlib::load_stdlib_nx_programs;
@@ -13,16 +15,280 @@ use crate::lang::stdlib::load_stdlib_nx_programs;
 use super::anf::{AnfAtom, AnfExpr, AnfExternal, AnfFunction, AnfParam, AnfProgram, AnfStmt};
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct LowerError {
-    pub message: String,
-    pub span: Option<Span>,
+pub enum LowerError {
+    /// E1001: main function not found
+    MissingMain,
+    /// E1002: reachable generic function is not supported
+    GenericFunctionNotSupported { name: String, span: Span },
+    /// E1003: generic handler function is not supported
+    GenericHandlerNotSupported { coeffect: String, method: String, span: Span },
+    /// E1004: cyclic module import detected
+    CyclicImport { path: String, span: Span },
+    /// E1005: failed to read imported module
+    ImportReadError { path: String, detail: String, span: Span },
+    /// E1006: failed to parse imported module
+    ImportParseError { path: String, detail: String, span: Span },
+    /// E1007: external binding not found
+    ExternalBindingNotFound { name: String },
+    /// E1008: external function requires preceding import external
+    ExternalMissingImport { name: String, span: Span },
+    /// E1009: external module file not found
+    ExternalModuleNotFound { module: String, span: Span },
+    /// E1010: imported item not found in module
+    ImportItemNotFound { item: String, path: String, span: Span },
+    /// E1011: unknown variable
+    UnknownVariable { name: String, span: Span },
+    /// E1012: unknown function
+    UnknownFunction { name: String, span: Span },
+    /// E1013: unknown constructor
+    UnknownConstructor { name: String, span: Span },
+    /// E1014: missing constructor field
+    MissingConstructorField { name: String, position: usize, span: Span },
+    /// E1015: field not found
+    FieldNotFound { name: String, span: Span },
+    /// E1016: field access on non-record type
+    FieldAccessOnNonRecord { typ: String, span: Span },
+    /// E1017: unknown type for field access
+    UnknownType { name: String, span: Span },
+    /// E1018: field access requires single-variant type
+    FieldAccessMultiVariant { type_name: String, count: usize, span: Span },
+    /// E1019: lowered handler function not found internally
+    HandlerFunctionNotFound { name: String },
+    /// E1020: handler does not implement required method
+    HandlerMissingMethod { coeffect: String, method: String, span: Span },
+    /// E1021: inject target is not a handler binding
+    InjectNotHandler { name: String, span: Span },
+    /// E1022: call to generic function is not supported
+    GenericCallNotSupported { name: String, span: Span },
+    /// E1023: function may not return a value
+    FunctionMayNotReturn { name: String },
+    /// E1024: if branch must return a value
+    IfBranchMustReturn { span: Span },
+    /// E1025: match case must return a value
+    MatchCaseMustReturn { span: Span },
+    /// E1026: unsupported statement
+    UnsupportedStatement { span: Span },
+    /// E1027: unsupported expression
+    UnsupportedExpression { span: Span },
+    /// E1028: string literal match patterns not supported
+    UnsupportedStringPattern { span: Span },
+    /// E1029: record pattern target is not a record
+    RecordPatternNonRecord { typ: String, span: Span },
+    /// E1030: closed record pattern must list all fields
+    ClosedRecordPatternIncomplete { span: Span },
+    /// E1031: unknown record field in pattern
+    UnknownRecordField { name: String, span: Span },
+    /// E1032: no handler found for port
+    UnresolvedPort { port: String, method: String, span: Span },
+}
+
+impl LowerError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            LowerError::MissingMain => "E1001",
+            LowerError::GenericFunctionNotSupported { .. } => "E1002",
+            LowerError::GenericHandlerNotSupported { .. } => "E1003",
+            LowerError::CyclicImport { .. } => "E1004",
+            LowerError::ImportReadError { .. } => "E1005",
+            LowerError::ImportParseError { .. } => "E1006",
+            LowerError::ExternalBindingNotFound { .. } => "E1007",
+            LowerError::ExternalMissingImport { .. } => "E1008",
+            LowerError::ExternalModuleNotFound { .. } => "E1009",
+            LowerError::ImportItemNotFound { .. } => "E1010",
+            LowerError::UnknownVariable { .. } => "E1011",
+            LowerError::UnknownFunction { .. } => "E1012",
+            LowerError::UnknownConstructor { .. } => "E1013",
+            LowerError::MissingConstructorField { .. } => "E1014",
+            LowerError::FieldNotFound { .. } => "E1015",
+            LowerError::FieldAccessOnNonRecord { .. } => "E1016",
+            LowerError::UnknownType { .. } => "E1017",
+            LowerError::FieldAccessMultiVariant { .. } => "E1018",
+            LowerError::HandlerFunctionNotFound { .. } => "E1019",
+            LowerError::HandlerMissingMethod { .. } => "E1020",
+            LowerError::InjectNotHandler { .. } => "E1021",
+            LowerError::GenericCallNotSupported { .. } => "E1022",
+            LowerError::FunctionMayNotReturn { .. } => "E1023",
+            LowerError::IfBranchMustReturn { .. } => "E1024",
+            LowerError::MatchCaseMustReturn { .. } => "E1025",
+            LowerError::UnsupportedStatement { .. } => "E1026",
+            LowerError::UnsupportedExpression { .. } => "E1027",
+            LowerError::UnsupportedStringPattern { .. } => "E1028",
+            LowerError::RecordPatternNonRecord { .. } => "E1029",
+            LowerError::ClosedRecordPatternIncomplete { .. } => "E1030",
+            LowerError::UnknownRecordField { .. } => "E1031",
+            LowerError::UnresolvedPort { .. } => "E1032",
+        }
+    }
+
+    pub fn span(&self) -> Option<&Span> {
+        match self {
+            LowerError::MissingMain
+            | LowerError::ExternalBindingNotFound { .. }
+            | LowerError::HandlerFunctionNotFound { .. }
+            | LowerError::FunctionMayNotReturn { .. } => None,
+
+            LowerError::GenericFunctionNotSupported { span, .. }
+            | LowerError::GenericHandlerNotSupported { span, .. }
+            | LowerError::CyclicImport { span, .. }
+            | LowerError::ImportReadError { span, .. }
+            | LowerError::ImportParseError { span, .. }
+            | LowerError::ExternalMissingImport { span, .. }
+            | LowerError::ExternalModuleNotFound { span, .. }
+            | LowerError::ImportItemNotFound { span, .. }
+            | LowerError::UnknownVariable { span, .. }
+            | LowerError::UnknownFunction { span, .. }
+            | LowerError::UnknownConstructor { span, .. }
+            | LowerError::MissingConstructorField { span, .. }
+            | LowerError::FieldNotFound { span, .. }
+            | LowerError::FieldAccessOnNonRecord { span, .. }
+            | LowerError::UnknownType { span, .. }
+            | LowerError::FieldAccessMultiVariant { span, .. }
+            | LowerError::HandlerMissingMethod { span, .. }
+            | LowerError::InjectNotHandler { span, .. }
+            | LowerError::GenericCallNotSupported { span, .. }
+            | LowerError::IfBranchMustReturn { span }
+            | LowerError::MatchCaseMustReturn { span }
+            | LowerError::UnsupportedStatement { span }
+            | LowerError::UnsupportedExpression { span }
+            | LowerError::UnsupportedStringPattern { span }
+            | LowerError::RecordPatternNonRecord { span, .. }
+            | LowerError::ClosedRecordPatternIncomplete { span }
+            | LowerError::UnknownRecordField { span, .. }
+            | LowerError::UnresolvedPort { span, .. } => Some(span),
+        }
+    }
 }
 
 impl std::fmt::Display for LowerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &self.span {
-            Some(span) => write!(f, "{} at {:?}", self.message, span),
-            None => write!(f, "{}", self.message),
+        let code = self.code();
+        match self {
+            LowerError::MissingMain => write!(f, "[{}] main function not found", code),
+            LowerError::GenericFunctionNotSupported { name, .. } => write!(
+                f,
+                "[{}] reachable generic function '{}' is not supported in wasm ANF lowering yet",
+                code, name
+            ),
+            LowerError::GenericHandlerNotSupported { coeffect, method, .. } => write!(
+                f,
+                "[{}] generic handler function '{}.{}' is not supported in wasm ANF lowering",
+                code, coeffect, method
+            ),
+            LowerError::CyclicImport { path, .. } => {
+                write!(f, "[{}] cyclic module import detected at '{}'", code, path)
+            }
+            LowerError::ImportReadError { path, detail, .. } => {
+                write!(f, "[{}] Failed to read {}: {}", code, path, detail)
+            }
+            LowerError::ImportParseError { path, detail, .. } => {
+                write!(f, "[{}] Failed to parse {}: {}", code, path, detail)
+            }
+            LowerError::ExternalBindingNotFound { name } => {
+                write!(f, "[{}] external binding '{}' not found", code, name)
+            }
+            LowerError::ExternalMissingImport { name, .. } => write!(
+                f,
+                "[{}] external function '{}' requires a preceding 'import external ...' in the same module",
+                code, name
+            ),
+            LowerError::ExternalModuleNotFound { module, .. } => write!(
+                f,
+                "[{}] external module '{}' not found (build it first, e.g. src/lib/core/build.sh)",
+                code, module
+            ),
+            LowerError::ImportItemNotFound { item, path, .. } => {
+                write!(f, "[{}] Item {} not found in {}", code, item, path)
+            }
+            LowerError::UnknownVariable { name, .. } => {
+                write!(f, "[{}] unknown variable '{}'", code, name)
+            }
+            LowerError::UnknownFunction { name, .. } => {
+                write!(f, "[{}] unknown function '{}'", code, name)
+            }
+            LowerError::UnknownConstructor { name, .. } => {
+                write!(f, "[{}] unknown constructor '{}'", code, name)
+            }
+            LowerError::MissingConstructorField { name, position, .. } => write!(
+                f,
+                "[{}] missing constructor field at position {} for '{}'",
+                code, position, name
+            ),
+            LowerError::FieldNotFound { name, .. } => {
+                write!(f, "[{}] field '{}' not found", code, name)
+            }
+            LowerError::FieldAccessOnNonRecord { typ, .. } => {
+                write!(f, "[{}] cannot access field on type '{}'", code, typ)
+            }
+            LowerError::UnknownType { name, .. } => {
+                write!(f, "[{}] unknown type '{}' for field access", code, name)
+            }
+            LowerError::FieldAccessMultiVariant { type_name, count, .. } => write!(
+                f,
+                "[{}] field access requires single-variant type, '{}' has {}",
+                code, type_name, count
+            ),
+            LowerError::HandlerFunctionNotFound { name } => {
+                write!(f, "[{}] lowered handler function '{}' not found", code, name)
+            }
+            LowerError::HandlerMissingMethod { coeffect, method, .. } => write!(
+                f,
+                "[{}] handler for '{}' does not implement '{}'",
+                code, coeffect, method
+            ),
+            LowerError::InjectNotHandler { name, .. } => write!(
+                f,
+                "[{}] inject expects a top-level handler binding, but '{}' is not one",
+                code, name
+            ),
+            LowerError::GenericCallNotSupported { name, .. } => write!(
+                f,
+                "[{}] call to generic function '{}' is not supported by current wasm ANF lowering",
+                code, name
+            ),
+            LowerError::FunctionMayNotReturn { name } => {
+                write!(f, "[{}] function '{}' may not return a value", code, name)
+            }
+            LowerError::IfBranchMustReturn { .. } => write!(
+                f,
+                "[{}] if branch must return a value in current wasm ANF lowering",
+                code
+            ),
+            LowerError::MatchCaseMustReturn { .. } => write!(
+                f,
+                "[{}] match case must return a value in current wasm ANF lowering",
+                code
+            ),
+            LowerError::UnsupportedStatement { .. } => write!(
+                f,
+                "[{}] statement is not supported by current wasm ANF lowering",
+                code
+            ),
+            LowerError::UnsupportedExpression { .. } => write!(
+                f,
+                "[{}] expression is not supported by current wasm ANF lowering",
+                code
+            ),
+            LowerError::UnsupportedStringPattern { .. } => write!(
+                f,
+                "[{}] string literal match patterns are not supported by current wasm ANF lowering",
+                code
+            ),
+            LowerError::RecordPatternNonRecord { typ, .. } => write!(
+                f,
+                "[{}] record pattern target must be a record, got '{}'",
+                code, typ
+            ),
+            LowerError::ClosedRecordPatternIncomplete { .. } => {
+                write!(f, "[{}] closed record pattern must list all fields", code)
+            }
+            LowerError::UnknownRecordField { name, .. } => {
+                write!(f, "[{}] unknown record field '{}' in pattern", code, name)
+            }
+            LowerError::UnresolvedPort { port, method, .. } => write!(
+                f,
+                "[{}] no handler found for port '{}' (called '{}.{}')",
+                code, port, port, method
+            ),
         }
     }
 }
@@ -39,9 +305,9 @@ struct Signature {
 }
 
 #[derive(Debug, Clone)]
-struct HandlerBinding {
-    coeffect_name: String,
-    methods: HashMap<String, String>,
+pub struct HandlerBinding {
+    pub coeffect_name: String,
+    pub methods: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -66,6 +332,10 @@ pub fn lower_to_typed_anf(program: &Program) -> Result<AnfProgram, LowerError> {
     let mut top_level_handlers: HashMap<String, HandlerBinding> = HashMap::new();
     let mut synthesized_handler_functions: Vec<String> = Vec::new();
     let mut enums: HashMap<String, EnumDef> = HashMap::new();
+    enums.insert(
+        "Exn".to_string(),
+        crate::lang::typecheck::exn_enum_def(),
+    );
     let mut exceptions: HashMap<String, ExceptionDef> = HashMap::new();
     let collected = collect_all_definitions(program)?;
     let all_definitions = &collected.definitions;
@@ -125,16 +395,15 @@ pub fn lower_to_typed_anf(program: &Program) -> Result<AnfProgram, LowerError> {
                 Expr::Handler {
                     coeffect_name,
                     functions: handler_functions,
+                    ..
                 } => {
                     let mut methods = HashMap::new();
                     for handler_fn in handler_functions {
                         if !handler_fn.type_params.is_empty() {
-                            return Err(LowerError {
-                                message: format!(
-                                    "generic handler function '{}.{}' is not supported in wasm ANF lowering",
-                                    coeffect_name, handler_fn.name
-                                ),
-                                span: Some(def.span.clone()),
+                            return Err(LowerError::GenericHandlerNotSupported {
+                                coeffect: coeffect_name.clone(),
+                                method: handler_fn.name.clone(),
+                                span: def.span.clone(),
                             });
                         }
                         let lowered_name =
@@ -189,15 +458,13 @@ pub fn lower_to_typed_anf(program: &Program) -> Result<AnfProgram, LowerError> {
         }
     }
 
-    let mut reachable = collect_reachable_functions(&functions, &collected.external_bindings);
-    if !reachable.contains("main") {
-        return Err(LowerError {
-            message: "main function not found".to_string(),
-            span: None,
-        });
-    }
-    for lowered_handler_fn in &synthesized_handler_functions {
-        reachable.insert(lowered_handler_fn.clone());
+    let reachable = collect_reachable_functions(
+        &functions,
+        &collected.external_bindings,
+        &top_level_handlers,
+    );
+    if !reachable.contains(ENTRYPOINT) {
+        return Err(LowerError::MissingMain);
     }
 
     let mut lowered = Vec::new();
@@ -208,12 +475,9 @@ pub fn lower_to_typed_anf(program: &Program) -> Result<AnfProgram, LowerError> {
             }
             if let Expr::Lambda { type_params, .. } = &gl.value.node {
                 if !type_params.is_empty() {
-                    return Err(LowerError {
-                        message: format!(
-                            "reachable generic function '{}' is not supported in wasm ANF lowering yet",
-                            gl.name
-                        ),
-                        span: Some(def.span.clone()),
+                    return Err(LowerError::GenericFunctionNotSupported {
+                        name: gl.name.clone(),
+                        span: def.span.clone(),
                     });
                 }
                 let mut ctx = LowerCtx::new(&signatures, &enums, &exceptions, &top_level_handlers);
@@ -227,9 +491,10 @@ pub fn lower_to_typed_anf(program: &Program) -> Result<AnfProgram, LowerError> {
         }
         let mut ctx = LowerCtx::new(&signatures, &enums, &exceptions, &top_level_handlers);
         let lowered_handler =
-            ctx.lower_function(functions.get(handler_fn_name).ok_or_else(|| LowerError {
-                message: format!("lowered handler function '{}' not found", handler_fn_name),
-                span: None,
+            ctx.lower_function(functions.get(handler_fn_name).ok_or_else(|| {
+                LowerError::HandlerFunctionNotFound {
+                    name: handler_fn_name.clone(),
+                }
             })?)?;
         lowered.push(lowered_handler);
     }
@@ -248,24 +513,17 @@ pub fn lower_to_typed_anf(program: &Program) -> Result<AnfProgram, LowerError> {
         let binding = collected
             .external_bindings
             .get(&name)
-            .ok_or_else(|| LowerError {
-                message: format!("external binding '{}' not found", name),
-                span: None,
-            })?;
-        let wasm_module = binding.wasm_module.clone().ok_or_else(|| LowerError {
-            message: format!(
-                "external function '{}' requires a preceding 'import external ...' in the same module",
-                name
-            ),
-            span: Some(binding.span.clone()),
+            .ok_or_else(|| LowerError::ExternalBindingNotFound { name: name.clone() })?;
+        let wasm_module = binding.wasm_module.clone().ok_or_else(|| {
+            LowerError::ExternalMissingImport {
+                name: name.clone(),
+                span: binding.span.clone(),
+            }
         })?;
         if !std::path::Path::new(&wasm_module).exists() {
-            return Err(LowerError {
-                message: format!(
-                    "external module '{}' not found (build it first, e.g. src/lib/core/build.sh)",
-                    wasm_module
-                ),
-                span: Some(binding.span.clone()),
+            return Err(LowerError::ExternalModuleNotFound {
+                module: wasm_module.clone(),
+                span: binding.span.clone(),
             });
         }
 
@@ -381,20 +639,25 @@ fn collect_program_definitions_inner(
             }
             TopLevel::Import(import) => {
                 if import_stack.iter().any(|p| p == &import.path) {
-                    return Err(LowerError {
-                        message: format!("cyclic module import detected at '{}'", import.path),
-                        span: Some(def.span.clone()),
+                    return Err(LowerError::CyclicImport {
+                        path: import.path.clone(),
+                        span: def.span.clone(),
                     });
                 }
                 import_stack.push(import.path.clone());
-                let src = fs::read_to_string(&import.path).map_err(|e| LowerError {
-                    message: format!("Failed to read {}: {}", import.path, e),
-                    span: Some(def.span.clone()),
+                let src = fs::read_to_string(&import.path).map_err(|e| {
+                    LowerError::ImportReadError {
+                        path: import.path.clone(),
+                        detail: e.to_string(),
+                        span: def.span.clone(),
+                    }
                 })?;
-                let imported_program = parser::parser().parse(src).map_err(|e| LowerError {
-                    message: format!("Failed to parse {}: {:?}", import.path, e),
-                    span: Some(def.span.clone()),
-                })?;
+                let imported_program =
+                    parser::parser().parse(&src).map_err(|e| LowerError::ImportParseError {
+                        path: import.path.clone(),
+                        detail: format!("{:?}", e),
+                        span: def.span.clone(),
+                    })?;
                 let rewritten = rewrite_imported_program(&imported_program, import, &def.span)?;
                 let res = collect_program_definitions_inner(
                     &rewritten,
@@ -471,12 +734,29 @@ fn build_import_rename_map(
             _ => false,
         });
         if !found_public {
-            return Err(LowerError {
-                message: format!("Item {} not found in {}", item, import.path),
-                span: Some(import_span.clone()),
+            return Err(LowerError::ImportItemNotFound {
+                item: item.clone(),
+                path: import.path.clone(),
+                span: import_span.clone(),
             });
         }
         selected.insert(item.clone());
+    }
+
+    // Mix import: items + alias — selected items keep original name,
+    // non-selected items get alias-qualified name for module access.
+    if let Some(alias) = &import.alias {
+        for def in &program.definitions {
+            if let TopLevel::Let(gl) = &def.node {
+                let renamed = if gl.is_public && selected.contains(&gl.name) {
+                    gl.name.clone()
+                } else {
+                    format!("{}.{}", alias, gl.name)
+                };
+                map.insert(gl.name.clone(), renamed);
+            }
+        }
+        return Ok(map);
     }
 
     let hidden_prefix = format!(
@@ -524,7 +804,7 @@ fn rewrite_expr_calls(expr: &Spanned<Expr>, rename_map: &HashMap<String, String>
         }
         Expr::BinaryOp(lhs, op, rhs) => Expr::BinaryOp(
             Box::new(rewrite_expr_calls(lhs, rename_map)),
-            op.clone(),
+            *op,
             Box::new(rewrite_expr_calls(rhs, rename_map)),
         ),
         Expr::Call { func, args } => {
@@ -602,9 +882,11 @@ fn rewrite_expr_calls(expr: &Spanned<Expr>, rename_map: &HashMap<String, String>
         },
         Expr::Handler {
             coeffect_name,
+            requires,
             functions,
         } => Expr::Handler {
             coeffect_name: coeffect_name.clone(),
+            requires: requires.clone(),
             functions: functions
                 .iter()
                 .map(|f| {
@@ -679,7 +961,10 @@ fn rewrite_stmt_calls(stmt: &Spanned<Stmt>, rename_map: &HashMap<String, String>
             catch_body: rewrite_stmts_calls(catch_body, rename_map),
         },
         Stmt::Inject { handlers, body } => Stmt::Inject {
-            handlers: handlers.clone(),
+            handlers: handlers
+                .iter()
+                .map(|h| rename_map.get(h).cloned().unwrap_or_else(|| h.clone()))
+                .collect(),
             body: rewrite_stmts_calls(body, rename_map),
         },
         Stmt::Comment => Stmt::Comment,
@@ -699,15 +984,33 @@ fn get_default_alias(path: &str) -> String {
         .to_string()
 }
 
+/// Resolves a port call like `Console.print` to the synthesized handler function names
+/// by looking up which handlers implement the given port/method.
+fn resolve_port_call(
+    call: &str,
+    top_level_handlers: &HashMap<String, HandlerBinding>,
+) -> Vec<String> {
+    if let Some((port, method)) = call.split_once('.') {
+        top_level_handlers
+            .values()
+            .filter(|b| b.coeffect_name == port)
+            .filter_map(|b| b.methods.get(method).cloned())
+            .collect()
+    } else {
+        vec![]
+    }
+}
+
 /// Collects all functions transitively reachable from `main`.
 pub fn collect_reachable_functions(
     functions: &HashMap<String, Function>,
     externals: &HashMap<String, ExternalBinding>,
+    top_level_handlers: &HashMap<String, HandlerBinding>,
 ) -> HashSet<String> {
     let mut reachable = HashSet::new();
     let mut queue = VecDeque::new();
-    if functions.contains_key("main") {
-        queue.push_back("main".to_string());
+    if functions.contains_key(ENTRYPOINT) {
+        queue.push_back(ENTRYPOINT.to_string());
     }
 
     while let Some(name) = queue.pop_front() {
@@ -718,10 +1021,17 @@ pub fn collect_reachable_functions(
             let mut calls = Vec::new();
             collect_calls_in_stmts(&func.body, &mut calls);
             for called in calls {
-                if (functions.contains_key(&called) || externals.contains_key(&called))
-                    && !reachable.contains(&called)
-                {
-                    queue.push_back(called);
+                if !reachable.contains(&called) {
+                    if functions.contains_key(&called) || externals.contains_key(&called) {
+                        queue.push_back(called);
+                    } else {
+                        // Try resolving as a port call (e.g. Console.print -> handler fn)
+                        for resolved in resolve_port_call(&called, top_level_handlers) {
+                            if !reachable.contains(&resolved) {
+                                queue.push_back(resolved);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -905,9 +1215,8 @@ impl<'a> LowerCtx<'a> {
         } else if matches!(func.ret_type, Type::Unit) {
             AnfAtom::Unit
         } else {
-            return Err(LowerError {
-                message: format!("function '{}' may not return a value", func.name),
-                span: None,
+            return Err(LowerError::FunctionMayNotReturn {
+                name: func.name.clone(),
             });
         };
 
@@ -915,6 +1224,7 @@ impl<'a> LowerCtx<'a> {
             name: func.name.clone(),
             params,
             ret_type: func.ret_type.clone(),
+            requires: func.requires.clone(),
             effects: func.effects.clone(),
             body: self.stmts.clone(),
             ret,
@@ -966,10 +1276,8 @@ impl<'a> LowerCtx<'a> {
                             else_body,
                         });
                     } else {
-                        let then_ret = then_ret.ok_or_else(|| LowerError {
-                            message: "if branch must return a value in current wasm ANF lowering"
-                                .to_string(),
-                            span: Some(expr.span.clone()),
+                        let then_ret = then_ret.ok_or_else(|| LowerError::IfBranchMustReturn {
+                            span: expr.span.clone(),
                         })?;
                         self.stmts.push(AnfStmt::IfReturn {
                             cond: cond_atom,
@@ -1042,12 +1350,9 @@ impl<'a> LowerCtx<'a> {
                 let result = (|| -> Result<Option<AnfAtom>, LowerError> {
                     for handler_name in handlers {
                         let binding = self.top_level_handlers.get(handler_name).ok_or_else(|| {
-                            LowerError {
-                                message: format!(
-                                    "inject expects a top-level handler binding, but '{}' is not one",
-                                    handler_name
-                                ),
-                                span: Some(stmt.span.clone()),
+                            LowerError::InjectNotHandler {
+                                name: handler_name.clone(),
+                                span: stmt.span.clone(),
                             }
                         })?;
                         self.active_handlers
@@ -1069,9 +1374,8 @@ impl<'a> LowerCtx<'a> {
                 result
             }
             Stmt::Comment => Ok(None),
-            Stmt::Assign { .. } | Stmt::Conc(_) => Err(LowerError {
-                message: "statement is not supported by current wasm ANF lowering".to_string(),
-                span: Some(stmt.span.clone()),
+            Stmt::Assign { .. } | Stmt::Conc(_) => Err(LowerError::UnsupportedStatement {
+                span: stmt.span.clone(),
             }),
         }
     }
@@ -1124,17 +1428,19 @@ impl<'a> LowerCtx<'a> {
                         typ: signature_type(sig),
                     })
                 } else {
-                    Err(LowerError {
-                        message: format!("unknown variable '{}'", key),
-                        span: Some(expr.span.clone()),
+                    Err(LowerError::UnknownVariable {
+                        name: key,
+                        span: expr.span.clone(),
                     })
                 }
             }
             Expr::Borrow(name, sigil) => {
                 let key = sigil_key(name, sigil);
-                let typ = self.vars.get(&key).cloned().ok_or_else(|| LowerError {
-                    message: format!("unknown variable '{}'", key),
-                    span: Some(expr.span.clone()),
+                let typ = self.vars.get(&key).cloned().ok_or_else(|| {
+                    LowerError::UnknownVariable {
+                        name: key.clone(),
+                        span: expr.span.clone(),
+                    }
                 })?;
                 let inner = match typ {
                     Type::Linear(i) | Type::Borrow(i) => *i,
@@ -1148,10 +1454,10 @@ impl<'a> LowerCtx<'a> {
             Expr::BinaryOp(lhs, op, rhs) => {
                 let lhs = self.lower_expr_to_atom(lhs)?;
                 let rhs = self.lower_expr_to_atom(rhs)?;
-                let typ = infer_binary_type(op, &lhs.typ(), &rhs.typ());
+                let typ = infer_binary_type(*op, &lhs.typ(), &rhs.typ());
                 self.bind_expr_to_temp(
                     AnfExpr::Binary {
-                        op: op.clone(),
+                        op: *op,
                         lhs,
                         rhs,
                         typ: typ.clone(),
@@ -1162,18 +1468,27 @@ impl<'a> LowerCtx<'a> {
             Expr::Call { func, args } => {
                 let resolved_func = if let Some((coeffect_name, method_name)) = func.split_once('.')
                 {
-                    if let Some(methods) = self.active_handlers.get(coeffect_name) {
+                    // First try active handlers (inside inject blocks), then
+                    // fall back to any top-level handler that provides this port.
+                    let methods = if let Some(m) = self.active_handlers.get(coeffect_name) {
+                        Some(m)
+                    } else {
+                        self.top_level_handlers
+                            .values()
+                            .find(|b| b.coeffect_name == coeffect_name)
+                            .map(|b| &b.methods)
+                    };
+                    if let Some(methods) = methods {
                         methods
                             .get(method_name)
                             .cloned()
-                            .ok_or_else(|| LowerError {
-                                message: format!(
-                                    "handler for '{}' does not implement '{}'",
-                                    coeffect_name, method_name
-                                ),
-                                span: Some(expr.span.clone()),
+                            .ok_or_else(|| LowerError::HandlerMissingMethod {
+                                coeffect: coeffect_name.to_string(),
+                                method: method_name.to_string(),
+                                span: expr.span.clone(),
                             })?
                     } else {
+                        // Not a port call — may be a module-qualified function
                         func.clone()
                     }
                 } else {
@@ -1182,17 +1497,25 @@ impl<'a> LowerCtx<'a> {
                 let sig = self
                     .signatures
                     .get(&resolved_func)
-                    .ok_or_else(|| LowerError {
-                        message: format!("unknown function '{}'", func),
-                        span: Some(expr.span.clone()),
+                    .ok_or_else(|| {
+                        // Provide a specific error for dotted port calls vs plain functions.
+                        if let Some((port, method)) = func.split_once('.') {
+                            LowerError::UnresolvedPort {
+                                port: port.to_string(),
+                                method: method.to_string(),
+                                span: expr.span.clone(),
+                            }
+                        } else {
+                            LowerError::UnknownFunction {
+                                name: func.clone(),
+                                span: expr.span.clone(),
+                            }
+                        }
                     })?;
                 if sig.is_generic {
-                    return Err(LowerError {
-                        message: format!(
-                            "call to generic function '{}' is not supported by current wasm ANF lowering",
-                            func
-                        ),
-                        span: Some(expr.span.clone()),
+                    return Err(LowerError::GenericCallNotSupported {
+                        name: func.clone(),
+                        span: expr.span.clone(),
                     });
                 }
                 let mut lowered_args = Vec::with_capacity(args.len());
@@ -1211,9 +1534,9 @@ impl<'a> LowerCtx<'a> {
             Expr::Constructor(name, args) => {
                 let fields = self
                     .lookup_constructor_fields(name)
-                    .ok_or_else(|| LowerError {
-                        message: format!("unknown constructor '{}'", name),
-                        span: Some(expr.span.clone()),
+                    .ok_or_else(|| LowerError::UnknownConstructor {
+                        name: name.clone(),
+                        span: expr.span.clone(),
                     })?;
 
                 let mut lowered_args = Vec::with_capacity(fields.len());
@@ -1221,12 +1544,10 @@ impl<'a> LowerCtx<'a> {
                     .into_iter()
                     .enumerate()
                 {
-                    let arg = m.ok_or_else(|| LowerError {
-                        message: format!(
-                            "missing constructor field at position {} for '{}'",
-                            idx, name
-                        ),
-                        span: Some(expr.span.clone()),
+                    let arg = m.ok_or_else(|| LowerError::MissingConstructorField {
+                        name: name.clone(),
+                        position: idx,
+                        span: expr.span.clone(),
                     })?;
                     lowered_args.push(self.lower_expr_to_atom(arg)?);
                 }
@@ -1284,9 +1605,9 @@ impl<'a> LowerCtx<'a> {
                         self.resolve_single_variant_fields(name, &expr.span)?
                     }
                     other => {
-                        return Err(LowerError {
-                            message: format!("cannot access field on type '{}'", other),
-                            span: Some(expr.span.clone()),
+                        return Err(LowerError::FieldAccessOnNonRecord {
+                            typ: other.to_string(),
+                            span: expr.span.clone(),
                         });
                     }
                 };
@@ -1298,9 +1619,9 @@ impl<'a> LowerCtx<'a> {
                     .iter()
                     .enumerate()
                     .find(|(_, (name, _))| name == field_name)
-                    .ok_or_else(|| LowerError {
-                        message: format!("field '{}' not found", field_name),
-                        span: Some(expr.span.clone()),
+                    .ok_or_else(|| LowerError::FieldNotFound {
+                        name: field_name.clone(),
+                        span: expr.span.clone(),
                     })?;
 
                 self.bind_expr_to_temp(
@@ -1318,9 +1639,8 @@ impl<'a> LowerCtx<'a> {
             | Expr::Match { .. }
             | Expr::Lambda { .. }
             | Expr::Handler { .. }
-            | Expr::External(_, _, _) => Err(LowerError {
-                message: "expression is not supported by current wasm ANF lowering".to_string(),
-                span: Some(expr.span.clone()),
+            | Expr::External(_, _, _) => Err(LowerError::UnsupportedExpression {
+                span: expr.span.clone(),
             }),
         }
     }
@@ -1342,9 +1662,8 @@ impl<'a> LowerCtx<'a> {
         let (mut then_body, then_ret) = self.lower_block(branch, branch_vars)?;
         let then_ret = then_ret
             .or_else(|| fallback_return_atom_from_terminal_stmt(&then_body))
-            .ok_or_else(|| LowerError {
-                message: "match case must return a value in current wasm ANF lowering".to_string(),
-                span: Some(pattern.span.clone()),
+            .ok_or_else(|| LowerError::MatchCaseMustReturn {
+                span: pattern.span.clone(),
             })?;
 
         let mut binding_stmts = Vec::with_capacity(binding_entries.len());
@@ -1403,9 +1722,9 @@ impl<'a> LowerCtx<'a> {
             Pattern::Constructor(name, args) => {
                 let fields = self
                     .lookup_constructor_fields(name)
-                    .ok_or_else(|| LowerError {
-                        message: format!("unknown constructor '{}'", name),
-                        span: Some(pattern.span.clone()),
+                    .ok_or_else(|| LowerError::UnknownConstructor {
+                        name: name.clone(),
+                        span: pattern.span.clone(),
                     })?;
 
                 let tag_atom = self.bind_expr_to_temp(
@@ -1418,7 +1737,7 @@ impl<'a> LowerCtx<'a> {
                 let expected_tag = AnfAtom::Int(constructor_tag(name, fields.len()));
                 let tag_cond = self.bind_expr_to_temp(
                     AnfExpr::Binary {
-                        op: "==".to_string(),
+                        op: BinaryOp::Eq,
                         lhs: tag_atom,
                         rhs: expected_tag,
                         typ: Type::Bool,
@@ -1454,21 +1773,17 @@ impl<'a> LowerCtx<'a> {
                 let mut target_fields = match peel_linear(target_type) {
                     Type::Record(fields) => fields.clone(),
                     other => {
-                        return Err(LowerError {
-                            message: format!(
-                                "record pattern target must be a record, got '{}'",
-                                other
-                            ),
-                            span: Some(pattern.span.clone()),
+                        return Err(LowerError::RecordPatternNonRecord {
+                            typ: other.to_string(),
+                            span: pattern.span.clone(),
                         });
                     }
                 };
                 target_fields.sort_by(|a, b| a.0.cmp(&b.0));
 
                 if !*open && pattern_fields.len() != target_fields.len() {
-                    return Err(LowerError {
-                        message: "closed record pattern must list all fields".to_string(),
-                        span: Some(pattern.span.clone()),
+                    return Err(LowerError::ClosedRecordPatternIncomplete {
+                        span: pattern.span.clone(),
                     });
                 }
 
@@ -1477,9 +1792,9 @@ impl<'a> LowerCtx<'a> {
                         .iter()
                         .enumerate()
                         .find(|(_, f)| f.0 == *label)
-                        .ok_or_else(|| LowerError {
-                            message: format!("unknown record field '{}' in pattern", label),
-                            span: Some(pattern.span.clone()),
+                        .ok_or_else(|| LowerError::UnknownRecordField {
+                            name: label.clone(),
+                            span: pattern.span.clone(),
                         })?;
                     let field_typ = field_type.clone();
                     let field_atom = self.bind_expr_to_temp(
@@ -1508,18 +1823,15 @@ impl<'a> LowerCtx<'a> {
         type_name: &str,
         span: &Span,
     ) -> Result<Vec<(String, Type)>, LowerError> {
-        let ed = self.enums.get(type_name).ok_or_else(|| LowerError {
-            message: format!("unknown type '{}' for field access", type_name),
-            span: Some(span.clone()),
+        let ed = self.enums.get(type_name).ok_or_else(|| LowerError::UnknownType {
+            name: type_name.to_string(),
+            span: span.clone(),
         })?;
         if ed.variants.len() != 1 {
-            return Err(LowerError {
-                message: format!(
-                    "field access requires single-variant type, '{}' has {}",
-                    type_name,
-                    ed.variants.len()
-                ),
-                span: Some(span.clone()),
+            return Err(LowerError::FieldAccessMultiVariant {
+                type_name: type_name.to_string(),
+                count: ed.variants.len(),
+                span: span.clone(),
             });
         }
         Ok(ed.variants[0]
@@ -1559,19 +1871,16 @@ impl<'a> LowerCtx<'a> {
             Literal::Bool(b) => AnfAtom::Bool(*b),
             Literal::Unit => return Ok(None),
             Literal::String(_) => {
-                return Err(LowerError {
-                    message:
-                        "string literal match patterns are not supported by current wasm ANF lowering"
-                            .to_string(),
-                    span: Some(span.clone()),
+                return Err(LowerError::UnsupportedStringPattern {
+                    span: span.clone(),
                 });
             }
         };
 
         let op = if matches!(peel_linear(target_type), Type::F32 | Type::F64) {
-            "==.".to_string()
+            BinaryOp::FEq
         } else {
-            "==".to_string()
+            BinaryOp::Eq
         };
 
         self.bind_expr_to_temp(
@@ -1597,7 +1906,7 @@ impl<'a> LowerCtx<'a> {
         for cond in iter {
             current = self.bind_expr_to_temp(
                 AnfExpr::Binary {
-                    op: "&&".to_string(),
+                    op: BinaryOp::And,
                     lhs: current,
                     rhs: cond,
                     typ: Type::Bool,
@@ -1642,9 +1951,9 @@ impl<'a> LowerCtx<'a> {
         if let Some(exn_type) = self.lookup_exception_type(ctor) {
             return Ok(exn_type);
         }
-        Err(LowerError {
-            message: format!("unknown constructor '{}'", ctor),
-            span: Some(span.clone()),
+        Err(LowerError::UnknownConstructor {
+            name: ctor.to_string(),
+            span: span.clone(),
         })
     }
 }
@@ -1713,19 +2022,19 @@ fn peel_linear(mut typ: &Type) -> &Type {
     typ
 }
 
-fn infer_binary_type(op: &str, lhs: &Type, rhs: &Type) -> Type {
-    if matches!(
-        op,
-        "==" | "!=" | "<" | "<=" | ">" | ">=" | "==." | "!=." | "<." | "<=." | ">." | ">=."
-    ) {
+fn infer_binary_type(op: BinaryOp, lhs: &Type, rhs: &Type) -> Type {
+    if op.is_comparison() {
         return Type::Bool;
     }
-    if op == "++" || (op == "+" && matches!(lhs, Type::String) && matches!(rhs, Type::String)) {
+    if op == BinaryOp::And || op == BinaryOp::Or {
+        return Type::Bool;
+    }
+    if op == BinaryOp::Concat
+        || (op == BinaryOp::Add && matches!(lhs, Type::String) && matches!(rhs, Type::String))
+    {
         return Type::String;
     }
-    if op.ends_with('.')
-        || matches!(lhs, Type::F32 | Type::F64)
-        || matches!(rhs, Type::F32 | Type::F64)
+    if op.is_float_op() || matches!(lhs, Type::F32 | Type::F64) || matches!(rhs, Type::F32 | Type::F64)
     {
         if matches!(lhs, Type::F32) || matches!(rhs, Type::F32) {
             Type::F32

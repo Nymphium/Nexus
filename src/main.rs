@@ -1,11 +1,8 @@
 use ariadne::{Color, Label, Report, ReportKind, Source};
-use chumsky::Parser as _;
 use clap::{Parser, Subcommand};
-use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::collections::BTreeSet;
 use std::fs;
 use std::io::{self, IsTerminal, Read};
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, ExitCode};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -14,17 +11,39 @@ use wasm_compose::{
     config::{Config as ComposeConfig, Dependency as ComposeDependency},
 };
 use wasmparser::Payload;
-use wasmtime::{Engine, Module, ValType};
+use wasmtime::{Engine, Module};
+use wasm_encoder as wenc;
 use wit_component::{embed_component_metadata, ComponentEncoder, StringEncoding};
 use wit_parser::Resolve;
 
 mod compiler;
+mod constants;
+mod ir;
 mod lang;
 
-mod interpreter;
+mod repl;
 mod runtime;
 
+use constants::{is_preview2_wasi_module, Permission, ENTRYPOINT, NEXUS_HOST_HTTP_MODULE, WASI_SNAPSHOT_MODULE};
 use runtime::ExecutionCapabilities;
+
+#[derive(Debug, Clone, clap::ValueEnum)]
+enum ExplainCapabilities {
+    /// Show capability names (default).
+    Yes,
+    /// Suppress capability output.
+    None,
+    /// Show wasmtime run flags needed for this binary.
+    Wasmtime,
+}
+
+#[derive(Debug, Clone, clap::ValueEnum)]
+enum ExplainCapabilitiesFormat {
+    /// Human-readable text (default).
+    Text,
+    /// Machine-readable JSON.
+    Json,
+}
 
 #[derive(Debug, Parser)]
 #[command(name = "nexus")]
@@ -44,24 +63,42 @@ enum Command {
         /// Allow filesystem access.
         #[arg(long)]
         allow_fs: bool,
+        /// Allow network access.
+        #[arg(long)]
+        allow_net: bool,
+        /// Allow console I/O (print, println).
+        #[arg(long)]
+        allow_console: bool,
+        /// Allow random number generation.
+        #[arg(long)]
+        allow_random: bool,
+        /// Allow clock/time operations.
+        #[arg(long)]
+        allow_clock: bool,
+        /// Allow process operations (exit, etc.).
+        #[arg(long)]
+        allow_proc: bool,
         /// Preopen a host directory for guest filesystem access (repeatable).
         #[arg(long, value_name = "DIR")]
         preopen: Vec<PathBuf>,
     },
-    /// Parse, typecheck, and build executable/component artifact.
+    /// Parse, typecheck, and build a WASM Component artifact.
     /// If no file is passed and stdin is piped, reads script from stdin.
     Build {
         /// Nexus source file path. Use '-' to read from stdin.
         input: Option<PathBuf>,
-        /// Output path (packed executable by default, or component wasm with --wasm).
+        /// Output path (default: main.wasm).
         #[arg(short, long)]
         output: Option<PathBuf>,
-        /// Emit a component-model wasm instead of an executable.
-        #[arg(long)]
-        wasm: bool,
-        /// Override `wasm-merge` executable path for `--wasm` dependency bundling.
+        /// Override `wasm-merge` executable path for dependency bundling.
         #[arg(long, value_name = "PATH")]
         wasm_merge: Option<PathBuf>,
+        /// Show capability information after build.
+        #[arg(long, value_enum, default_value_t = ExplainCapabilities::Yes)]
+        explain_capabilities: ExplainCapabilities,
+        /// Output format for capability information.
+        #[arg(long, value_enum, default_value_t = ExplainCapabilitiesFormat::Text)]
+        explain_capabilities_format: ExplainCapabilitiesFormat,
     },
     /// Parse and typecheck only.
     /// If no file is passed and stdin is piped, reads script from stdin.
@@ -76,39 +113,37 @@ struct LoadedSource {
     source: String,
 }
 
-const WASI_SNAPSHOT_MODULE: &str = "wasi_snapshot_preview1";
-const NEXUS_HOST_HTTP_MODULE: &str = "nexus:cli/nexus-host";
+const NET_HOST_ADAPTER_WASM: &[u8] = include_bytes!("../nxlib/stdlib/net-host-adapter.wasm");
 const WASM_MERGE_PATH_ENV: &str = "NEXUS_WASM_MERGE";
 const WASM_MERGE_MAIN_NAME: &str = "__nexus_main__";
-const PACK_MAGIC: &[u8; 16] = b"NEXUS_PACK_WASM!";
-const PACK_TRAILER_LEN: usize = 8 + PACK_MAGIC.len();
-const PACK_BUNDLE_MAGIC: &[u8; 16] = b"NEXUS_PACK_BNDL!";
-const PACK_BUNDLE_TRAILER_LEN: usize = 8 + PACK_BUNDLE_MAGIC.len();
-const PACK_BUNDLE_VERSION: u32 = 1;
-
-fn is_preview2_wasi_module(module_name: &str) -> bool {
-    module_name.starts_with("wasi:")
-}
-
 #[cfg(test)]
 fn is_component_wasm(wasm: &[u8]) -> bool {
     wasmparser::Parser::is_component(wasm)
 }
 
 fn main() -> ExitCode {
-    if let Some(code) = maybe_run_embedded_wasm() {
-        return code;
-    }
-
     let cli = Cli::parse();
 
     match cli.command {
         Some(Command::Run {
             input,
             allow_fs,
+            allow_net,
+            allow_console,
+            allow_random,
+            allow_clock,
+            allow_proc,
             preopen,
         }) => {
-            let capabilities = match build_execution_capabilities(allow_fs, preopen) {
+            let capabilities = match build_execution_capabilities(
+                allow_fs,
+                allow_net,
+                allow_console,
+                allow_random,
+                allow_clock,
+                allow_proc,
+                preopen,
+            ) {
                 Ok(capabilities) => capabilities,
                 Err(msg) => {
                     eprintln!("Capability Error: {}", msg);
@@ -120,19 +155,33 @@ fn main() -> ExitCode {
         Some(Command::Build {
             input,
             output,
-            wasm,
             wasm_merge,
-        }) => build_command(input, output, wasm, wasm_merge),
+            explain_capabilities,
+            explain_capabilities_format,
+        }) => build_command(input, output, wasm_merge, explain_capabilities, explain_capabilities_format),
         Some(Command::Check { input }) => check_command(input),
         None => {
             if io::stdin().is_terminal() {
-                interpreter::repl::start();
+                repl::start(ExecutionCapabilities::deny_all());
                 ExitCode::SUCCESS
             } else {
                 run_command(None, ExecutionCapabilities::deny_all())
             }
         }
     }
+}
+
+fn extract_main_requires(program: &lang::ast::Program) -> Option<&lang::ast::Type> {
+    program.definitions.iter().find_map(|def| {
+        if let lang::ast::TopLevel::Let(gl) = &def.node {
+            if gl.name == ENTRYPOINT {
+                if let lang::ast::Expr::Lambda { requires, .. } = &gl.value.node {
+                    return Some(requires);
+                }
+            }
+        }
+        None
+    })
 }
 
 fn run_command(input: Option<PathBuf>, capabilities: ExecutionCapabilities) -> ExitCode {
@@ -145,10 +194,11 @@ fn run_command(input: Option<PathBuf>, capabilities: ExecutionCapabilities) -> E
     }
 
     if input.is_none() && io::stdin().is_terminal() {
-        interpreter::repl::start();
+        repl::start(capabilities);
         return ExitCode::SUCCESS;
     }
 
+    let input_path = input.clone();
     let loaded = match load_source(input) {
         Ok(loaded) => loaded,
         Err(msg) => {
@@ -156,72 +206,44 @@ fn run_command(input: Option<PathBuf>, capabilities: ExecutionCapabilities) -> E
             return ExitCode::from(1);
         }
     };
-    let src = strip_shebang(loaded.source);
-    let program = match parse_program(&loaded.display_name, &src) {
-        Some(p) => p,
-        None => return ExitCode::from(1),
-    };
-    if !typecheck_program(&loaded.display_name, &src, &program) {
-        return ExitCode::from(1);
-    }
 
-    let mut interp = interpreter::Interpreter::new_with_capabilities(program, capabilities);
-    match interp.run_function("main", vec![]) {
-        Ok(interpreter::Value::Unit) => ExitCode::SUCCESS,
-        Ok(value) => {
-            println!("Result: {:?}", value);
-            ExitCode::SUCCESS
-        }
-        Err(e) => {
-            eprintln!("Runtime Error: {}", e);
-            ExitCode::from(1)
-        }
-    }
-}
-
-fn maybe_run_embedded_wasm() -> Option<ExitCode> {
-    let exe_path = std::env::current_exe().ok()?;
-    let exe_bytes = fs::read(&exe_path).ok()?;
-    if let Some((_, embedded_bundle)) = split_embedded_bundle(&exe_bytes) {
-        let (main_wasm, embedded_modules) = match parse_embedded_bundle(embedded_bundle) {
-            Ok(bundle) => bundle,
-            Err(msg) => {
-                eprintln!("Packed runtime decode error: {}", msg);
-                return Some(ExitCode::from(1));
+    let src = strip_shebang(loaded.source.clone());
+    if let Some(program) = parse_program(&loaded.display_name, &src) {
+        if let Some(requires) = extract_main_requires(&program) {
+            if let Err(msg) = capabilities.validate_program_requires(requires) {
+                eprintln!("Capability Error: {}", msg);
+                return ExitCode::from(1);
             }
-        };
-        let capabilities = match parse_runtime_capabilities_from_env() {
-            Ok(capabilities) => capabilities,
-            Err(code) => return Some(code),
-        };
-        return Some(runtime::wasm_exec::run_core_wasm_with_embedded_modules(
-            &main_wasm,
-            &embedded_modules,
-            exe_path.parent(),
-            &capabilities,
-        ));
+        }
     }
 
-    let (_, embedded) = split_embedded_wasm(&exe_bytes)?;
-    let wasm = embedded.to_vec();
-    let capabilities = match parse_runtime_capabilities_from_env() {
-        Ok(capabilities) => capabilities,
-        Err(code) => return Some(code),
+    // Compile and execute via wasmtime
+    let wasm_merge_command = resolve_wasm_merge_command(None);
+    let compiled = match compile_loaded_source_to_wasm(&loaded, true, &wasm_merge_command) {
+        Ok(compiled) => compiled,
+        Err(code) => return code,
     };
-    Some(runtime::wasm_exec::run_wasm_bytes(
-        &wasm,
-        exe_path.parent(),
-        &capabilities,
-    ))
+
+    let module_dir = input_path.as_deref().and_then(|p| p.parent());
+    runtime::wasm_exec::run_wasm_bytes(&compiled.wasm, module_dir, &capabilities)
 }
 
 fn build_execution_capabilities(
     allow_fs: bool,
+    allow_net: bool,
+    allow_console: bool,
+    allow_random: bool,
+    allow_clock: bool,
+    allow_proc: bool,
     preopen_dirs: Vec<PathBuf>,
 ) -> Result<ExecutionCapabilities, String> {
     let capabilities = ExecutionCapabilities {
-        allow_net: false,
+        allow_net,
         allow_fs,
+        allow_console,
+        allow_random,
+        allow_clock,
+        allow_proc,
         preopen_dirs,
         net_allow_hosts: Vec::new(),
         net_block_hosts: Vec::new(),
@@ -230,58 +252,12 @@ fn build_execution_capabilities(
     Ok(capabilities)
 }
 
-fn parse_runtime_capabilities_from_env() -> Result<ExecutionCapabilities, ExitCode> {
-    let program_name = std::env::args()
-        .next()
-        .unwrap_or_else(|| "nexus-component-runner".to_string());
-    let mut allow_fs = false;
-    let mut preopen_dirs = Vec::<PathBuf>::new();
-    let mut args = std::env::args_os().skip(1).peekable();
-
-    while let Some(arg) = args.next() {
-        let arg_string = arg.to_string_lossy();
-        match arg_string.as_ref() {
-            "--allow-fs" => allow_fs = true,
-            "--preopen" => {
-                let Some(dir) = args.next() else {
-                    eprintln!("Runtime argument error: `--preopen` requires a directory");
-                    eprintln!("Usage: {} [--allow-fs] [--preopen <dir>]...", program_name);
-                    return Err(ExitCode::from(1));
-                };
-                preopen_dirs.push(PathBuf::from(dir));
-            }
-            "-h" | "--help" => {
-                println!("Usage: {} [--allow-fs] [--preopen <dir>]...", program_name);
-                println!("  --allow-fs        allow filesystem access");
-                println!("  --preopen <dir>   preopen a host directory (repeatable)");
-                return Err(ExitCode::SUCCESS);
-            }
-            _ => {
-                if let Some(dir) = arg_string.strip_prefix("--preopen=") {
-                    preopen_dirs.push(PathBuf::from(dir));
-                    continue;
-                }
-                eprintln!("Runtime argument error: unknown argument '{}'", arg_string);
-                eprintln!("Usage: {} [--allow-fs] [--preopen <dir>]...", program_name);
-                return Err(ExitCode::from(1));
-            }
-        }
-    }
-
-    match build_execution_capabilities(allow_fs, preopen_dirs) {
-        Ok(capabilities) => Ok(capabilities),
-        Err(msg) => {
-            eprintln!("Runtime argument error: {}", msg);
-            Err(ExitCode::from(1))
-        }
-    }
-}
-
 fn build_command(
     input: Option<PathBuf>,
     output: Option<PathBuf>,
-    wasm: bool,
     wasm_merge: Option<PathBuf>,
+    explain: ExplainCapabilities,
+    format: ExplainCapabilitiesFormat,
 ) -> ExitCode {
     let loaded = match load_source(input) {
         Ok(loaded) => loaded,
@@ -291,103 +267,118 @@ fn build_command(
         }
     };
 
-    if !wasm && wasm_merge.is_some() {
-        eprintln!("Build Error: `--wasm-merge` can be used only with `--wasm`.");
-        return ExitCode::from(1);
-    }
-
-    if wasm {
-        let wasm_merge_command = resolve_wasm_merge_command(wasm_merge.as_deref());
-        let core_wasm = match compile_loaded_source_to_wasm(&loaded, true, &wasm_merge_command) {
-            Ok(wasm) => wasm,
-            Err(code) => return code,
-        };
-        let component_wasm = match encode_core_wasm_as_component(&core_wasm) {
-            Ok(component_wasm) => component_wasm,
-            Err(msg) => {
-                eprintln!("Component Encode Error: {}", msg);
-                return ExitCode::from(1);
-            }
-        };
-        let output_path = output.unwrap_or_else(default_wasm_output_path);
-        if let Err(e) = fs::write(&output_path, component_wasm) {
-            eprintln!("Failed to write {}: {}", output_path.display(), e);
-            return ExitCode::from(1);
-        }
-        return ExitCode::SUCCESS;
-    }
-
-    let output_path = output.unwrap_or_else(default_build_output_path);
-    if output_path.extension().is_some_and(|ext| ext == "wasm") {
-        eprintln!(
-            "Build Error: output '{}' looks like wasm; use `--wasm` to emit component wasm",
-            output_path.display()
-        );
-        return ExitCode::from(1);
-    }
-
-    let core_wasm = match compile_loaded_source_to_core_wasm(&loaded) {
-        Ok(wasm) => wasm,
+    let wasm_merge_command = resolve_wasm_merge_command(wasm_merge.as_deref());
+    let compiled = match compile_loaded_source_to_wasm(&loaded, true, &wasm_merge_command) {
+        Ok(c) => c,
         Err(code) => return code,
     };
-    let embedded_modules = match collect_file_backed_dependency_modules(&core_wasm, false) {
-        Ok(modules) => modules,
+    let component_wasm = match encode_core_wasm_as_component(
+        &compiled.wasm,
+        compiled.app_needs_nexus_host,
+    ) {
+        Ok(component_wasm) => component_wasm,
         Err(msg) => {
-            eprintln!("Link Error: {}", msg);
+            eprintln!("Component Encode Error: {}", msg);
             return ExitCode::from(1);
         }
     };
-
-    let exe_path = match std::env::current_exe() {
-        Ok(path) => path,
-        Err(e) => {
-            eprintln!("Failed to resolve current executable path: {}", e);
-            return ExitCode::from(1);
-        }
-    };
-    let exe_bytes = match fs::read(&exe_path) {
-        Ok(bytes) => bytes,
-        Err(e) => {
-            eprintln!(
-                "Failed to read current executable {}: {}",
-                exe_path.display(),
-                e
-            );
-            return ExitCode::from(1);
-        }
-    };
-    let base_exe = if let Some((base, _)) = split_embedded_bundle(&exe_bytes) {
-        base.to_vec()
-    } else if let Some((base, _)) = split_embedded_wasm(&exe_bytes) {
-        base.to_vec()
-    } else {
-        exe_bytes
-    };
-    let packed_executable = match append_embedded_bundle(&base_exe, &core_wasm, &embedded_modules) {
-        Ok(packed) => packed,
-        Err(msg) => {
-            eprintln!("Pack Error: {}", msg);
-            return ExitCode::from(1);
-        }
-    };
-    if let Err(e) = fs::write(&output_path, packed_executable) {
-        eprintln!(
-            "Failed to write packed executable {}: {}",
-            output_path.display(),
-            e
-        );
+    let output_path = output.unwrap_or_else(default_wasm_output_path);
+    if let Err(e) = fs::write(&output_path, &component_wasm) {
+        eprintln!("Failed to write {}: {}", output_path.display(), e);
         return ExitCode::from(1);
     }
-    if let Err(e) = copy_executable_permissions(&exe_path, &output_path) {
-        eprintln!(
-            "Failed to set executable permissions on {}: {}",
-            output_path.display(),
-            e
-        );
-        return ExitCode::from(1);
-    }
-
+    let output_name = output_path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy();
+    let caps = runtime::parse_nexus_capabilities(&component_wasm);
+    print_build_result(&output_name, &caps, &explain, &format);
     ExitCode::SUCCESS
+}
+
+/// Maps a capability name to the wasmtime CLI flags required.
+fn capability_wasmtime_flags(cap: &str) -> Vec<&'static str> {
+    match Permission::from_cap_name(cap) {
+        Some(Permission::Net) => vec!["--wasi", "http", "--wasi", "inherit-network"],
+        Some(Permission::Fs) => vec!["--dir", "."],
+        // Console, Random, Clock, Proc: provided by wasmtime by default
+        _ => vec![],
+    }
+}
+
+fn print_build_result(
+    output_name: &str,
+    caps: &[String],
+    explain: &ExplainCapabilities,
+    format: &ExplainCapabilitiesFormat,
+) {
+    match format {
+        ExplainCapabilitiesFormat::Text => {
+            print_build_result_text(output_name, caps, explain);
+        }
+        ExplainCapabilitiesFormat::Json => {
+            print_build_result_json(output_name, caps, explain);
+        }
+    }
+}
+
+fn print_build_result_text(output_name: &str, caps: &[String], explain: &ExplainCapabilities) {
+    eprintln!("Built {output_name}");
+    match explain {
+        ExplainCapabilities::None => {}
+        ExplainCapabilities::Yes => {
+            if !caps.is_empty() {
+                eprintln!("Capabilities: {}", caps.join(", "));
+            }
+        }
+        ExplainCapabilities::Wasmtime => {
+            if !caps.is_empty() {
+                eprintln!("Capabilities: {}", caps.join(", "));
+            }
+            let mut flags: Vec<&str> = Vec::new();
+            for cap in caps {
+                flags.extend(capability_wasmtime_flags(cap));
+            }
+            flags.dedup();
+            let mut cmd_parts = vec!["wasmtime", "run"];
+            cmd_parts.extend(&flags);
+            cmd_parts.push(output_name);
+            eprintln!("Run: {}", cmd_parts.join(" "));
+        }
+    }
+}
+
+fn print_build_result_json(output_name: &str, caps: &[String], explain: &ExplainCapabilities) {
+    match explain {
+        ExplainCapabilities::None => {
+            eprintln!("{{\"file\":\"{output_name}\"}}");
+        }
+        ExplainCapabilities::Yes => {
+            let caps_json: Vec<String> = caps.iter().map(|c| format!("\"{c}\"")).collect();
+            eprintln!(
+                "{{\"file\":\"{output_name}\",\"capabilities\":[{}]}}",
+                caps_json.join(",")
+            );
+        }
+        ExplainCapabilities::Wasmtime => {
+            let caps_json: Vec<String> = caps.iter().map(|c| format!("\"{c}\"")).collect();
+            let mut flags: Vec<&str> = Vec::new();
+            for cap in caps {
+                flags.extend(capability_wasmtime_flags(cap));
+            }
+            flags.dedup();
+            let mut cmd_parts = vec!["wasmtime", "run"];
+            cmd_parts.extend(&flags);
+            cmd_parts.push(output_name);
+            let flags_json: Vec<String> = flags.iter().map(|f| format!("\"{f}\"")).collect();
+            eprintln!(
+                "{{\"file\":\"{output_name}\",\"capabilities\":[{}],\"wasmtime\":{{\"command\":\"{}\",\"flags\":[{}]}}}}",
+                caps_json.join(","),
+                cmd_parts.join(" "),
+                flags_json.join(",")
+            );
+        }
+    }
 }
 
 fn check_command(input: Option<PathBuf>) -> ExitCode {
@@ -455,10 +446,6 @@ fn strip_shebang(source: String) -> String {
     }
 }
 
-fn default_build_output_path() -> PathBuf {
-    PathBuf::from("main.out")
-}
-
 fn default_wasm_output_path() -> PathBuf {
     PathBuf::from("main.wasm")
 }
@@ -487,52 +474,77 @@ fn compile_loaded_source_to_core_wasm(loaded: &LoadedSource) -> Result<Vec<u8>, 
 
     match compiler::codegen::compile_program_to_wasm(&program) {
         Ok(wasm) => Ok(wasm),
-        Err(compiler::codegen::CompileError::Lower(e)) => {
-            report_lower_error(&loaded.display_name, &src, &e);
-            Err(ExitCode::from(1))
-        }
-        Err(compiler::codegen::CompileError::Codegen(e)) => {
-            eprintln!("Codegen Error: {}", e);
+        Err(e) => {
+            eprintln!("Compile Error: {}", e);
             Err(ExitCode::from(1))
         }
     }
+}
+
+/// Compiled wasm with metadata about the pre-merge module.
+struct CompiledWasm {
+    wasm: Vec<u8>,
+    /// Whether the pre-merge app module directly imported `nexus:cli/nexus-host`.
+    /// The stdlib bundle always carries the host imports from the net sub-crate,
+    /// but only programs that actually use net need the host adapter composed in.
+    app_needs_nexus_host: bool,
 }
 
 fn compile_loaded_source_to_wasm(
     loaded: &LoadedSource,
     allow_nexus_host_import: bool,
     wasm_merge_command: &Path,
-) -> Result<Vec<u8>, ExitCode> {
+) -> Result<CompiledWasm, ExitCode> {
     let wasm = match compile_loaded_source_to_core_wasm(loaded) {
         Ok(wasm) => wasm,
         Err(code) => return Err(code),
     };
-    match bundle_external_imports(&wasm, allow_nexus_host_import, wasm_merge_command) {
-        Ok(wasm) => Ok(wasm),
+    // The stdlib bundle always carries nexus:cli/nexus-host imports from the
+    // net sub-crate, but only programs that actually call net FFI functions
+    // (e.g. __nx_http_get) need the host adapter composed in.
+    let app_needs_nexus_host = module_uses_net_ffi(&wasm);
+    let merged = match bundle_external_imports(&wasm, allow_nexus_host_import, wasm_merge_command)
+    {
+        Ok(wasm) => wasm,
         Err(msg) => {
             eprintln!("Bundle Error: {}", msg);
-            Err(ExitCode::from(1))
+            return Err(ExitCode::from(1));
         }
-    }
+    };
+    // When the app doesn't use net, the merged module still carries
+    // nexus:cli/nexus-host imports from the bundle.  Satisfy them with
+    // stub (unreachable) implementations so the component encoder sees
+    // no unresolved host imports.
+    let merged = if !app_needs_nexus_host {
+        let merged_imports = module_import_names(&merged).unwrap_or_default();
+        if merged_imports.contains(NEXUS_HOST_HTTP_MODULE) {
+            match merge_nexus_host_stubs(&merged, wasm_merge_command) {
+                Ok(m) => m,
+                Err(msg) => {
+                    eprintln!("Bundle Error (stub merge): {}", msg);
+                    return Err(ExitCode::from(1));
+                }
+            }
+        } else {
+            merged
+        }
+    } else {
+        merged
+    };
+    Ok(CompiledWasm {
+        wasm: merged,
+        app_needs_nexus_host,
+    })
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MainResultKind {
-    Unit,
-    S32,
-    S64,
-    F32,
-    F64,
-}
-
-fn detect_main_result_kind(core_wasm: &[u8]) -> Result<MainResultKind, String> {
+fn validate_main_export(core_wasm: &[u8]) -> Result<(), String> {
     let engine = Engine::default();
     let module = Module::from_binary(&engine, core_wasm)
         .map_err(|e| format!("failed to inspect core wasm module: {}", e))?;
 
     let main_export = module
         .exports()
-        .find(|export| export.name() == "main")
+        .find(|export| export.name() == ENTRYPOINT)
         .ok_or_else(|| "core wasm module has no exported function 'main'".to_string())?;
 
     let func = match main_export.ty() {
@@ -543,61 +555,19 @@ fn detect_main_result_kind(core_wasm: &[u8]) -> Result<MainResultKind, String> {
     };
 
     if func.params().len() != 0 {
-        return Err(
-            "component encoding currently requires `main` to have no parameters".to_string(),
-        );
+        return Err("'main' must have no parameters".to_string());
     }
 
-    let mut results = func.results();
-    let first = results.next();
-    let second = results.next();
-    if second.is_some() {
-        return Err(
-            "component encoding currently requires `main` to return at most one value".to_string(),
-        );
+    if func.results().next().is_some() {
+        return Err("'main' must return unit (no return values)".to_string());
     }
 
-    match first {
-        None => Ok(MainResultKind::Unit),
-        Some(ValType::I32) => Ok(MainResultKind::S32),
-        Some(ValType::I64) => Ok(MainResultKind::S64),
-        Some(ValType::F32) => Ok(MainResultKind::F32),
-        Some(ValType::F64) => Ok(MainResultKind::F64),
-        Some(other) => Err(format!(
-            "component encoding does not support `main` return type {:?}",
-            other
-        )),
-    }
-}
-
-fn main_result_wit_suffix(kind: MainResultKind) -> &'static str {
-    match kind {
-        MainResultKind::Unit => "",
-        MainResultKind::S32 => " -> s32",
-        MainResultKind::S64 => " -> s64",
-        MainResultKind::F32 => " -> float32",
-        MainResultKind::F64 => " -> float64",
-    }
+    Ok(())
 }
 
 fn build_nexus_host_adapter_component() -> Result<Vec<u8>, String> {
-    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let core_path = repo_root.join("nxlib/stdlib/net-host-adapter.wasm");
-    if !core_path.exists() {
-        return Err(format!(
-            "missing stdlib adapter wasm '{}'; run `cargo build` to regenerate stdlib artifacts",
-            core_path.display()
-        ));
-    }
-    let core_wasm = fs::read(&core_path).map_err(|e| {
-        format!(
-            "failed to read stdlib adapter wasm '{}': {}",
-            core_path.display(),
-            e
-        )
-    })?;
     let mut encoder = ComponentEncoder::default()
-        .module(&core_wasm)
+        .module(NET_HOST_ADAPTER_WASM)
         .map_err(|e| format!("failed to load host adapter core module: {}", e))?
         .adapter(
             WASI_SNAPSHOT_MODULE,
@@ -647,7 +617,7 @@ fn compose_component_with_nexus_host_adapter(
 
         let mut config = ComposeConfig {
             dir: temp_dir.clone(),
-            disallow_imports: true,
+            disallow_imports: false,
             ..Default::default()
         };
         config.dependencies.insert(
@@ -666,20 +636,15 @@ fn compose_component_with_nexus_host_adapter(
     result
 }
 
-fn encode_core_wasm_as_component(core_wasm: &[u8]) -> Result<Vec<u8>, String> {
-    let main_result = detect_main_result_kind(core_wasm)?;
-    let imports = module_import_names(core_wasm)?;
-    let needs_nexus_host = imports.contains(NEXUS_HOST_HTTP_MODULE);
+fn encode_core_wasm_as_component(
+    core_wasm: &[u8],
+    needs_nexus_host: bool,
+) -> Result<Vec<u8>, String> {
+    validate_main_export(core_wasm)?;
     let wit_source = if needs_nexus_host {
-        format!(
-            "package nexus:cli;\n\ninterface nexus-host {{\n  host-http-request: func(method: string, url: string, headers: string, body: string) -> string;\n}}\n\nworld app {{\n  import nexus-host;\n  export main: func(){};\n  export wasi:cli/run@0.2.6;\n}}\n",
-            main_result_wit_suffix(main_result)
-        )
+        "package nexus:cli;\n\ninterface nexus-host {\n  host-http-request: func(method: string, url: string, headers: string, body: string) -> string;\n  host-http-listen: func(addr: string) -> s64;\n  host-http-accept: func(server-id: s64) -> string;\n  host-http-respond: func(req-id: s64, status: s64, headers: string, body: string) -> s32;\n  host-http-stop: func(server-id: s64) -> s32;\n}\n\nworld app {\n  import nexus-host;\n  export main: func();\n  export wasi:cli/run@0.2.6;\n}\n".to_string()
     } else {
-        format!(
-            "package nexus:cli;\n\nworld app {{\n  export main: func(){};\n  export wasi:cli/run@0.2.6;\n}}\n",
-            main_result_wit_suffix(main_result)
-        )
+        "package nexus:cli;\n\nworld app {\n  export main: func();\n  export wasi:cli/run@0.2.6;\n}\n".to_string()
     };
     let wasi_cli_run_wit_source =
         "package wasi:cli@0.2.6;\n\ninterface run {\n  run: func() -> result;\n}\n";
@@ -723,207 +688,6 @@ fn encode_core_wasm_as_component(core_wasm: &[u8]) -> Result<Vec<u8>, String> {
     }
 }
 
-fn append_embedded_bundle(
-    exe: &[u8],
-    main_wasm: &[u8],
-    modules: &BTreeMap<String, Vec<u8>>,
-) -> Result<Vec<u8>, String> {
-    let main_len = u32::try_from(main_wasm.len())
-        .map_err(|_| "main wasm exceeds 4GiB and cannot be packed".to_string())?;
-    let module_count = u32::try_from(modules.len())
-        .map_err(|_| "module count exceeds u32 and cannot be packed".to_string())?;
-
-    let mut payload = Vec::new();
-    payload.extend_from_slice(&PACK_BUNDLE_VERSION.to_le_bytes());
-    payload.extend_from_slice(&main_len.to_le_bytes());
-    payload.extend_from_slice(main_wasm);
-    payload.extend_from_slice(&module_count.to_le_bytes());
-    for (module_name, module_wasm) in modules {
-        let name_bytes = module_name.as_bytes();
-        let name_len = u32::try_from(name_bytes.len()).map_err(|_| {
-            format!(
-                "module name '{}' exceeds u32 length and cannot be packed",
-                module_name
-            )
-        })?;
-        let wasm_len = u32::try_from(module_wasm.len())
-            .map_err(|_| format!("module '{}' exceeds 4GiB and cannot be packed", module_name))?;
-        payload.extend_from_slice(&name_len.to_le_bytes());
-        payload.extend_from_slice(name_bytes);
-        payload.extend_from_slice(&wasm_len.to_le_bytes());
-        payload.extend_from_slice(module_wasm);
-    }
-
-    let payload_len = u64::try_from(payload.len())
-        .map_err(|_| "packed payload exceeds u64 and cannot be encoded".to_string())?;
-    let mut out = Vec::with_capacity(exe.len() + payload.len() + PACK_BUNDLE_TRAILER_LEN);
-    out.extend_from_slice(exe);
-    out.extend_from_slice(&payload);
-    out.extend_from_slice(&payload_len.to_le_bytes());
-    out.extend_from_slice(PACK_BUNDLE_MAGIC);
-    Ok(out)
-}
-
-fn split_embedded_bundle(blob: &[u8]) -> Option<(&[u8], &[u8])> {
-    if blob.len() < PACK_BUNDLE_TRAILER_LEN {
-        return None;
-    }
-    let magic_start = blob.len() - PACK_BUNDLE_MAGIC.len();
-    if &blob[magic_start..] != PACK_BUNDLE_MAGIC {
-        return None;
-    }
-    let len_end = magic_start;
-    let len_start = len_end.checked_sub(8)?;
-    let mut len_bytes = [0u8; 8];
-    len_bytes.copy_from_slice(&blob[len_start..len_end]);
-    let payload_len = usize::try_from(u64::from_le_bytes(len_bytes)).ok()?;
-    if payload_len > len_start {
-        return None;
-    }
-    let payload_start = len_start - payload_len;
-    Some((&blob[..payload_start], &blob[payload_start..len_start]))
-}
-
-fn parse_embedded_bundle(payload: &[u8]) -> Result<(Vec<u8>, HashMap<String, Vec<u8>>), String> {
-    fn read_u32(payload: &[u8], cursor: &mut usize) -> Result<u32, String> {
-        let end = cursor
-            .checked_add(4)
-            .ok_or_else(|| "embedded bundle decode overflow".to_string())?;
-        let bytes = payload
-            .get(*cursor..end)
-            .ok_or_else(|| "embedded bundle is truncated".to_string())?;
-        let mut array = [0u8; 4];
-        array.copy_from_slice(bytes);
-        *cursor = end;
-        Ok(u32::from_le_bytes(array))
-    }
-
-    fn read_bytes<'a>(
-        payload: &'a [u8],
-        cursor: &mut usize,
-        len: usize,
-    ) -> Result<&'a [u8], String> {
-        let end = cursor
-            .checked_add(len)
-            .ok_or_else(|| "embedded bundle decode overflow".to_string())?;
-        let bytes = payload
-            .get(*cursor..end)
-            .ok_or_else(|| "embedded bundle is truncated".to_string())?;
-        *cursor = end;
-        Ok(bytes)
-    }
-
-    let mut cursor = 0usize;
-    let version = read_u32(payload, &mut cursor)?;
-    if version != PACK_BUNDLE_VERSION {
-        return Err(format!(
-            "unsupported packed bundle version {}; expected {}",
-            version, PACK_BUNDLE_VERSION
-        ));
-    }
-
-    let main_len = usize::try_from(read_u32(payload, &mut cursor)?)
-        .map_err(|_| "main wasm length overflows usize".to_string())?;
-    let main_wasm = read_bytes(payload, &mut cursor, main_len)?.to_vec();
-
-    let module_count = usize::try_from(read_u32(payload, &mut cursor)?)
-        .map_err(|_| "module count overflows usize".to_string())?;
-    let mut modules = HashMap::new();
-    for _ in 0..module_count {
-        let name_len = usize::try_from(read_u32(payload, &mut cursor)?)
-            .map_err(|_| "module name length overflows usize".to_string())?;
-        let name_bytes = read_bytes(payload, &mut cursor, name_len)?;
-        let module_name = std::str::from_utf8(name_bytes)
-            .map_err(|e| format!("invalid utf-8 in module name: {}", e))?
-            .to_string();
-        let wasm_len = usize::try_from(read_u32(payload, &mut cursor)?)
-            .map_err(|_| "module wasm length overflows usize".to_string())?;
-        let module_wasm = read_bytes(payload, &mut cursor, wasm_len)?.to_vec();
-        modules.insert(module_name, module_wasm);
-    }
-
-    if cursor != payload.len() {
-        return Err("embedded bundle has unexpected trailing bytes".to_string());
-    }
-    Ok((main_wasm, modules))
-}
-
-#[cfg(test)]
-fn append_embedded_wasm(exe: &[u8], wasm: &[u8]) -> Vec<u8> {
-    let wasm_len = u64::try_from(wasm.len()).unwrap_or(u64::MAX);
-    let mut out = Vec::with_capacity(exe.len() + wasm.len() + PACK_TRAILER_LEN);
-    out.extend_from_slice(exe);
-    out.extend_from_slice(wasm);
-    out.extend_from_slice(&wasm_len.to_le_bytes());
-    out.extend_from_slice(PACK_MAGIC);
-    out
-}
-
-fn split_embedded_wasm(blob: &[u8]) -> Option<(&[u8], &[u8])> {
-    if blob.len() < PACK_TRAILER_LEN {
-        return None;
-    }
-    let magic_start = blob.len() - PACK_MAGIC.len();
-    if &blob[magic_start..] != PACK_MAGIC {
-        return None;
-    }
-    let len_end = magic_start;
-    let len_start = len_end.checked_sub(8)?;
-    let mut len_bytes = [0u8; 8];
-    len_bytes.copy_from_slice(&blob[len_start..len_end]);
-    let wasm_len = usize::try_from(u64::from_le_bytes(len_bytes)).ok()?;
-    if wasm_len > len_start {
-        return None;
-    }
-    let wasm_start = len_start - wasm_len;
-    Some((&blob[..wasm_start], &blob[wasm_start..len_start]))
-}
-
-fn copy_executable_permissions(source_exe: &Path, output_path: &Path) -> Result<(), io::Error> {
-    #[cfg(unix)]
-    {
-        let mode = fs::metadata(source_exe)?.permissions().mode();
-        let mut perms = fs::metadata(output_path)?.permissions();
-        perms.set_mode(mode);
-        fs::set_permissions(output_path, perms)?;
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = source_exe;
-        let _ = output_path;
-    }
-    Ok(())
-}
-
-fn collect_file_backed_dependency_modules(
-    wasm: &[u8],
-    allow_nexus_host_import: bool,
-) -> Result<BTreeMap<String, Vec<u8>>, String> {
-    let imports = module_import_names(wasm)?;
-    let mut queue = VecDeque::new();
-    for module_name in file_backed_imports(&imports, allow_nexus_host_import)? {
-        queue.push_back(module_name);
-    }
-    let mut modules = BTreeMap::new();
-
-    while let Some(module_name) = queue.pop_front() {
-        if modules.contains_key(&module_name) {
-            continue;
-        }
-        let module_bytes = fs::read(&module_name)
-            .map_err(|e| format!("failed to read dependency module '{}': {}", module_name, e))?;
-        let dep_imports = module_import_names(&module_bytes)?;
-        for dep in file_backed_imports(&dep_imports, allow_nexus_host_import)? {
-            if !modules.contains_key(&dep) {
-                queue.push_back(dep);
-            }
-        }
-        modules.insert(module_name, module_bytes);
-    }
-
-    Ok(modules)
-}
-
 fn bundle_external_imports(
     wasm: &[u8],
     allow_nexus_host_import: bool,
@@ -950,6 +714,132 @@ fn bundle_external_imports(
         ));
     }
     Ok(merged)
+}
+
+/// Builds a tiny wasm module that provides stub (unreachable) implementations
+/// of the 5 nexus-host functions.  Used to satisfy imports from the stdlib
+/// bundle's net sub-crate when the app doesn't actually use networking.
+fn build_nexus_host_stub_module() -> Vec<u8> {
+    use wenc::*;
+    let mut module = wenc::Module::new();
+
+    // Type section: the 5 host function signatures.
+    //   0: (i32,i32,i32,i32,i32,i32,i32,i32,i32)->()  host-http-request
+    //   1: (i32,i32)->i64                                host-http-listen
+    //   2: (i64,i32)->()                                 host-http-accept
+    //   3: (i64,i64,i32,i32,i32,i32)->i32                host-http-respond
+    //   4: (i64)->i32                                     host-http-stop
+    let mut types = TypeSection::new();
+    types.ty().function(
+        vec![
+            ValType::I32, ValType::I32, ValType::I32, ValType::I32,
+            ValType::I32, ValType::I32, ValType::I32, ValType::I32, ValType::I32,
+        ],
+        vec![],
+    );
+    types.ty().function(
+        vec![ValType::I32, ValType::I32],
+        vec![ValType::I64],
+    );
+    types.ty().function(
+        vec![ValType::I64, ValType::I32],
+        vec![],
+    );
+    types.ty().function(
+        vec![
+            ValType::I64, ValType::I64, ValType::I32, ValType::I32,
+            ValType::I32, ValType::I32,
+        ],
+        vec![ValType::I32],
+    );
+    types.ty().function(
+        vec![ValType::I64],
+        vec![ValType::I32],
+    );
+    module.section(&types);
+
+    // Function section
+    let mut functions = FunctionSection::new();
+    functions.function(0); // host-http-request
+    functions.function(1); // host-http-listen
+    functions.function(2); // host-http-accept
+    functions.function(3); // host-http-respond
+    functions.function(4); // host-http-stop
+    module.section(&functions);
+
+    // Export section
+    let mut exports = ExportSection::new();
+    exports.export("host-http-request", ExportKind::Func, 0);
+    exports.export("host-http-listen", ExportKind::Func, 1);
+    exports.export("host-http-accept", ExportKind::Func, 2);
+    exports.export("host-http-respond", ExportKind::Func, 3);
+    exports.export("host-http-stop", ExportKind::Func, 4);
+    module.section(&exports);
+
+    // Code section: all functions body = unreachable
+    let mut codes = CodeSection::new();
+    for _ in 0..5 {
+        let mut f = Function::new(vec![]);
+        f.instruction(&Instruction::Unreachable);
+        f.instruction(&Instruction::End);
+        codes.function(&f);
+    }
+    module.section(&codes);
+
+    module.finish()
+}
+
+/// Merges a stub module providing dummy (unreachable) implementations of the
+/// 5 `nexus:cli/nexus-host` functions into `wasm`, satisfying those imports.
+fn merge_nexus_host_stubs(
+    wasm: &[u8],
+    wasm_merge_command: &Path,
+) -> Result<Vec<u8>, String> {
+    let stub = build_nexus_host_stub_module();
+    let temp_dir = std::env::temp_dir().join(format!(
+        "nexus-stub-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&temp_dir)
+        .map_err(|e| format!("failed to create temp stub directory: {}", e))?;
+
+    let result = (|| -> Result<Vec<u8>, String> {
+        let main_path = temp_dir.join("main.wasm");
+        let stub_path = temp_dir.join("stub.wasm");
+        let merged_path = temp_dir.join("merged.wasm");
+        fs::write(&main_path, wasm)
+            .map_err(|e| format!("failed to write main wasm for stub merge: {}", e))?;
+        fs::write(&stub_path, &stub)
+            .map_err(|e| format!("failed to write stub wasm: {}", e))?;
+
+        let output = ProcessCommand::new(wasm_merge_command)
+            .arg(&main_path)
+            .arg(WASM_MERGE_MAIN_NAME)
+            .arg(&stub_path)
+            .arg(NEXUS_HOST_HTTP_MODULE)
+            .arg("--all-features")
+            .arg("-o")
+            .arg(&merged_path)
+            .arg("--skip-export-conflicts")
+            .output()
+            .map_err(|e| format!("failed to run wasm-merge for stub: {}", e))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!(
+                "wasm-merge stub failed: {} {}",
+                output.status,
+                stderr.trim()
+            ));
+        }
+        fs::read(&merged_path).map_err(|e| format!("failed to read stub-merged wasm: {}", e))
+    })();
+
+    let _ = fs::remove_dir_all(&temp_dir);
+    result
 }
 
 fn bundle_candidate_modules(
@@ -997,6 +887,28 @@ fn module_import_names(wasm: &[u8]) -> Result<BTreeSet<String>, String> {
     Ok(out)
 }
 
+/// Returns true if the wasm module imports any function whose name starts with
+/// `__nx_http` — i.e. it actually uses the net FFI.  Used to decide whether the
+/// nexus-host adapter component should be composed in.
+fn module_uses_net_ffi(wasm: &[u8]) -> bool {
+    for payload in wasmparser::Parser::new(0).parse_all(wasm) {
+        let Ok(payload) = payload else {
+            continue;
+        };
+        if let Payload::ImportSection(section) = payload {
+            for import in section {
+                let Ok(import) = import else {
+                    continue;
+                };
+                if import.name.starts_with("__nx_http") {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 fn file_backed_imports(
     imports: &BTreeSet<String>,
     allow_nexus_host_import: bool,
@@ -1011,7 +923,7 @@ fn file_backed_imports(
                 continue;
             }
             return Err(format!(
-                "import module '{}' is deprecated; use component builds (`nexus build --wasm`) for HTTP",
+                "import module '{}' is deprecated; use component builds (`nexus build`) for HTTP",
                 NEXUS_HOST_HTTP_MODULE
             ));
         }
@@ -1101,17 +1013,17 @@ fn merge_dependencies_once(
 
 fn parse_program(filename: &str, src: &str) -> Option<lang::ast::Program> {
     let parser = lang::parser::parser();
-    let result = parser.parse(src.to_string());
+    let result = parser.parse(src);
 
     match result {
         Ok(program) => Some(program),
         Err(errors) => {
             for err in errors {
-                let report = Report::build(ReportKind::Error, filename, err.span().start)
-                    .with_message(format!("{:?}", err))
+                let report = Report::build(ReportKind::Error, filename, err.span.start)
+                    .with_message(&err.message)
                     .with_label(
-                        Label::new((filename, err.span()))
-                            .with_message(format!("{}", err))
+                        Label::new((filename, err.span.clone()))
+                            .with_message(&err.message)
                             .with_color(Color::Red),
                     )
                     .finish();
@@ -1160,85 +1072,10 @@ fn typecheck_program(filename: &str, src: &str, program: &lang::ast::Program) ->
     }
 }
 
-fn report_lower_error(filename: &str, src: &str, err: &compiler::lower::LowerError) {
-    if let Some(span) = &err.span {
-        let report = Report::build(ReportKind::Error, filename, span.start)
-            .with_message(err.message.clone())
-            .with_label(
-                Label::new((filename, span.clone()))
-                    .with_message(err.message.clone())
-                    .with_color(Color::Red),
-            )
-            .finish();
-        if let Err(print_err) = report.print((filename, Source::from(src))) {
-            eprintln!("Failed to render lowering diagnostic: {}", print_err);
-        }
-    } else {
-        eprintln!("Lowering Error: {}", err.message);
-    }
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn embedded_bundle_roundtrip() {
-        let exe = b"nexus-binary";
-        let main_wasm = b"\0asm\x01\0\0\0main";
-        let mut modules = BTreeMap::new();
-        modules.insert(
-            "nxlib/stdlib/stdio.wasm".to_string(),
-            b"\0asm\x01\0\0\0stdio".to_vec(),
-        );
-        modules.insert(
-            "nxlib/stdlib/core.wasm".to_string(),
-            b"\0asm\x01\0\0\0core".to_vec(),
-        );
-        let packed =
-            append_embedded_bundle(exe, main_wasm, &modules).expect("bundle should be encodable");
-        let (base, payload) =
-            split_embedded_bundle(&packed).expect("packed buffer should contain embedded bundle");
-        assert_eq!(base, exe);
-        let (decoded_main, decoded_modules) =
-            parse_embedded_bundle(payload).expect("bundle payload should decode");
-        assert_eq!(decoded_main, main_wasm);
-        assert_eq!(
-            decoded_modules
-                .get("nxlib/stdlib/stdio.wasm")
-                .map(|m| m.as_slice()),
-            Some(&b"\0asm\x01\0\0\0stdio"[..])
-        );
-        assert_eq!(
-            decoded_modules
-                .get("nxlib/stdlib/core.wasm")
-                .map(|m| m.as_slice()),
-            Some(&b"\0asm\x01\0\0\0core"[..])
-        );
-    }
-
-    #[test]
-    fn split_embedded_bundle_rejects_invalid_trailer() {
-        let blob = b"not-packed-bundle";
-        assert!(split_embedded_bundle(blob).is_none());
-    }
-
-    #[test]
-    fn embedded_wasm_roundtrip() {
-        let exe = b"nexus-binary";
-        let wasm = b"\0asm\x01\0\0\0payload";
-        let packed = append_embedded_wasm(exe, wasm);
-        let (base, extracted) =
-            split_embedded_wasm(&packed).expect("packed buffer should contain embedded wasm");
-        assert_eq!(base, exe);
-        assert_eq!(extracted, wasm);
-    }
-
-    #[test]
-    fn split_embedded_wasm_rejects_invalid_trailer() {
-        let blob = b"not-packed";
-        assert!(split_embedded_wasm(blob).is_none());
-    }
 
     #[test]
     fn wasm_header_detection_distinguishes_core_and_component() {
@@ -1265,22 +1102,11 @@ mod tests {
     }
 
     #[test]
-    fn cli_build_wasm_flag_is_supported() {
-        let cli = Cli::try_parse_from(["nexus", "build", "example.nx", "--wasm"])
-            .expect("`--wasm` should be accepted");
-        match cli.command {
-            Some(Command::Build { wasm, .. }) => assert!(wasm),
-            other => panic!("unexpected parsed command: {:?}", other),
-        }
-    }
-
-    #[test]
     fn cli_build_wasm_merge_flag_is_supported() {
         let cli = Cli::try_parse_from([
             "nexus",
             "build",
             "example.nx",
-            "--wasm",
             "--wasm-merge",
             "/opt/bin/wasm-merge",
         ])
@@ -1294,54 +1120,19 @@ mod tests {
     }
 
     #[test]
-    fn cli_build_defaults_to_executable_mode_without_wasm_flag() {
-        let cli = Cli::try_parse_from(["nexus", "build", "example.nx"])
-            .expect("plain build should be accepted");
-        match cli.command {
-            Some(Command::Build { wasm, .. }) => assert!(!wasm),
-            other => panic!("unexpected parsed command: {:?}", other),
-        }
-    }
-
-    #[test]
-    fn cli_build_component_flag_is_rejected() {
-        let err = Cli::try_parse_from(["nexus", "build", "example.nx", "--component"])
-            .expect_err("`--component` should not be accepted");
+    fn cli_build_wasm_flag_is_rejected() {
+        let err = Cli::try_parse_from(["nexus", "build", "example.nx", "--wasm"])
+            .expect_err("`--wasm` should not be accepted (component is now the only mode)");
         let msg = err.to_string();
         assert!(
-            msg.contains("--component"),
+            msg.contains("--wasm"),
             "error message should mention removed flag, got: {}",
             msg
         );
     }
 
     #[test]
-    fn cli_pack_subcommand_is_rejected() {
-        let err = Cli::try_parse_from(["nexus", "pack", "example.nx"])
-            .expect_err("`pack` subcommand should not be accepted");
-        let msg = err.to_string();
-        assert!(
-            msg.contains("pack"),
-            "error message should mention removed subcommand, got: {}",
-            msg
-        );
-    }
-
-    #[test]
-    fn cli_unpack_subcommand_is_rejected() {
-        let err = Cli::try_parse_from(["nexus", "unpack", "packed.out"])
-            .expect_err("`unpack` subcommand should not be accepted");
-        let msg = err.to_string();
-        assert!(
-            msg.contains("unpack"),
-            "error message should mention removed subcommand, got: {}",
-            msg
-        );
-    }
-
-    #[test]
-    fn build_default_output_names_are_main_out_and_main_wasm() {
-        assert_eq!(default_build_output_path(), PathBuf::from("main.out"));
+    fn build_default_output_name_is_main_wasm() {
         assert_eq!(default_wasm_output_path(), PathBuf::from("main.wasm"));
     }
 
@@ -1368,8 +1159,39 @@ mod tests {
     }
 
     #[test]
+    fn extract_main_requires_returns_none_when_no_main() {
+        let program = lang::ast::Program {
+            definitions: vec![],
+        };
+        assert!(extract_main_requires(&program).is_none());
+    }
+
+    #[test]
+    fn extract_main_requires_returns_requires_clause() {
+        let src = r#"
+        let main = fn () -> unit require { PermNet } do
+            return ()
+        end
+        "#;
+        let program = lang::parser::parser()
+            .parse(src)
+            .expect("parse should succeed");
+        let requires = extract_main_requires(&program).expect("should find main requires");
+        match requires {
+            lang::ast::Type::Row(items, _) => {
+                assert_eq!(items.len(), 1);
+                assert_eq!(
+                    items[0],
+                    lang::ast::Type::UserDefined("PermNet".to_string(), vec![])
+                );
+            }
+            other => panic!("expected Row, got {:?}", other),
+        }
+    }
+
+    #[test]
     fn execution_capabilities_reject_preopen_without_allow_fs() {
-        let err = build_execution_capabilities(false, vec![PathBuf::from("/tmp")])
+        let err = build_execution_capabilities(false, false, false, false, false, false, vec![PathBuf::from("/tmp")])
             .expect_err("preopen without --allow-fs should be rejected");
         assert!(
             err.contains("--preopen"),

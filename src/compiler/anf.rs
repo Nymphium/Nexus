@@ -1,4 +1,6 @@
-use crate::lang::ast::Type;
+#![allow(dead_code)]
+
+use crate::lang::ast::{BinaryOp, Type};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AnfProgram {
@@ -21,6 +23,7 @@ pub struct AnfFunction {
     pub name: String,
     pub params: Vec<AnfParam>,
     pub ret_type: Type,
+    pub requires: Type,
     pub effects: Type,
     pub body: Vec<AnfStmt>,
     pub ret: AnfAtom,
@@ -67,7 +70,7 @@ pub enum AnfStmt {
 pub enum AnfExpr {
     Atom(AnfAtom),
     Binary {
-        op: String,
+        op: BinaryOp,
         lhs: AnfAtom,
         rhs: AnfAtom,
         typ: Type,

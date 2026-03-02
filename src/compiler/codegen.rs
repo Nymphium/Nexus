@@ -1,27 +1,184 @@
 use std::collections::{HashMap, HashSet};
 
+use std::borrow::Cow;
+
 use wasm_encoder::{
-    BlockType, CodeSection, ConstExpr, DataSection, EntityType, ExportKind, ExportSection,
-    Function, FunctionSection, GlobalSection, GlobalType, ImportSection, Instruction, MemArg,
-    MemorySection, MemoryType, Module, TypeSection, ValType,
+    BlockType, CodeSection, ConstExpr, CustomSection, DataSection, EntityType, ExportKind,
+    ExportSection, Function, FunctionSection, GlobalSection, GlobalType, ImportSection,
+    Instruction, MemArg, MemorySection, MemoryType, Module, TypeSection, ValType,
 };
 
-use crate::lang::ast::{Program, Type};
+use crate::constants::{Permission, ENTRYPOINT, MEMORY_EXPORT, NEXUS_CAPABILITIES_SECTION, WASI_CLI_RUN_EXPORT};
+use crate::ir::lir::{LirAtom, LirExpr, LirFunction, LirProgram, LirStmt};
+use crate::ir::mir::EvidenceTable;
+use crate::lang::ast::{BinaryOp, Program, Type};
 
 use super::anf::{AnfAtom, AnfExpr, AnfExternal, AnfFunction, AnfProgram, AnfStmt};
-use super::lower::{lower_to_typed_anf, LowerError};
+use super::passes::hir_build::{build_hir, HirBuildError};
+use super::passes::lir_lower::{lower_mir_to_lir, LirLowerError};
+use super::passes::mir_lower::{lower_hir_to_mir, MirLowerError};
 
 const STRING_DATA_BASE: u32 = 16;
 const OBJECT_HEAP_GLOBAL_INDEX: u32 = 0;
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct CodegenError {
-    pub message: String,
+pub enum CodegenError {
+    /// E2001: main function not found in ANF program
+    MissingMain,
+    /// E2002: unsupported binary operator for operand type
+    UnsupportedBinaryOp { op: BinaryOp, operand_type: String },
+    /// E2003: unsupported binary operator for operand type pair
+    UnsupportedBinaryOpPair { op: BinaryOp, lhs: String, rhs: String },
+    /// E2004: unsupported wasm type
+    UnsupportedWasmType { typ: String },
+    /// E2005: unit cannot be represented as wasm valtype
+    UnitWasmType,
+    /// E2006: unsupported numeric coercion
+    UnsupportedCoercion { from_type: String, to_type: String },
+    /// E2007: call target not found
+    CallTargetNotFound { name: String },
+    /// E2008: call arity mismatch
+    CallArityMismatch { name: String, expected: usize, got: usize },
+    /// E2009: call label mismatch
+    CallLabelMismatch { name: String, expected: String, got: String },
+    /// E2010: conflicting wasm local types
+    ConflictingLocalTypes { name: String },
+    /// E2011: object heap not enabled
+    ObjectHeapRequired { context: &'static str },
+    /// E2012: cannot pack value type into object field
+    UnsupportedPack { typ: String },
+    /// E2013: cannot unpack object field into type
+    UnsupportedUnpack { typ: String },
+    /// E2014: external param type not supported
+    UnsupportedExternalParamType { typ: String },
+    /// E2015: external return type not supported
+    UnsupportedExternalReturnType { typ: String },
+    /// E2016: external call argument type mismatch
+    ExternalArgTypeMismatch { expected: String, got: String },
+    /// E2017: string concat expects string operands
+    StringConcatTypeMismatch { lhs: String, rhs: String },
+    /// E2018: string literals exist without memory configuration
+    StringLiteralsWithoutMemory,
+}
+
+impl CodegenError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            CodegenError::MissingMain => "E2001",
+            CodegenError::UnsupportedBinaryOp { .. } => "E2002",
+            CodegenError::UnsupportedBinaryOpPair { .. } => "E2003",
+            CodegenError::UnsupportedWasmType { .. } => "E2004",
+            CodegenError::UnitWasmType => "E2005",
+            CodegenError::UnsupportedCoercion { .. } => "E2006",
+            CodegenError::CallTargetNotFound { .. } => "E2007",
+            CodegenError::CallArityMismatch { .. } => "E2008",
+            CodegenError::CallLabelMismatch { .. } => "E2009",
+            CodegenError::ConflictingLocalTypes { .. } => "E2010",
+            CodegenError::ObjectHeapRequired { .. } => "E2011",
+            CodegenError::UnsupportedPack { .. } => "E2012",
+            CodegenError::UnsupportedUnpack { .. } => "E2013",
+            CodegenError::UnsupportedExternalParamType { .. } => "E2014",
+            CodegenError::UnsupportedExternalReturnType { .. } => "E2015",
+            CodegenError::ExternalArgTypeMismatch { .. } => "E2016",
+            CodegenError::StringConcatTypeMismatch { .. } => "E2017",
+            CodegenError::StringLiteralsWithoutMemory => "E2018",
+        }
+    }
 }
 
 impl std::fmt::Display for CodegenError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.message)
+        let code = self.code();
+        match self {
+            CodegenError::MissingMain => {
+                write!(f, "[{}] main function not found in ANF program", code)
+            }
+            CodegenError::UnsupportedBinaryOp { op, operand_type } => write!(
+                f,
+                "[{}] unsupported {} binary operator '{}'",
+                code, operand_type, op
+            ),
+            CodegenError::UnsupportedBinaryOpPair { op, lhs, rhs } => write!(
+                f,
+                "[{}] unsupported binary operator '{}' for operand types ({}, {})",
+                code, op, lhs, rhs
+            ),
+            CodegenError::UnsupportedWasmType { typ } => write!(
+                f,
+                "[{}] type '{}' is not supported by current wasm codegen",
+                code, typ
+            ),
+            CodegenError::UnitWasmType => write!(
+                f,
+                "[{}] unit cannot be represented as a local/param wasm valtype",
+                code
+            ),
+            CodegenError::UnsupportedCoercion { from_type, to_type } => write!(
+                f,
+                "[{}] unsupported numeric coercion from '{}' to '{}'",
+                code, from_type, to_type
+            ),
+            CodegenError::CallTargetNotFound { name } => write!(
+                f,
+                "[{}] call to '{}' is not supported in wasm codegen (callee not found in internal/external lowered symbols)",
+                code, name
+            ),
+            CodegenError::CallArityMismatch { name, expected, got } => write!(
+                f,
+                "[{}] call arity mismatch for '{}': expected {}, got {}",
+                code, name, expected, got
+            ),
+            CodegenError::CallLabelMismatch { name, expected, got } => write!(
+                f,
+                "[{}] call label mismatch for '{}': expected '{}', got '{}'",
+                code, name, expected, got
+            ),
+            CodegenError::ConflictingLocalTypes { name } => write!(
+                f,
+                "[{}] variable '{}' has conflicting wasm local types",
+                code, name
+            ),
+            CodegenError::ObjectHeapRequired { context } => write!(
+                f,
+                "[{}] codegen internal error: {} requested without object heap",
+                code, context
+            ),
+            CodegenError::UnsupportedPack { typ } => write!(
+                f,
+                "[{}] cannot pack value of type '{}' into object field",
+                code, typ
+            ),
+            CodegenError::UnsupportedUnpack { typ } => write!(
+                f,
+                "[{}] cannot unpack object field into type '{}'",
+                code, typ
+            ),
+            CodegenError::UnsupportedExternalParamType { typ } => write!(
+                f,
+                "[{}] external param type '{}' is not supported by current wasm codegen",
+                code, typ
+            ),
+            CodegenError::UnsupportedExternalReturnType { typ } => write!(
+                f,
+                "[{}] external return type '{}' is not supported by current wasm codegen",
+                code, typ
+            ),
+            CodegenError::ExternalArgTypeMismatch { expected, got } => write!(
+                f,
+                "[{}] external call argument type mismatch: expected {}, got {}",
+                code, expected, got
+            ),
+            CodegenError::StringConcatTypeMismatch { lhs, rhs } => write!(
+                f,
+                "[{}] string concat expects string operands, got ({}, {})",
+                code, lhs, rhs
+            ),
+            CodegenError::StringLiteralsWithoutMemory => write!(
+                f,
+                "[{}] codegen internal error: string literals exist without memory configuration",
+                code
+            ),
+        }
     }
 }
 
@@ -29,14 +186,18 @@ impl std::error::Error for CodegenError {}
 
 #[derive(Debug)]
 pub enum CompileError {
-    Lower(LowerError),
+    HirBuild(HirBuildError),
+    MirLower(MirLowerError),
+    LirLower(LirLowerError),
     Codegen(CodegenError),
 }
 
 impl std::fmt::Display for CompileError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            CompileError::Lower(e) => write!(f, "{}", e),
+            CompileError::HirBuild(e) => write!(f, "{}", e),
+            CompileError::MirLower(e) => write!(f, "{}", e),
+            CompileError::LirLower(e) => write!(f, "{}", e),
             CompileError::Codegen(e) => write!(f, "{}", e),
         }
     }
@@ -95,10 +256,12 @@ struct CodegenLayout {
     heap_base: u32,
 }
 
-/// Lowers a parsed Nexus program to typed ANF and compiles it to core wasm bytes.
+/// Compiles a parsed Nexus program through HIR → MIR → LIR → WASM pipeline.
 pub fn compile_program_to_wasm(program: &Program) -> Result<Vec<u8>, CompileError> {
-    let anf = lower_to_typed_anf(program).map_err(CompileError::Lower)?;
-    compile_typed_anf_to_wasm(&anf).map_err(CompileError::Codegen)
+    let hir = build_hir(program).map_err(CompileError::HirBuild)?;
+    let mir = lower_hir_to_mir(&hir).map_err(CompileError::MirLower)?;
+    let lir = lower_mir_to_lir(&mir).map_err(CompileError::LirLower)?;
+    compile_lir_to_wasm(&lir, &mir.evidence_table).map_err(CompileError::Codegen)
 }
 
 /// Compiles typed ANF directly into core wasm bytes.
@@ -111,14 +274,14 @@ pub fn compile_typed_anf_to_wasm(program: &AnfProgram) -> Result<Vec<u8>, Codege
         );
     }
     let main_idx = internal_function_indices
-        .get("main")
+        .get(ENTRYPOINT)
         .copied()
-        .ok_or_else(|| err("main function not found in ANF program"))?;
+        .ok_or_else(|| CodegenError::MissingMain)?;
     let main_func = program
         .functions
         .iter()
-        .find(|func| func.name == "main")
-        .ok_or_else(|| err("main function body not found in ANF program"))?;
+        .find(|func| func.name == ENTRYPOINT)
+        .ok_or_else(|| CodegenError::MissingMain)?;
 
     let mut external_function_indices = HashMap::new();
     for (idx, ext) in program.externals.iter().enumerate() {
@@ -162,7 +325,7 @@ pub fn compile_typed_anf_to_wasm(program: &AnfProgram) -> Result<Vec<u8>, Codege
     if let MemoryMode::Imported { module: mem_module } = &layout.memory_mode {
         imports.import(
             mem_module,
-            "memory",
+            MEMORY_EXPORT,
             EntityType::Memory(MemoryType {
                 minimum: 1,
                 maximum: None,
@@ -194,8 +357,11 @@ pub fn compile_typed_anf_to_wasm(program: &AnfProgram) -> Result<Vec<u8>, Codege
 
     if matches!(layout.memory_mode, MemoryMode::Defined) {
         let mut memories = MemorySection::new();
+        // 17 pages (~1.1 MB).  With the single stdlib bundle the app imports
+        // memory from the bundle, so this branch is only reached when there
+        // are no external imports (MemoryMode::Defined).
         memories.memory(MemoryType {
-            minimum: 1,
+            minimum: 17,
             maximum: None,
             memory64: false,
             shared: false,
@@ -218,13 +384,16 @@ pub fn compile_typed_anf_to_wasm(program: &AnfProgram) -> Result<Vec<u8>, Codege
     }
 
     let mut exports = ExportSection::new();
-    exports.export("main", ExportKind::Func, main_idx);
+    exports.export(ENTRYPOINT, ExportKind::Func, main_idx);
     let wasi_cli_run_func_idx = program.externals.len() as u32 + program.functions.len() as u32;
     exports.export(
-        "wasi:cli/run@0.2.6#run",
+        WASI_CLI_RUN_EXPORT,
         ExportKind::Func,
         wasi_cli_run_func_idx,
     );
+    if matches!(layout.memory_mode, MemoryMode::Defined) {
+        exports.export(MEMORY_EXPORT, ExportKind::Memory, 0);
+    }
     module.section(&exports);
 
     let mut code = CodeSection::new();
@@ -254,7 +423,42 @@ pub fn compile_typed_anf_to_wasm(program: &AnfProgram) -> Result<Vec<u8>, Codege
         module.section(&data);
     }
 
+    // Emit nexus:capabilities custom section from main's require row
+    let caps = extract_main_require_ports(program);
+    if !caps.is_empty() {
+        let payload = caps.join("\n");
+        module.section(&CustomSection {
+            name: Cow::Borrowed(NEXUS_CAPABILITIES_SECTION),
+            data: Cow::Borrowed(payload.as_bytes()),
+        });
+    }
+
     Ok(module.finish())
+}
+
+/// Maps PermFs/PermNet to capability names for the custom section.
+fn perm_to_capability(name: &str) -> Option<&'static str> {
+    Permission::from_perm_name(name).map(|p| p.cap_name())
+}
+
+/// Extracts runtime permission names from main function's require row for capability metadata.
+fn extract_main_require_ports(program: &AnfProgram) -> Vec<String> {
+    let main_func = program.functions.iter().find(|f| f.name == ENTRYPOINT);
+    let Some(func) = main_func else {
+        return vec![];
+    };
+    match &func.requires {
+        Type::Row(reqs, _) => reqs
+            .iter()
+            .filter_map(|r| match r {
+                Type::UserDefined(name, args) if args.is_empty() => {
+                    perm_to_capability(name).map(|s| s.to_string())
+                }
+                _ => None,
+            })
+            .collect(),
+        _ => vec![],
+    }
 }
 
 fn compile_wasi_cli_run_wrapper(main_idx: u32, main_ret_type: &Type) -> Function {
@@ -376,10 +580,9 @@ fn register_local(
     match local_map.get(name) {
         Some(existing) => {
             if existing.val_type != vt {
-                return Err(err(format!(
-                    "variable '{}' has conflicting wasm local types",
-                    name
-                )));
+                return Err(CodegenError::ConflictingLocalTypes {
+                    name: name.to_string(),
+                });
             }
         }
         None => {
@@ -481,10 +684,9 @@ fn compile_stmt(
             }
             emit_numeric_coercion(&expr_type, typ, out)?;
             let local = local_map.get(name).ok_or_else(|| {
-                err(format!(
-                    "codegen internal error: local '{}' is not allocated",
-                    name
-                ))
+                CodegenError::ConflictingLocalTypes {
+                    name: name.clone(),
+                }
             })?;
             out.instruction(&Instruction::LocalSet(local.index));
             Ok(())
@@ -593,10 +795,9 @@ fn compile_stmt(
             catch_ret,
         } => {
             let catch_local = local_map.get(catch_param).ok_or_else(|| {
-                err(format!(
-                    "codegen internal error: catch local '{}' is not allocated",
-                    catch_param
-                ))
+                CodegenError::ConflictingLocalTypes {
+                    name: catch_param.clone(),
+                }
             })?;
 
             out.instruction(&Instruction::I32Const(0));
@@ -683,15 +884,15 @@ fn compile_expr(
     match expr {
         AnfExpr::Atom(atom) => compile_atom(atom, out, local_map, layout),
         AnfExpr::Binary { op, lhs, rhs, typ } => {
-            if is_string_concat_operator(op, typ) {
+            if is_string_concat_operator(*op, typ) {
                 return emit_string_concat(lhs, rhs, out, local_map, layout, temps);
             }
-            let operand_type = binary_operand_type(op, &lhs.typ(), &rhs.typ())?;
+            let operand_type = binary_operand_type(*op, &lhs.typ(), &rhs.typ())?;
             compile_atom(lhs, out, local_map, layout)?;
             emit_numeric_coercion(&lhs.typ(), &operand_type, out)?;
             compile_atom(rhs, out, local_map, layout)?;
             emit_numeric_coercion(&rhs.typ(), &operand_type, out)?;
-            compile_binary(op, &operand_type, out)
+            compile_binary(*op, &operand_type, out)
         }
         AnfExpr::Call {
             func, args, typ, ..
@@ -701,23 +902,25 @@ fn compile_expr(
                     .functions
                     .iter()
                     .find(|f| f.name == *func)
-                    .ok_or_else(|| err(format!("internal call target '{}' not found", func)))?;
+                    .ok_or_else(|| CodegenError::CallTargetNotFound {
+                        name: func.clone(),
+                    })?;
 
                 if args.len() != callee.params.len() {
-                    return Err(err(format!(
-                        "call arity mismatch for '{}': expected {}, got {}",
-                        func,
-                        callee.params.len(),
-                        args.len()
-                    )));
+                    return Err(CodegenError::CallArityMismatch {
+                        name: func.clone(),
+                        expected: callee.params.len(),
+                        got: args.len(),
+                    });
                 }
 
                 for ((label, atom), param) in args.iter().zip(callee.params.iter()) {
                     if label != &param.label {
-                        return Err(err(format!(
-                            "call label mismatch for '{}': expected '{}', got '{}'",
-                            func, param.label, label
-                        )));
+                        return Err(CodegenError::CallLabelMismatch {
+                            name: func.clone(),
+                            expected: param.label.clone(),
+                            got: label.clone(),
+                        });
                     }
                     compile_atom(atom, out, local_map, layout)?;
                     emit_numeric_coercion(&atom.typ(), &param.typ, out)?;
@@ -734,23 +937,25 @@ fn compile_expr(
                     .externals
                     .iter()
                     .find(|f| f.name == *func)
-                    .ok_or_else(|| err(format!("external call target '{}' not found", func)))?;
+                    .ok_or_else(|| CodegenError::CallTargetNotFound {
+                        name: func.clone(),
+                    })?;
 
                 if args.len() != callee.params.len() {
-                    return Err(err(format!(
-                        "call arity mismatch for '{}': expected {}, got {}",
-                        func,
-                        callee.params.len(),
-                        args.len()
-                    )));
+                    return Err(CodegenError::CallArityMismatch {
+                        name: func.clone(),
+                        expected: callee.params.len(),
+                        got: args.len(),
+                    });
                 }
 
                 for ((label, atom), param) in args.iter().zip(callee.params.iter()) {
                     if label != &param.label {
-                        return Err(err(format!(
-                            "call label mismatch for '{}': expected '{}', got '{}'",
-                            func, param.label, label
-                        )));
+                        return Err(CodegenError::CallLabelMismatch {
+                            name: func.clone(),
+                            expected: param.label.clone(),
+                            got: label.clone(),
+                        });
                     }
                     compile_external_arg(atom, &param.typ, out, local_map, layout, temps)?;
                 }
@@ -762,10 +967,9 @@ fn compile_expr(
                 return Ok(());
             }
 
-            Err(err(format!(
-                "call to '{}' is not supported in wasm codegen (callee not found in internal/external lowered symbols)",
-                func
-            )))
+            Err(CodegenError::CallTargetNotFound {
+                name: func.clone(),
+            })
         }
         AnfExpr::Constructor { name, args, .. } => {
             emit_alloc_object(out, temps, 1 + args.len(), layout)?;
@@ -891,9 +1095,9 @@ fn emit_alloc_object(
     layout: &CodegenLayout,
 ) -> Result<(), CodegenError> {
     if !layout.object_heap_enabled {
-        return Err(err(
-            "codegen internal error: object heap allocation requested without object heap",
-        ));
+        return Err(CodegenError::ObjectHeapRequired {
+            context: "object heap allocation",
+        });
     }
     out.instruction(&Instruction::GlobalGet(OBJECT_HEAP_GLOBAL_INDEX));
     out.instruction(&Instruction::LocalTee(temps.object_ptr_i32));
@@ -929,10 +1133,9 @@ fn emit_pack_value_to_i64(typ: &Type, out: &mut Function) -> Result<(), CodegenE
             out.instruction(&Instruction::I64Const(0));
             Ok(())
         }
-        other => Err(err(format!(
-            "cannot pack value of type '{}' into object field",
-            other
-        ))),
+        other => Err(CodegenError::UnsupportedPack {
+            typ: other.to_string(),
+        }),
     }
 }
 
@@ -957,11 +1160,12 @@ fn emit_unpack_i64_to_value(typ: &Type, out: &mut Function) -> Result<(), Codege
             out.instruction(&Instruction::F32ReinterpretI32);
             Ok(())
         }
-        Type::Unit => Err(err("cannot unpack unit from object field")),
-        other => Err(err(format!(
-            "cannot unpack object field into type '{}'",
-            other
-        ))),
+        Type::Unit => Err(CodegenError::UnsupportedUnpack {
+            typ: "unit".to_string(),
+        }),
+        other => Err(CodegenError::UnsupportedUnpack {
+            typ: other.to_string(),
+        }),
     }
 }
 
@@ -977,10 +1181,10 @@ fn compile_external_arg(
     match param_repr {
         Type::String => {
             if !matches!(peel_linear(&atom.typ()), Type::String) {
-                return Err(err(format!(
-                    "external call argument type mismatch: expected string, got {}",
-                    atom.typ()
-                )));
+                return Err(CodegenError::ExternalArgTypeMismatch {
+                    expected: "string".to_string(),
+                    got: atom.typ().to_string(),
+                });
             }
             compile_atom(atom, out, local_map, layout)?;
             unpack_packed_i64_to_ptr_len(out, temps.packed_tmp_i64);
@@ -988,10 +1192,10 @@ fn compile_external_arg(
         }
         Type::Array(_) => {
             if !is_array_like_type(&atom.typ()) {
-                return Err(err(format!(
-                    "external call argument type mismatch: expected array-like value, got {}",
-                    atom.typ()
-                )));
+                return Err(CodegenError::ExternalArgTypeMismatch {
+                    expected: "array-like value".to_string(),
+                    got: atom.typ().to_string(),
+                });
             }
             compile_atom(atom, out, local_map, layout)?;
             unpack_packed_i64_to_ptr_len(out, temps.packed_tmp_i64);
@@ -999,10 +1203,10 @@ fn compile_external_arg(
         }
         Type::Borrow(inner) if matches!(peel_linear(inner), Type::Array(_)) => {
             if !is_array_like_type(&atom.typ()) {
-                return Err(err(format!(
-                    "external call argument type mismatch: expected array-like value, got {}",
-                    atom.typ()
-                )));
+                return Err(CodegenError::ExternalArgTypeMismatch {
+                    expected: "array-like value".to_string(),
+                    got: atom.typ().to_string(),
+                });
             }
             compile_atom(atom, out, local_map, layout)?;
             unpack_packed_i64_to_ptr_len(out, temps.packed_tmp_i64);
@@ -1030,8 +1234,8 @@ fn unpack_packed_i64_to_ptr_len(out: &mut Function, tmp_local: u32) {
     out.instruction(&Instruction::I32WrapI64);
 }
 
-fn is_string_concat_operator(op: &str, result_type: &Type) -> bool {
-    matches!(op, "++" | "+") && matches!(peel_linear(result_type), Type::String)
+fn is_string_concat_operator(op: BinaryOp, result_type: &Type) -> bool {
+    matches!(op, BinaryOp::Concat | BinaryOp::Add) && matches!(peel_linear(result_type), Type::String)
 }
 
 fn emit_string_concat(
@@ -1043,18 +1247,17 @@ fn emit_string_concat(
     temps: &FunctionTemps,
 ) -> Result<(), CodegenError> {
     if !layout.object_heap_enabled {
-        return Err(err(
-            "codegen internal error: string concat requested without object heap",
-        ));
+        return Err(CodegenError::ObjectHeapRequired {
+            context: "string concat",
+        });
     }
     if !matches!(peel_linear(&lhs.typ()), Type::String)
         || !matches!(peel_linear(&rhs.typ()), Type::String)
     {
-        return Err(err(format!(
-            "string concat expects string operands, got ({}, {})",
-            lhs.typ(),
-            rhs.typ()
-        )));
+        return Err(CodegenError::StringConcatTypeMismatch {
+            lhs: lhs.typ().to_string(),
+            rhs: rhs.typ().to_string(),
+        });
     }
 
     compile_atom(lhs, out, local_map, layout)?;
@@ -1178,7 +1381,9 @@ fn compile_atom(
         AnfAtom::Var { name, .. } => {
             let local = local_map
                 .get(name)
-                .ok_or_else(|| err(format!("unknown local variable '{}'", name)))?;
+                .ok_or_else(|| CodegenError::ConflictingLocalTypes {
+                    name: name.clone(),
+                })?;
             out.instruction(&Instruction::LocalGet(local.index));
             Ok(())
         }
@@ -1199,7 +1404,7 @@ fn compile_atom(
                 .string_literals
                 .get(s)
                 .copied()
-                .ok_or_else(|| err("codegen internal error: missing string literal layout"))?;
+                .ok_or_else(|| CodegenError::StringLiteralsWithoutMemory)?;
             out.instruction(&Instruction::I64Const(pack_string(packed)));
             Ok(())
         }
@@ -1243,9 +1448,7 @@ fn build_codegen_layout(program: &AnfProgram) -> Result<CodegenLayout, CodegenEr
     }
 
     if matches!(memory_mode, MemoryMode::None) && !data_segments.is_empty() {
-        return Err(err(
-            "codegen internal error: string literals exist without memory configuration",
-        ));
+        return Err(CodegenError::StringLiteralsWithoutMemory);
     }
 
     let heap_base = align8(next_offset.max(STRING_DATA_BASE));
@@ -1339,7 +1542,7 @@ fn expr_uses_object_heap(expr: &AnfExpr) -> bool {
             | AnfExpr::ObjectField { .. }
     ) || matches!(
         expr,
-        AnfExpr::Binary { op, typ, .. } if is_string_concat_operator(op, typ)
+        AnfExpr::Binary { op, typ, .. } if is_string_concat_operator(*op, typ)
     )
 }
 
@@ -1468,10 +1671,9 @@ fn external_param_types(ext: &AnfExternal) -> Result<Vec<ValType>, CodegenError>
                 out.push(ValType::I32);
             }
             other => {
-                return Err(err(format!(
-                    "external param type '{}' is not supported by current wasm codegen",
-                    other
-                )))
+                return Err(CodegenError::UnsupportedExternalParamType {
+                    typ: other.to_string(),
+                })
             }
         }
     }
@@ -1486,193 +1688,195 @@ fn external_return_types(ext: &AnfExternal) -> Result<Vec<ValType>, CodegenError
         Type::F32 => Ok(vec![ValType::F32]),
         Type::F64 => Ok(vec![ValType::F64]),
         Type::String => Ok(vec![ValType::I64]),
-        other => Err(err(format!(
-            "external return type '{}' is not supported by current wasm codegen",
-            other
-        ))),
+        other => Err(CodegenError::UnsupportedExternalReturnType {
+            typ: other.to_string(),
+        }),
     }
 }
 
-fn compile_binary(op: &str, operand_type: &Type, out: &mut Function) -> Result<(), CodegenError> {
+fn compile_binary(op: BinaryOp, operand_type: &Type, out: &mut Function) -> Result<(), CodegenError> {
     match peel_linear(operand_type) {
         Type::I64 => match op {
-            "+" => {
+            BinaryOp::Add => {
                 out.instruction(&Instruction::I64Add);
             }
-            "-" => {
+            BinaryOp::Sub => {
                 out.instruction(&Instruction::I64Sub);
             }
-            "*" => {
+            BinaryOp::Mul => {
                 out.instruction(&Instruction::I64Mul);
             }
-            "/" => {
+            BinaryOp::Div => {
                 out.instruction(&Instruction::I64DivS);
             }
-            "==" => {
+            BinaryOp::Eq => {
                 out.instruction(&Instruction::I64Eq);
             }
-            "!=" => {
+            BinaryOp::Ne => {
                 out.instruction(&Instruction::I64Ne);
             }
-            "<" => {
+            BinaryOp::Lt => {
                 out.instruction(&Instruction::I64LtS);
             }
-            "<=" => {
+            BinaryOp::Le => {
                 out.instruction(&Instruction::I64LeS);
             }
-            ">" => {
+            BinaryOp::Gt => {
                 out.instruction(&Instruction::I64GtS);
             }
-            ">=" => {
+            BinaryOp::Ge => {
                 out.instruction(&Instruction::I64GeS);
             }
-            _ => return Err(err(format!("unsupported i64 binary operator '{}'", op))),
+            _ => return Err(CodegenError::UnsupportedBinaryOp { op, operand_type: "i64".to_string() }),
         },
         Type::I32 => match op {
-            "+" => {
+            BinaryOp::Add => {
                 out.instruction(&Instruction::I32Add);
             }
-            "-" => {
+            BinaryOp::Sub => {
                 out.instruction(&Instruction::I32Sub);
             }
-            "*" => {
+            BinaryOp::Mul => {
                 out.instruction(&Instruction::I32Mul);
             }
-            "/" => {
+            BinaryOp::Div => {
                 out.instruction(&Instruction::I32DivS);
             }
-            "==" => {
+            BinaryOp::Eq => {
                 out.instruction(&Instruction::I32Eq);
             }
-            "!=" => {
+            BinaryOp::Ne => {
                 out.instruction(&Instruction::I32Ne);
             }
-            "<" => {
+            BinaryOp::Lt => {
                 out.instruction(&Instruction::I32LtS);
             }
-            "<=" => {
+            BinaryOp::Le => {
                 out.instruction(&Instruction::I32LeS);
             }
-            ">" => {
+            BinaryOp::Gt => {
                 out.instruction(&Instruction::I32GtS);
             }
-            ">=" => {
+            BinaryOp::Ge => {
                 out.instruction(&Instruction::I32GeS);
             }
-            _ => return Err(err(format!("unsupported i32 binary operator '{}'", op))),
+            _ => return Err(CodegenError::UnsupportedBinaryOp { op, operand_type: "i32".to_string() }),
         },
         Type::Bool => match op {
-            "==" => {
+            BinaryOp::Eq => {
                 out.instruction(&Instruction::I32Eq);
             }
-            "!=" => {
+            BinaryOp::Ne => {
                 out.instruction(&Instruction::I32Ne);
             }
-            "&&" => {
+            BinaryOp::And => {
                 out.instruction(&Instruction::I32And);
             }
-            "||" => {
+            BinaryOp::Or => {
                 out.instruction(&Instruction::I32Or);
             }
-            _ => return Err(err(format!("unsupported bool binary operator '{}'", op))),
+            _ => return Err(CodegenError::UnsupportedBinaryOp { op, operand_type: "bool".to_string() }),
         },
         Type::UserDefined(_, _) | Type::Var(_) | Type::Record(_) => match op {
-            "==" => {
+            BinaryOp::Eq => {
                 out.instruction(&Instruction::I64Eq);
             }
-            "!=" => {
+            BinaryOp::Ne => {
                 out.instruction(&Instruction::I64Ne);
             }
             _ => {
-                return Err(err(format!(
-                    "unsupported user-defined binary operator '{}'",
-                    op
-                )))
+                return Err(CodegenError::UnsupportedBinaryOp {
+                    op,
+                    operand_type: "user-defined".to_string(),
+                })
             }
         },
         Type::F64 => match op {
-            "+." => {
+            BinaryOp::FAdd => {
                 out.instruction(&Instruction::F64Add);
             }
-            "-." => {
+            BinaryOp::FSub => {
                 out.instruction(&Instruction::F64Sub);
             }
-            "*." => {
+            BinaryOp::FMul => {
                 out.instruction(&Instruction::F64Mul);
             }
-            "/." => {
+            BinaryOp::FDiv => {
                 out.instruction(&Instruction::F64Div);
             }
-            "==." => {
+            BinaryOp::FEq => {
                 out.instruction(&Instruction::F64Eq);
             }
-            "!=." => {
+            BinaryOp::FNe => {
                 out.instruction(&Instruction::F64Ne);
             }
-            "<." => {
+            BinaryOp::FLt => {
                 out.instruction(&Instruction::F64Lt);
             }
-            "<=." => {
+            BinaryOp::FLe => {
                 out.instruction(&Instruction::F64Le);
             }
-            ">." => {
+            BinaryOp::FGt => {
                 out.instruction(&Instruction::F64Gt);
             }
-            ">=." => {
+            BinaryOp::FGe => {
                 out.instruction(&Instruction::F64Ge);
             }
-            _ => return Err(err(format!("unsupported f64 binary operator '{}'", op))),
+            _ => return Err(CodegenError::UnsupportedBinaryOp { op, operand_type: "f64".to_string() }),
         },
         Type::F32 => match op {
-            "+." => {
+            BinaryOp::FAdd => {
                 out.instruction(&Instruction::F32Add);
             }
-            "-." => {
+            BinaryOp::FSub => {
                 out.instruction(&Instruction::F32Sub);
             }
-            "*." => {
+            BinaryOp::FMul => {
                 out.instruction(&Instruction::F32Mul);
             }
-            "/." => {
+            BinaryOp::FDiv => {
                 out.instruction(&Instruction::F32Div);
             }
-            "==." => {
+            BinaryOp::FEq => {
                 out.instruction(&Instruction::F32Eq);
             }
-            "!=." => {
+            BinaryOp::FNe => {
                 out.instruction(&Instruction::F32Ne);
             }
-            "<." => {
+            BinaryOp::FLt => {
                 out.instruction(&Instruction::F32Lt);
             }
-            "<=." => {
+            BinaryOp::FLe => {
                 out.instruction(&Instruction::F32Le);
             }
-            ">." => {
+            BinaryOp::FGt => {
                 out.instruction(&Instruction::F32Gt);
             }
-            ">=." => {
+            BinaryOp::FGe => {
                 out.instruction(&Instruction::F32Ge);
             }
-            _ => return Err(err(format!("unsupported f32 binary operator '{}'", op))),
+            _ => return Err(CodegenError::UnsupportedBinaryOp { op, operand_type: "f32".to_string() }),
         },
         other => {
-            return Err(err(format!(
-            "binary operator '{}' with operand type '{}' is not supported by current wasm codegen",
-            op, other
-        )))
+            return Err(CodegenError::UnsupportedBinaryOp {
+                op,
+                operand_type: other.to_string(),
+            })
         }
     }
     Ok(())
 }
 
-fn binary_operand_type(op: &str, lhs: &Type, rhs: &Type) -> Result<Type, CodegenError> {
+fn binary_operand_type(op: BinaryOp, lhs: &Type, rhs: &Type) -> Result<Type, CodegenError> {
     let lhs = peel_linear(lhs);
     let rhs = peel_linear(rhs);
-    if matches!(op, "++" | "+") && matches!(lhs, Type::String) && matches!(rhs, Type::String) {
+    if matches!(op, BinaryOp::Concat | BinaryOp::Add)
+        && matches!(lhs, Type::String)
+        && matches!(rhs, Type::String)
+    {
         return Ok(Type::String);
     }
-    if matches!(op, "==" | "!=") {
+    if matches!(op, BinaryOp::Eq | BinaryOp::Ne) {
         if matches!(lhs, Type::Bool) && matches!(rhs, Type::Bool) {
             return Ok(Type::Bool);
         }
@@ -1685,14 +1889,23 @@ fn binary_operand_type(op: &str, lhs: &Type, rhs: &Type) -> Result<Type, Codegen
             return Ok(lhs.clone());
         }
     }
-    if matches!(op, "&&" | "||") {
+    if matches!(op, BinaryOp::And | BinaryOp::Or) {
         if matches!(lhs, Type::Bool) && matches!(rhs, Type::Bool) {
             return Ok(Type::Bool);
         }
     }
     if matches!(
         op,
-        "+" | "-" | "*" | "/" | "==" | "!=" | "<" | "<=" | ">" | ">="
+        BinaryOp::Add
+            | BinaryOp::Sub
+            | BinaryOp::Mul
+            | BinaryOp::Div
+            | BinaryOp::Eq
+            | BinaryOp::Ne
+            | BinaryOp::Lt
+            | BinaryOp::Le
+            | BinaryOp::Gt
+            | BinaryOp::Ge
     ) {
         if matches!(lhs, Type::I32) || matches!(rhs, Type::I32) {
             return Ok(Type::I32);
@@ -1701,10 +1914,7 @@ fn binary_operand_type(op: &str, lhs: &Type, rhs: &Type) -> Result<Type, Codegen
             return Ok(Type::I64);
         }
     }
-    if matches!(
-        op,
-        "+." | "-." | "*." | "/." | "==." | "!=." | "<." | "<=." | ">." | ">=."
-    ) {
+    if op.is_float_op() {
         if matches!(lhs, Type::F32) || matches!(rhs, Type::F32) {
             return Ok(Type::F32);
         }
@@ -1712,10 +1922,11 @@ fn binary_operand_type(op: &str, lhs: &Type, rhs: &Type) -> Result<Type, Codegen
             return Ok(Type::F64);
         }
     }
-    Err(err(format!(
-        "unsupported binary operator '{}' for operand types ({}, {})",
-        op, lhs, rhs
-    )))
+    Err(CodegenError::UnsupportedBinaryOpPair {
+        op,
+        lhs: lhs.to_string(),
+        rhs: rhs.to_string(),
+    })
 }
 
 fn emit_numeric_coercion(from: &Type, to: &Type, out: &mut Function) -> Result<(), CodegenError> {
@@ -1744,10 +1955,10 @@ fn emit_numeric_coercion(from: &Type, to: &Type, out: &mut Function) -> Result<(
             out.instruction(&Instruction::F64PromoteF32);
             Ok(())
         }
-        _ => Err(err(format!(
-            "unsupported numeric coercion from '{}' to '{}'",
-            from, to
-        ))),
+        _ => Err(CodegenError::UnsupportedCoercion {
+            from_type: from.to_string(),
+            to_type: to.to_string(),
+        }),
     }
 }
 
@@ -1782,13 +1993,10 @@ fn type_to_wasm_valtype(typ: &Type) -> Result<ValType, CodegenError> {
             Ok(ValType::I64)
         }
         Type::UserDefined(_, _) | Type::Var(_) => Ok(ValType::I64),
-        Type::Unit => Err(err(
-            "unit cannot be represented as a local/param wasm valtype",
-        )),
-        other => Err(err(format!(
-            "type '{}' is not supported by current wasm codegen",
-            other
-        ))),
+        Type::Unit => Err(CodegenError::UnitWasmType),
+        other => Err(CodegenError::UnsupportedWasmType {
+            typ: other.to_string(),
+        }),
     }
 }
 
@@ -1831,8 +2039,222 @@ fn memarg_i8() -> MemArg {
     }
 }
 
-fn err(message: impl Into<String>) -> CodegenError {
-    CodegenError {
-        message: message.into(),
+// ============================================================
+// LIR Codegen: compile LirProgram with evidence table support
+// ============================================================
+
+/// Compile a LIR program to WASM bytes with evidence-passing support.
+pub fn compile_lir_to_wasm(
+    program: &LirProgram,
+    evidence_table: &EvidenceTable,
+) -> Result<Vec<u8>, CodegenError> {
+    // Convert LIR to ANF for reuse of existing codegen
+    let anf = lir_program_to_anf(program);
+    let wasm = compile_typed_anf_to_wasm(&anf)?;
+
+    // If evidence table is empty, no funcref table needed
+    if evidence_table.entries.is_empty() {
+        return Ok(wasm);
+    }
+
+    // TODO: In Phase 9 wiring, inject funcref table into the WASM module.
+    // For now, return the base WASM. The funcref table will be added when
+    // the full pipeline is wired.
+    Ok(wasm)
+}
+
+/// Convert LIR program to ANF program for codegen reuse.
+/// Evidence params become regular params, CallIndirect becomes Call to a
+/// resolved function name (static dispatch for now).
+fn lir_program_to_anf(program: &LirProgram) -> AnfProgram {
+    let functions = program
+        .functions
+        .iter()
+        .map(|f| lir_function_to_anf(f))
+        .collect();
+    let externals = program
+        .externals
+        .iter()
+        .map(|e| AnfExternal {
+            name: e.name.clone(),
+            wasm_module: e.wasm_module.clone(),
+            wasm_name: e.wasm_name.clone(),
+            params: e
+                .params
+                .iter()
+                .map(|p| super::anf::AnfParam {
+                    label: p.label.clone(),
+                    name: p.name.clone(),
+                    typ: p.typ.clone(),
+                })
+                .collect(),
+            ret_type: e.ret_type.clone(),
+            effects: e.effects.clone(),
+        })
+        .collect();
+
+    AnfProgram {
+        functions,
+        externals,
     }
 }
+
+fn lir_function_to_anf(func: &LirFunction) -> AnfFunction {
+    let mut params: Vec<super::anf::AnfParam> = func
+        .params
+        .iter()
+        .map(|p| super::anf::AnfParam {
+            label: p.label.clone(),
+            name: p.name.clone(),
+            typ: p.typ.clone(),
+        })
+        .collect();
+
+    // Add evidence params as additional i32 params
+    for ep in &func.evidence_params {
+        params.push(super::anf::AnfParam {
+            label: ep.label.clone(),
+            name: ep.name.clone(),
+            typ: Type::I32,
+        });
+    }
+
+    let body = func.body.iter().map(|s| lir_stmt_to_anf(s)).collect();
+    let ret = lir_atom_to_anf(&func.ret);
+
+    AnfFunction {
+        name: func.name.clone(),
+        params,
+        ret_type: func.ret_type.clone(),
+        requires: func.requires.clone(),
+        effects: func.effects.clone(),
+        body,
+        ret,
+    }
+}
+
+fn lir_stmt_to_anf(stmt: &LirStmt) -> AnfStmt {
+    match stmt {
+        LirStmt::Let { name, typ, expr } => AnfStmt::Let {
+            name: name.clone(),
+            typ: typ.clone(),
+            expr: lir_expr_to_anf(expr),
+        },
+        LirStmt::If {
+            cond,
+            then_body,
+            else_body,
+        } => AnfStmt::If {
+            cond: lir_atom_to_anf(cond),
+            then_body: then_body.iter().map(|s| lir_stmt_to_anf(s)).collect(),
+            else_body: else_body.iter().map(|s| lir_stmt_to_anf(s)).collect(),
+        },
+        LirStmt::IfReturn {
+            cond,
+            then_body,
+            then_ret,
+            else_body,
+            else_ret,
+            ret_type,
+        } => AnfStmt::IfReturn {
+            cond: lir_atom_to_anf(cond),
+            then_body: then_body.iter().map(|s| lir_stmt_to_anf(s)).collect(),
+            then_ret: lir_atom_to_anf(then_ret),
+            else_body: else_body.iter().map(|s| lir_stmt_to_anf(s)).collect(),
+            else_ret: else_ret.as_ref().map(|a| lir_atom_to_anf(a)),
+            ret_type: ret_type.clone(),
+        },
+        LirStmt::TryCatch {
+            body,
+            body_ret,
+            catch_param,
+            catch_param_typ,
+            catch_body,
+            catch_ret,
+        } => AnfStmt::TryCatch {
+            body: body.iter().map(|s| lir_stmt_to_anf(s)).collect(),
+            body_ret: body_ret.as_ref().map(|a| lir_atom_to_anf(a)),
+            catch_param: catch_param.clone(),
+            catch_param_typ: catch_param_typ.clone(),
+            catch_body: catch_body.iter().map(|s| lir_stmt_to_anf(s)).collect(),
+            catch_ret: catch_ret.as_ref().map(|a| lir_atom_to_anf(a)),
+        },
+    }
+}
+
+fn lir_expr_to_anf(expr: &LirExpr) -> AnfExpr {
+    match expr {
+        LirExpr::Atom(atom) => AnfExpr::Atom(lir_atom_to_anf(atom)),
+        LirExpr::Binary { op, lhs, rhs, typ } => AnfExpr::Binary {
+            op: *op,
+            lhs: lir_atom_to_anf(lhs),
+            rhs: lir_atom_to_anf(rhs),
+            typ: typ.clone(),
+        },
+        LirExpr::Call { func, args, typ } => AnfExpr::Call {
+            func: func.clone(),
+            args: args
+                .iter()
+                .map(|(l, a)| (l.clone(), lir_atom_to_anf(a)))
+                .collect(),
+            typ: typ.clone(),
+        },
+        LirExpr::CallIndirect {
+            table_idx: _,
+            args,
+            typ,
+        } => {
+            // For now, CallIndirect is lowered as a regular call.
+            // TODO: emit actual call_indirect when funcref table is wired.
+            // The table_idx atom is currently unused in the ANF representation.
+            AnfExpr::Call {
+                func: "__indirect_call".to_string(),
+                args: args
+                    .iter()
+                    .map(|(l, a)| (l.clone(), lir_atom_to_anf(a)))
+                    .collect(),
+                typ: typ.clone(),
+            }
+        }
+        LirExpr::Constructor { name, args, typ } => AnfExpr::Constructor {
+            name: name.clone(),
+            args: args.iter().map(|a| lir_atom_to_anf(a)).collect(),
+            typ: typ.clone(),
+        },
+        LirExpr::Record { fields, typ } => AnfExpr::Record {
+            fields: fields
+                .iter()
+                .map(|(n, a)| (n.clone(), lir_atom_to_anf(a)))
+                .collect(),
+            typ: typ.clone(),
+        },
+        LirExpr::ObjectTag { value, typ } => AnfExpr::ObjectTag {
+            value: lir_atom_to_anf(value),
+            typ: typ.clone(),
+        },
+        LirExpr::ObjectField { value, index, typ } => AnfExpr::ObjectField {
+            value: lir_atom_to_anf(value),
+            index: *index,
+            typ: typ.clone(),
+        },
+        LirExpr::Raise { value, typ } => AnfExpr::Raise {
+            value: lir_atom_to_anf(value),
+            typ: typ.clone(),
+        },
+    }
+}
+
+fn lir_atom_to_anf(atom: &LirAtom) -> AnfAtom {
+    match atom {
+        LirAtom::Var { name, typ } => AnfAtom::Var {
+            name: name.clone(),
+            typ: typ.clone(),
+        },
+        LirAtom::Int(i) => AnfAtom::Int(*i),
+        LirAtom::Float(f) => AnfAtom::Float(*f),
+        LirAtom::Bool(b) => AnfAtom::Bool(*b),
+        LirAtom::String(s) => AnfAtom::String(s.clone()),
+        LirAtom::Unit => AnfAtom::Unit,
+    }
+}
+

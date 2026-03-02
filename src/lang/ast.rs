@@ -28,7 +28,7 @@ pub enum Type {
     Record(Vec<(String, Type)>),       // { x: i64, y: string }
     Array(Box<Type>),                  // [| T |]
     Borrow(Box<Type>),                 // &T
-    Handler(String),                   // handler Port
+    Handler(String, Box<Type>),         // handler Port require { ... }
 }
 
 impl std::fmt::Display for Type {
@@ -107,7 +107,14 @@ impl std::fmt::Display for Type {
             }
             Type::Array(t) => write!(f, "[| {} |]", t),
             Type::Borrow(t) => write!(f, "&{}", t),
-            Type::Handler(name) => write!(f, "handler {}", name),
+            Type::Handler(name, req) => {
+                write!(f, "handler {}", name)?;
+                match &**req {
+                    Type::Row(reqs, tail) if reqs.is_empty() && tail.is_none() => {}
+                    _ => write!(f, " require {}", req)?,
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -168,12 +175,112 @@ pub struct MatchCase {
     pub body: Vec<Spanned<Stmt>>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BinaryOp {
+    // Integer arithmetic: + - * /
+    Add,
+    Sub,
+    Mul,
+    Div,
+    // Float arithmetic: +. -. *. /.
+    FAdd,
+    FSub,
+    FMul,
+    FDiv,
+    // Integer comparison: == != < <= > >=
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    // Float comparison: ==. !=. <. <=. >. >=.
+    FEq,
+    FNe,
+    FLt,
+    FLe,
+    FGt,
+    FGe,
+    // String concatenation: ++
+    Concat,
+    // Boolean: && ||
+    And,
+    Or,
+}
+
+impl std::fmt::Display for BinaryOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            BinaryOp::Add => "+",
+            BinaryOp::Sub => "-",
+            BinaryOp::Mul => "*",
+            BinaryOp::Div => "/",
+            BinaryOp::FAdd => "+.",
+            BinaryOp::FSub => "-.",
+            BinaryOp::FMul => "*.",
+            BinaryOp::FDiv => "/.",
+            BinaryOp::Eq => "==",
+            BinaryOp::Ne => "!=",
+            BinaryOp::Lt => "<",
+            BinaryOp::Le => "<=",
+            BinaryOp::Gt => ">",
+            BinaryOp::Ge => ">=",
+            BinaryOp::FEq => "==.",
+            BinaryOp::FNe => "!=.",
+            BinaryOp::FLt => "<.",
+            BinaryOp::FLe => "<=.",
+            BinaryOp::FGt => ">.",
+            BinaryOp::FGe => ">=.",
+            BinaryOp::Concat => "++",
+            BinaryOp::And => "&&",
+            BinaryOp::Or => "||",
+        };
+        write!(f, "{}", s)
+    }
+}
+
+impl BinaryOp {
+    pub fn is_comparison(self) -> bool {
+        matches!(
+            self,
+            BinaryOp::Eq
+                | BinaryOp::Ne
+                | BinaryOp::Lt
+                | BinaryOp::Le
+                | BinaryOp::Gt
+                | BinaryOp::Ge
+                | BinaryOp::FEq
+                | BinaryOp::FNe
+                | BinaryOp::FLt
+                | BinaryOp::FLe
+                | BinaryOp::FGt
+                | BinaryOp::FGe
+        )
+    }
+
+    pub fn is_float_op(self) -> bool {
+        matches!(
+            self,
+            BinaryOp::FAdd
+                | BinaryOp::FSub
+                | BinaryOp::FMul
+                | BinaryOp::FDiv
+                | BinaryOp::FEq
+                | BinaryOp::FNe
+                | BinaryOp::FLt
+                | BinaryOp::FLe
+                | BinaryOp::FGt
+                | BinaryOp::FGe
+        )
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     Literal(Literal),
     Variable(String, Sigil),
     // Binary operations (e.g. +, -) are allowed in expressions
-    BinaryOp(Box<Spanned<Expr>>, String, Box<Spanned<Expr>>),
+    BinaryOp(Box<Spanned<Expr>>, BinaryOp, Box<Spanned<Expr>>),
     Borrow(String, Sigil), // borrow %x
     // Function calls
     Call {
@@ -206,9 +313,10 @@ pub enum Expr {
     },
     Raise(Box<Spanned<Expr>>), // raise "error"
     External(String, Vec<String>, Type), // external "wasm_symbol" : <T> arrow_type
-    // handler Port do fn ... endfn endhandler — coeffect handler as expression
+    // handler Port [require { ... }] do fn ... end end — coeffect handler as expression
     Handler {
         coeffect_name: String,
+        requires: Type,
         functions: Vec<Function>,
     },
 }
@@ -235,11 +343,12 @@ pub enum Stmt {
         catch_param: String,
         catch_body: Vec<Spanned<Stmt>>,
     },
-    // inject handler_var, ... do body endinject
+    // inject handler_var, ... do body end
     Inject {
         handlers: Vec<String>,
         body: Vec<Spanned<Stmt>>,
     },
+    #[allow(dead_code)]
     Comment,
 }
 
@@ -325,6 +434,7 @@ pub enum TopLevel {
     Import(Import),
     Port(Port),
     Let(GlobalLet),
+    #[allow(dead_code)]
     Comment,
 }
 

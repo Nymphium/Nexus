@@ -1,12 +1,11 @@
 use super::ast::*;
 use super::parser;
+use crate::constants::{Permission, ENTRYPOINT};
 use crate::lang::stdlib::load_stdlib_nx_programs;
-use chumsky::Parser;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
-const EFFECT_CONSOLE: &str = "Console";
 const EFFECT_EXN: &str = "Exn";
 
 #[derive(Debug, Clone)]
@@ -267,7 +266,7 @@ fn summarize_ctor_fields(fields: &[(Option<String>, Type)]) -> String {
         .join(", ")
 }
 
-fn exn_enum_def() -> EnumDef {
+pub fn exn_enum_def() -> EnumDef {
     EnumDef {
         name: "Exn".to_string(),
         is_public: true,
@@ -364,7 +363,10 @@ fn convert_generic_user_defined_to_var(typ: &Type, vars: &HashSet<String>) -> Ty
         Type::Linear(i) => Type::Linear(Box::new(convert_generic_user_defined_to_var(i, vars))),
         Type::Borrow(i) => Type::Borrow(Box::new(convert_generic_user_defined_to_var(i, vars))),
         Type::Array(i) => Type::Array(Box::new(convert_generic_user_defined_to_var(i, vars))),
-        Type::Handler(name) => Type::Handler(name.clone()),
+        Type::Handler(name, req) => Type::Handler(
+            name.clone(),
+            Box::new(convert_generic_user_defined_to_var(req, vars)),
+        ),
         Type::Row(es, t) => Type::Row(
             es.iter()
                 .map(|x| convert_generic_user_defined_to_var(x, vars))
@@ -440,7 +442,10 @@ fn default_numeric_literals(typ: &Type) -> Type {
         Type::Linear(inner) => Type::Linear(Box::new(default_numeric_literals(inner))),
         Type::Borrow(inner) => Type::Borrow(Box::new(default_numeric_literals(inner))),
         Type::Array(inner) => Type::Array(Box::new(default_numeric_literals(inner))),
-        Type::Handler(name) => Type::Handler(name.clone()),
+        Type::Handler(name, req) => Type::Handler(
+            name.clone(),
+            Box::new(default_numeric_literals(req)),
+        ),
         Type::Row(effs, tail) => Type::Row(
             effs.iter().map(default_numeric_literals).collect(),
             tail.as_ref().map(|t| Box::new(default_numeric_literals(t))),
@@ -564,7 +569,10 @@ fn convert_external_type_vars(typ: &Type, vars: &HashSet<String>) -> Type {
         Type::Linear(inner) => Type::Linear(Box::new(convert_external_type_vars(inner, vars))),
         Type::Borrow(inner) => Type::Borrow(Box::new(convert_external_type_vars(inner, vars))),
         Type::Array(inner) => Type::Array(Box::new(convert_external_type_vars(inner, vars))),
-        Type::Handler(name) => Type::Handler(name.clone()),
+        Type::Handler(name, req) => Type::Handler(
+            name.clone(),
+            Box::new(convert_external_type_vars(req, vars)),
+        ),
         Type::Row(effects, tail) => Type::Row(
             effects
                 .iter()
@@ -619,7 +627,7 @@ fn check_unintroduced_type_vars(
 
 /// Register only types and enums from stdlib (not functions).
 /// This makes core types like List<T> available without explicit import,
-/// while functions (print, i64_to_string, etc.) require explicit import.
+/// while functions (print, from_i64, etc.) require explicit import.
 fn register_stdlib_types(env: &mut TypeEnv) {
     let Ok(programs) = load_stdlib_nx_programs() else {
         return;
@@ -668,16 +676,6 @@ impl TypeChecker {
     /// Creates a checker with only language-core builtins (no stdlib `.nx` imports).
     pub fn new_without_stdlib() -> Self {
         let mut env = TypeEnv::new();
-        // Core effect markers that language/runtime rely on.
-        env.types.insert(
-            EFFECT_CONSOLE.to_string(),
-            TypeDef {
-                name: EFFECT_CONSOLE.to_string(),
-                is_public: true,
-                type_params: vec![],
-                fields: vec![],
-            },
-        );
         env.enums.insert(EFFECT_EXN.to_string(), exn_enum_def());
 
         env.linear_vars.clear();
@@ -776,7 +774,7 @@ impl TypeChecker {
                             message: format!("Failed to read {}: {}", import.path, e),
                             span: def.span.clone(),
                         })?;
-                        let p = parser::parser().parse(src).map_err(|_| TypeError {
+                        let p = parser::parser().parse(&src).map_err(|_| TypeError {
                             message: format!("Failed to parse {}", import.path),
                             span: def.span.clone(),
                         })?;
@@ -905,7 +903,8 @@ impl TypeChecker {
                                     });
                                 }
                             }
-                        } else {
+                        }
+                        if import.alias.is_some() || import.items.is_empty() {
                             let alias = import
                                 .alias
                                 .clone()
@@ -1059,14 +1058,13 @@ impl TypeChecker {
                         t = default_numeric_literals(&t);
                     }
 
-                    if gl.name == "main" {
+                    if gl.name == ENTRYPOINT {
                         if gl.is_public {
                             return Err(TypeError {
                                 message: "main function must be private (remove 'pub')".into(),
                                 span: def.span.clone(),
                             });
                         }
-                        let rt = self.new_var();
                         let req = self.new_var();
                         let ef = self.new_var();
                         let sm = self
@@ -1074,20 +1072,20 @@ impl TypeChecker {
                                 &t,
                                 &Type::Arrow(
                                     vec![],
-                                    Box::new(rt.clone()),
+                                    Box::new(Type::Unit),
                                     Box::new(req.clone()),
                                     Box::new(ef.clone()),
                                 ),
                             )
                             .map_err(|_| TypeError {
-                                message: "main must be a function '() -> T'".into(),
+                                message: "main must be a function '() -> unit'".into(),
                                 span: def.span.clone(),
                             })?;
                         let final_req = apply_subst_type(&sm, &req);
                         if !is_allowed_main_require_signature(&final_req) {
                             return Err(TypeError {
                                 message:
-                                    "main function requires must be {}"
+                                    "main function requires must be {}, or a subset of { PermFs, PermNet, PermConsole, PermRandom, PermClock, PermProc }"
                                         .into(),
                                 span: def.span.clone(),
                             });
@@ -1101,7 +1099,7 @@ impl TypeChecker {
                         }
                         if !is_allowed_main_effect_signature(&final_ef) {
                             return Err(TypeError {
-                                message: "main function effects must be {}, or { Console }".into(),
+                                message: "main function effects must be {}".into(),
                                 span: def.span.clone(),
                             });
                         }
@@ -1127,7 +1125,43 @@ impl TypeChecker {
                 _ => {}
             }
         }
+        self.check_missing_requirements(program)?;
         self.collect_lint_warnings(program);
+        Ok(())
+    }
+
+    fn check_missing_requirements(&self, program: &Program) -> Result<(), TypeError> {
+        for def in &program.definitions {
+            let TopLevel::Let(gl) = &def.node else { continue };
+            let Expr::Lambda {
+                requires, body, ..
+            } = &gl.value.node
+            else {
+                continue;
+            };
+
+            let (used_reqs, _, unknown) = collect_signature_needs_from_stmts(body, &self.env);
+            if unknown {
+                continue;
+            }
+            let (declared_reqs, req_unknown) = extract_named_row_members(requires);
+            if req_unknown {
+                continue;
+            }
+            let mut missing: Vec<String> =
+                used_reqs.difference(&declared_reqs).cloned().collect();
+            missing.sort();
+            if !missing.is_empty() {
+                return Err(TypeError {
+                    message: format!(
+                        "Function '{}' uses coeffects [{}] not declared in its require clause",
+                        gl.name,
+                        missing.join(", ")
+                    ),
+                    span: def.span.clone(),
+                });
+            }
+        }
         Ok(())
     }
 
@@ -1143,6 +1177,7 @@ impl TypeChecker {
                     Expr::Handler {
                         coeffect_name,
                         functions,
+                        ..
                     } => {
                         for f in functions {
                             let name = format!("handler {}.{}", coeffect_name, f.name);
@@ -1160,7 +1195,7 @@ impl TypeChecker {
             let TopLevel::Let(gl) = &def.node else {
                 continue;
             };
-            if gl.is_public || gl.name == "main" {
+            if gl.is_public || gl.name == ENTRYPOINT {
                 continue;
             }
             let referenced_elsewhere = program.definitions.iter().any(|other| {
@@ -1348,6 +1383,7 @@ impl TypeChecker {
             Expr::Handler {
                 coeffect_name,
                 functions,
+                ..
             } => {
                 for f in functions {
                     let name = format!("handler {}.{}", coeffect_name, f.name);
@@ -1401,11 +1437,15 @@ impl TypeChecker {
         }
     }
 
+    /// Check a function body. `extra_requires` is merged into the function's
+    /// declared requires — used for handler method bodies so that the
+    /// handler-level `require` clause is visible inside each method.
     fn check_function(
         &mut self,
         func: &Function,
         base_env: &TypeEnv,
         span: &Span,
+        extra_requires: &Type,
     ) -> Result<(), TypeError> {
         let mut env = base_env.clone();
         for p in &func.params {
@@ -1423,11 +1463,12 @@ impl TypeChecker {
                 span: span.clone(),
             });
         }
+        let merged_requires = merge_type_rows(&func.requires, extra_requires);
         self.infer_body(
             &func.body,
             &mut env,
             &func.ret_type,
-            &func.requires,
+            &merged_requires,
             &func.effects,
         )?;
         env.check_unused_linear(span)?;
@@ -1640,7 +1681,7 @@ impl TypeChecker {
                 }
                 Stmt::Conc(ts) => {
                     for t in ts {
-                        self.check_task(t, env, &s.span)?;
+                        self.check_task(t, env, &s.span, eq)?;
                     }
                 }
                 Stmt::Try {
@@ -1672,6 +1713,7 @@ impl TypeChecker {
                 Stmt::Inject { handlers, body } => {
                     let mut injected_reqs = Vec::new();
                     let mut injected_port_names = HashSet::new();
+                    let mut handler_extra_reqs = HashSet::new();
                     for handler_name in handlers {
                         let Some(scheme) = env.get(handler_name).cloned() else {
                             return Err(TypeError {
@@ -1681,11 +1723,15 @@ impl TypeChecker {
                         };
                         let instantiated = self.instantiate(&scheme);
                         match instantiated {
-                            Type::Handler(port_name) => {
+                            Type::Handler(port_name, handler_req) => {
                                 injected_port_names.insert(port_name.clone());
                                 let req = Type::UserDefined(port_name, vec![]);
                                 if !injected_reqs.contains(&req) {
                                     injected_reqs.push(req);
+                                }
+                                // Collect handler's require coeffects to propagate to caller
+                                for r in extract_row_port_names(&handler_req) {
+                                    handler_extra_reqs.insert(r);
                                 }
                             }
                             _ => {
@@ -1703,8 +1749,9 @@ impl TypeChecker {
                         collect_signature_needs_from_stmts(body, env);
                     if !body_unknown {
                         let mut non_reducing_handlers: Vec<String> = injected_port_names
-                            .into_iter()
-                            .filter(|port_name| !body_reqs.contains(port_name))
+                            .iter()
+                            .filter(|port_name| !body_reqs.contains(*port_name))
+                            .cloned()
                             .collect();
                         non_reducing_handlers.sort();
                         if !non_reducing_handlers.is_empty() {
@@ -1717,18 +1764,26 @@ impl TypeChecker {
                             });
                         }
                     }
+                    // Build the inject requirement: body's ports + handler extra requires
+                    let mut all_inject_reqs = injected_reqs;
+                    for extra in &handler_extra_reqs {
+                        let extra_req = Type::UserDefined(extra.clone(), vec![]);
+                        if !all_inject_reqs.contains(&extra_req) {
+                            all_inject_reqs.push(extra_req);
+                        }
+                    }
                     let injected_eq = match eq {
                         Type::Row(reqs, tail) => {
                             let mut merged = reqs.clone();
-                            for req in injected_reqs {
+                            for req in all_inject_reqs {
                                 if !merged.contains(&req) {
                                     merged.push(req);
                                 }
                             }
                             Type::Row(merged, tail.clone())
                         }
-                        Type::Unit => Type::Row(injected_reqs, None),
-                        other => Type::Row(injected_reqs, Some(Box::new(other.clone()))),
+                        Type::Unit => Type::Row(all_inject_reqs, None),
+                        other => Type::Row(all_inject_reqs, Some(Box::new(other.clone()))),
                     };
                     self.infer_body(body, env, er, &injected_eq, ee)?;
                 }
@@ -1738,7 +1793,7 @@ impl TypeChecker {
         Ok(())
     }
 
-    fn check_task(&mut self, t: &Function, oe: &TypeEnv, _span: &Span) -> Result<(), TypeError> {
+    fn check_task(&mut self, t: &Function, oe: &TypeEnv, _span: &Span, outer_eq: &Type) -> Result<(), TypeError> {
         let mut te = TypeEnv::new();
         te.types = oe.types.clone();
         te.enums = oe.enums.clone();
@@ -1751,7 +1806,8 @@ impl TypeChecker {
                 }
             }
         }
-        self.infer_body(&t.body, &mut te, &Type::Unit, &t.requires, &t.effects)?;
+        let merged_requires = merge_type_rows(&t.requires, outer_eq);
+        self.infer_body(&t.body, &mut te, &Type::Unit, &merged_requires, &t.effects)?;
 
         let unused_local_linear: Vec<_> = te
             .linear_vars
@@ -1777,6 +1833,7 @@ impl TypeChecker {
     }
 
     /// Type-checks a single REPL statement against the current checker state.
+    #[allow(dead_code)] // used by interpreter REPL (lib crate)
     pub fn check_repl_stmt(&mut self, s: &Spanned<Stmt>) -> Result<Type, TypeError> {
         let mut env = std::mem::replace(&mut self.env, TypeEnv::new());
         let res = (|| {
@@ -1844,8 +1901,8 @@ impl TypeChecker {
                 let (s1, t1) = self.infer(env, l, er, eq, ee)?;
                 let (s2, t2) = self.infer(env, r, er, eq, ee)?;
                 let mut s = compose_subst(&s1, &s2);
-                match op.as_str() {
-                    "+" | "-" | "*" | "/" => {
+                match op {
+                    BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => {
                         let lt = apply_subst_type(&s, &t1);
                         let rt = apply_subst_type(&s, &t2);
                         let target = select_int_type(&lt, &rt).ok_or_else(|| TypeError {
@@ -1867,7 +1924,7 @@ impl TypeChecker {
                         s = compose_subst(&s, &s4);
                         Ok((s, target))
                     }
-                    "++" => {
+                    BinaryOp::Concat => {
                         let s3 = self
                             .unify(&apply_subst_type(&s, &t1), &Type::String)
                             .map_err(|m| TypeError {
@@ -1884,7 +1941,7 @@ impl TypeChecker {
                         s = compose_subst(&s, &s4);
                         Ok((s, Type::String))
                     }
-                    "+." | "-." | "*." | "/." => {
+                    BinaryOp::FAdd | BinaryOp::FSub | BinaryOp::FMul | BinaryOp::FDiv => {
                         let lt = apply_subst_type(&s, &t1);
                         let rt = apply_subst_type(&s, &t2);
                         let target = select_float_type(&lt, &rt).ok_or_else(|| TypeError {
@@ -1906,7 +1963,7 @@ impl TypeChecker {
                         s = compose_subst(&s, &s4);
                         Ok((s, target))
                     }
-                    "==" | "!=" | "<" | ">" | "<=" | ">=" => {
+                    BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Gt | BinaryOp::Le | BinaryOp::Ge => {
                         let lt = apply_subst_type(&s, &t1);
                         let rt = apply_subst_type(&s, &t2);
                         let target = select_int_type(&lt, &rt).ok_or_else(|| TypeError {
@@ -1931,7 +1988,7 @@ impl TypeChecker {
                         s = compose_subst(&s, &s4);
                         Ok((s, Type::Bool))
                     }
-                    "==." | "!=." | "<." | ">." | "<=." | ">=." => {
+                    BinaryOp::FEq | BinaryOp::FNe | BinaryOp::FLt | BinaryOp::FGt | BinaryOp::FLe | BinaryOp::FGe => {
                         let lt = apply_subst_type(&s, &t1);
                         let rt = apply_subst_type(&s, &t2);
                         let target = select_float_type(&lt, &rt).ok_or_else(|| TypeError {
@@ -1956,8 +2013,8 @@ impl TypeChecker {
                         s = compose_subst(&s, &s4);
                         Ok((s, Type::Bool))
                     }
-                    _ => Err(TypeError {
-                        message: format!("Unknown op {}", op),
+                    BinaryOp::And | BinaryOp::Or => Err(TypeError {
+                        message: format!("Operator {} is not available in source expressions", op),
                         span: e.span.clone(),
                     }),
                 }
@@ -2487,6 +2544,7 @@ impl TypeChecker {
             Expr::External(_, _, typ) => Ok((HashMap::new(), typ.clone())),
             Expr::Handler {
                 coeffect_name,
+                requires: handler_requires,
                 functions,
             } => {
                 let prefix = format!("{}.", coeffect_name);
@@ -2501,7 +2559,7 @@ impl TypeChecker {
 
                 let mut implemented = HashSet::new();
                 for f in functions {
-                    self.check_function(f, env, &e.span)?;
+                    self.check_function(f, env, &e.span, handler_requires)?;
 
                     let Some(expected_method_type) = expected_methods.get(&f.name).cloned() else {
                         return Err(TypeError {
@@ -2551,7 +2609,7 @@ impl TypeChecker {
                         span: e.span.clone(),
                     });
                 }
-                Ok((HashMap::new(), Type::Handler(coeffect_name.clone())))
+                Ok((HashMap::new(), Type::Handler(coeffect_name.clone(), Box::new(handler_requires.clone()))))
             }
             Expr::Raise(ex) => {
                 let (s, t) = self.infer(env, ex, er, eq, ee)?;
@@ -3115,7 +3173,7 @@ impl TypeChecker {
             (Type::Ref(t1), Type::Ref(t2))
             | (Type::Linear(t1), Type::Linear(t2))
             | (Type::Borrow(t1), Type::Borrow(t2)) => self.unify(t1, t2),
-            (Type::Handler(a), Type::Handler(b)) if a == b => Ok(HashMap::new()),
+            (Type::Handler(a, req_a), Type::Handler(b, req_b)) if a == b => self.unify(req_a, req_b),
             // Borrow can be read as its underlying value type.
             (Type::Borrow(t1), t2) => self.unify(t1, t2),
             _ => Err(format!("Mismatch: {} vs {}", t1, t2)),
@@ -3143,7 +3201,10 @@ pub fn apply_subst_type(subst: &Subst, typ: &Type) -> Type {
         Type::Linear(i) => Type::Linear(Box::new(apply_subst_type(subst, i))),
         Type::Borrow(i) => Type::Borrow(Box::new(apply_subst_type(subst, i))),
         Type::Array(i) => Type::Array(Box::new(apply_subst_type(subst, i))),
-        Type::Handler(name) => Type::Handler(name.clone()),
+        Type::Handler(name, req) => Type::Handler(
+            name.clone(),
+            Box::new(apply_subst_type(subst, req)),
+        ),
         Type::Row(es, t) => Type::Row(
             es.iter().map(|x| apply_subst_type(subst, x)).collect(),
             t.as_ref().map(|x| Box::new(apply_subst_type(subst, x))),
@@ -3288,6 +3349,50 @@ fn contains_exn_effect(t: &Type) -> bool {
     contains_named_effect(t, EFFECT_EXN)
 }
 
+/// Merges two requirement row types, deduplicating entries.
+fn merge_type_rows(base: &Type, extra: &Type) -> Type {
+    let base_items = match base {
+        Type::Row(items, _) => items.clone(),
+        Type::Unit => vec![],
+        _ => return base.clone(),
+    };
+    let extra_items = match extra {
+        Type::Row(items, _) => items.clone(),
+        Type::Unit => vec![],
+        _ => return base.clone(),
+    };
+    let mut merged = base_items;
+    for item in extra_items {
+        if !merged.contains(&item) {
+            merged.push(item);
+        }
+    }
+    let tail = match base {
+        Type::Row(_, t) => t.clone(),
+        _ => None,
+    };
+    if merged.is_empty() && tail.is_none() {
+        Type::Unit
+    } else {
+        Type::Row(merged, tail)
+    }
+}
+
+/// Extracts port names from a handler's require row type.
+fn extract_row_port_names(t: &Type) -> Vec<String> {
+    match t {
+        Type::Row(reqs, _) => reqs
+            .iter()
+            .filter_map(|r| match r {
+                Type::UserDefined(name, args) if args.is_empty() => Some(name.clone()),
+                _ => None,
+            })
+            .collect(),
+        Type::Unit => vec![],
+        _ => vec![],
+    }
+}
+
 fn contains_named_effect(t: &Type, effect_name: &str) -> bool {
     match t {
         Type::UserDefined(name, args) => {
@@ -3323,18 +3428,7 @@ fn contains_named_effect(t: &Type, effect_name: &str) -> bool {
 fn is_allowed_main_effect_signature(t: &Type) -> bool {
     match t {
         Type::Unit => true,
-        Type::Row(effs, tail) => {
-            if tail.is_some() {
-                return false;
-            }
-            for eff in effs {
-                match eff {
-                    Type::UserDefined(name, args) if args.is_empty() && name == EFFECT_CONSOLE => {}
-                    _ => return false,
-                }
-            }
-            true
-        }
+        Type::Row(effs, tail) => tail.is_none() && effs.is_empty(),
         _ => false,
     }
 }
@@ -3342,9 +3436,19 @@ fn is_allowed_main_effect_signature(t: &Type) -> bool {
 fn is_allowed_main_require_signature(t: &Type) -> bool {
     match t {
         Type::Unit => true,
-        Type::Row(reqs, tail) => tail.is_none() && reqs.is_empty(),
+        Type::Row(reqs, tail) => {
+            tail.is_none()
+                && reqs.iter().all(|r| matches!(r,
+                    Type::UserDefined(name, args) if args.is_empty()
+                        && is_known_runtime_perm(name)
+                ))
+        }
         _ => false,
     }
+}
+
+fn is_known_runtime_perm(name: &str) -> bool {
+    Permission::from_perm_name(name).is_some()
 }
 
 fn find_private_type_in_public_signature(typ: &Type, env: &TypeEnv) -> Option<String> {
@@ -3501,11 +3605,15 @@ fn collect_signature_needs_from_stmts(
                 let (mut body_reqs, body_effs, body_unknown) =
                     collect_signature_needs_from_stmts(body, env);
                 let mut injected = HashSet::new();
+                let mut handler_extra_reqs = HashSet::new();
                 for handler_name in handlers {
-                    if let Some(scheme) = env.vars.get(handler_name) {
+                    if let Some(scheme) = env.get(handler_name) {
                         match &scheme.typ {
-                            Type::Handler(name) => {
+                            Type::Handler(name, req) => {
                                 injected.insert(name.clone());
+                                for r in extract_row_port_names(req) {
+                                    handler_extra_reqs.insert(r);
+                                }
                             }
                             _ => unknown = true,
                         }
@@ -3514,6 +3622,7 @@ fn collect_signature_needs_from_stmts(
                     }
                 }
                 body_reqs.retain(|name| !injected.contains(name));
+                body_reqs.extend(handler_extra_reqs);
                 reqs.extend(body_reqs);
                 effs.extend(body_effs);
                 unknown |= body_unknown;
@@ -3716,8 +3825,9 @@ fn stmt_mentions_name(stmt: &Spanned<Stmt>, target: &str) -> bool {
                     .any(|stmt| stmt_mentions_name(stmt, target))
         }
         Stmt::Inject { handlers, body } => {
-            handlers.iter().any(|h| h == target)
-                || body.iter().any(|stmt| stmt_mentions_name(stmt, target))
+            handlers.iter().any(|h| {
+                h == target || h.starts_with(&format!("{}.", target))
+            }) || body.iter().any(|stmt| stmt_mentions_name(stmt, target))
         }
         Stmt::Comment => false,
     }
@@ -3748,7 +3858,11 @@ fn collect_used_variable_keys_in_stmts(stmts: &[Spanned<Stmt>], out: &mut HashSe
             }
             Stmt::Inject { handlers, body } => {
                 for handler in handlers {
-                    out.insert(handler.clone());
+                    if let Some((mod_part, _)) = handler.split_once('.') {
+                        out.insert(mod_part.to_string());
+                    } else {
+                        out.insert(handler.clone());
+                    }
                 }
                 collect_used_variable_keys_in_stmts(body, out);
             }
