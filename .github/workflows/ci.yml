@@ -9,11 +9,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: NixOS/nix-installer-action@main
         with:
           extra-conf: |
             cores = 0
-      - uses: determinateSystems/magic-nix-cache-action@main
+            max-substitution-jobs = 32
+            http-connections = 50
+            download-buffer-size = 2560000
+      - uses: nix-community/cache-nix-action@main
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('**/*.nix', '**/flake.lock') }}
+      - uses: actions/cache@v5
+        with:
+          path: ~/.cargo/registry
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock') }}
       - uses: nicknovitski/nix-develop@v1
       - name: Run Rust tests
         run: cargo test --quiet
