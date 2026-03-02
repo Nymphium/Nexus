@@ -1,20 +1,26 @@
-use chumsky::Parser;
 use nexus::interpreter::{Interpreter, Value};
 use nexus::lang::parser::parser;
 use nexus::lang::typecheck::TypeChecker;
 
+fn prepare_test_source(src: &str) -> String {
+    let s = src.replace("let main = fn ()", "pub let __test = fn ()");
+    format!("{}\nlet main = fn () -> unit do\n  return ()\nend\n", s)
+}
+
 fn check(src: &str) -> Result<(), String> {
-    let p = parser().parse(src).map_err(|e| format!("{:?}", e))?;
+    let src = prepare_test_source(src);
+    let p = parser().parse(src.as_str()).map_err(|e| format!("{:?}", e))?;
     let mut checker = TypeChecker::new();
     checker.check_program(&p).map_err(|e| e.message)
 }
 
 fn run(src: &str) -> Result<Value, String> {
-    let p = parser().parse(src).map_err(|e| format!("{:?}", e))?;
+    let src = prepare_test_source(src);
+    let p = parser().parse(src.as_str()).map_err(|e| format!("{:?}", e))?;
     let mut checker = TypeChecker::new();
     checker.check_program(&p).map_err(|e| e.message)?;
     let mut interpreter = Interpreter::new(p);
-    interpreter.run_function("main", vec![])
+    interpreter.run_function("__test", vec![])
 }
 
 #[test]
@@ -22,9 +28,9 @@ fn test_array_type_mismatch() {
     let src = r#"
     let main = fn () -> unit do
         let %arr = [| 1, true |]
-        match %arr do case _ -> () endmatch
+        match %arr do case _ -> () end
         return ()
-    endfn
+    end
     "#;
     assert!(check(src).is_err());
 }
@@ -36,7 +42,7 @@ fn test_array_indexing_non_array() {
         let x = 10
         let v = x[0]
         return ()
-    endfn
+    end
     "#;
     assert!(check(src).is_err());
 }
@@ -47,9 +53,9 @@ fn test_array_assignment_mismatch() {
     let main = fn () -> unit do
         let %arr = [| 1, 2 |]
         %arr[0] <- true
-        match %arr do case _ -> () endmatch
+        match %arr do case _ -> () end
         return ()
-    endfn
+    end
     "#;
     assert!(check(src).is_err());
 }
@@ -64,9 +70,9 @@ fn test_array_module_get_set_is_empty() {
       let empty = array.is_empty(arr: arr_ref)
       array.set(arr: arr_ref, idx: 1, val: 99)
       let v = array.get(arr: arr_ref, idx: 1)
-      match %arr do case _ -> () endmatch
-      if empty then return 0 else return v endif
-    endfn
+      match %arr do case _ -> () end
+      if empty then return 0 else return v end
+    end
     "#;
     assert_eq!(run(src).unwrap(), Value::Int(99));
 }
@@ -80,9 +86,9 @@ fn test_array_module_head_last() {
       let arr_ref = &%arr
       let h = array.head(arr: arr_ref)
       let t = array.last(arr: arr_ref)
-      match %arr do case _ -> () endmatch
+      match %arr do case _ -> () end
       return h + t
-    endfn
+    end
     "#;
     assert_eq!(run(src).unwrap(), Value::Int(40));
 }
@@ -94,15 +100,15 @@ fn test_array_module_fold_left_sum() {
 
     let add = fn (acc: i64, val: i64) -> i64 do
       return acc + val
-    endfn
+    end
 
     let main = fn () -> i64 do
       let %arr = [| 1, 2, 3, 4 |]
       let arr_ref = &%arr
       let sum = array.fold_left(arr: arr_ref, init: 0, f: add)
-      match %arr do case _ -> () endmatch
+      match %arr do case _ -> () end
       return sum
-    endfn
+    end
     "#;
     assert_eq!(run(src).unwrap(), Value::Int(10));
 }
@@ -114,11 +120,11 @@ fn test_array_module_find_index_any_all() {
 
     let is_eight = fn (val: i64) -> bool do
       return val == 8
-    endfn
+    end
 
     let gt_ten = fn (val: i64) -> bool do
       return val > 10
-    endfn
+    end
 
     let main = fn () -> i64 do
       let %arr = [| 3, 5, 8, 11 |]
@@ -126,18 +132,18 @@ fn test_array_module_find_index_any_all() {
       let idx = array.find_index(arr: arr_ref, pred: is_eight)
       let has_even = array.any(arr: arr_ref, pred: is_eight)
       let all_gt_ten = array.all(arr: arr_ref, pred: gt_ten)
-      match %arr do case _ -> () endmatch
+      match %arr do case _ -> () end
 
       if has_even then
         if all_gt_ten then
           return -1
         else
           return idx
-        endif
+        end
       else
         return -1
-      endif
-    endfn
+      end
+    end
     "#;
     assert_eq!(run(src).unwrap(), Value::Int(2));
 }
@@ -149,11 +155,11 @@ fn test_array_module_map_in_place_and_for_each() {
 
     let twice = fn (val: i64) -> i64 do
       return val * 2
-    endfn
+    end
 
     let noop = fn (val: i64) -> unit do
       return ()
-    endfn
+    end
 
     let main = fn () -> i64 do
       let %arr = [| 1, 2, 3 |]
@@ -161,9 +167,9 @@ fn test_array_module_map_in_place_and_for_each() {
       array.for_each(arr: arr_ref, f: noop)
       array.map_in_place(arr: arr_ref, f: twice)
       let v = array.get(arr: arr_ref, idx: 2)
-      match %arr do case _ -> () endmatch
+      match %arr do case _ -> () end
       return v
-    endfn
+    end
     "#;
     assert_eq!(run(src).unwrap(), Value::Int(6));
 }
@@ -176,17 +182,17 @@ fn test_array_module_filter_returns_list() {
 
     let gt_two = fn (val: i64) -> bool do
       return val > 2
-    endfn
+    end
 
     let main = fn () -> i64 do
       let %arr = [| 1, 2, 3, 4 |]
       let arr_ref = &%arr
       let ys = array.filter(arr: arr_ref, pred: gt_two)
-      match %arr do case _ -> () endmatch
+      match %arr do case _ -> () end
       let h = list.head(xs: ys)
       let n = list.length(xs: ys)
       return h * 10 + n
-    endfn
+    end
     "#;
     assert_eq!(run(src).unwrap(), Value::Int(32));
 }
@@ -199,20 +205,20 @@ fn test_array_module_partition_returns_two_lists() {
 
     let gt_two = fn (val: i64) -> bool do
       return val > 2
-    endfn
+    end
 
     let main = fn () -> i64 do
       let %arr = [| 1, 2, 3, 4 |]
       let arr_ref = &%arr
       let parts = array.partition(arr: arr_ref, pred: gt_two)
-      match %arr do case _ -> () endmatch
+      match %arr do case _ -> () end
       match parts do
         case Partition(matched: m, rest: r) ->
           let a = list.length(xs: m)
           let b = list.length(xs: r)
           return a * 10 + b
-      endmatch
-    endfn
+      end
+    end
     "#;
     assert_eq!(run(src).unwrap(), Value::Int(22));
 }
@@ -225,7 +231,7 @@ fn test_array_module_zip_with_and_zip() {
 
     let add_pair = fn (left: i64, right: i64) -> i64 do
       return left + right
-    endfn
+    end
 
     let main = fn () -> i64 do
       let %a = [| 1, 2, 3 |]
@@ -234,12 +240,12 @@ fn test_array_module_zip_with_and_zip() {
       let br = &%b
       let zipped = array.zip_with(left: ar, right: br, f: add_pair)
       let plain = array.zip(left: ar, right: br)
-      match %a do case _ -> () endmatch
-      match %b do case _ -> () endmatch
+      match %a do case _ -> () end
+      match %b do case _ -> () end
       let v = list.nth(xs: zipped, n: 1)
       let len = list.length(xs: plain)
       return v * 10 + len
-    endfn
+    end
     "#;
     assert_eq!(run(src).unwrap(), Value::Int(222));
 }
@@ -251,13 +257,13 @@ fn test_array_consume_nonlinear_consumer_is_rejected() {
 
     let ignore_record = fn (val: { id: i64 }) -> unit do
         return ()
-    endfn
+    end
 
     let main = fn () -> unit do
         let %arr = [| { id: 1 }, { id: 2 } |]
         array.consume(arr: %arr, f: ignore_record)
         return ()
-    endfn
+    end
     "#;
     assert!(
         check(src).is_err(),
@@ -271,15 +277,15 @@ fn test_array_consume_with_proper_consumer_passes() {
     import as array from nxlib/stdlib/array.nx
 
     let consume_record = fn (%val: { id: i64 }) -> unit do
-        match %val do case { id: _ } -> () endmatch
+        match %val do case { id: _ } -> () end
         return ()
-    endfn
+    end
 
     let main = fn () -> unit do
         let %arr = [| { id: 1 }, { id: 2 } |]
         array.consume(arr: %arr, f: consume_record)
         return ()
-    endfn
+    end
     "#;
     match check(src) {
         Ok(_) => (),

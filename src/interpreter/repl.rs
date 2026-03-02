@@ -1,11 +1,10 @@
 use ariadne::{Color, Label, Report, ReportKind, Source};
-use chumsky::prelude::*;
 use rustyline::error::ReadlineError;
 use rustyline::Config;
 
 use super::{Env, ExprResult, Interpreter};
 use crate::lang::ast::{Program, Spanned, Stmt, TopLevel};
-use crate::lang::parser::{parser, stmt_parser};
+use crate::lang::parser::{parser, stmt_parser, ParseError};
 use crate::lang::typecheck::TypeChecker;
 
 enum ReplInput {
@@ -16,12 +15,20 @@ enum ReplInput {
 enum ParseState {
     Complete(ReplInput),
     Incomplete,
-    Error(Vec<Simple<char>>),
+    Error(Vec<ParseError>),
 }
 
 fn parse_input_for_repl(input: &str) -> ParseState {
-    let stmt = stmt_parser().then_ignore(end()).parse(input);
-    if let Some(stmt) = stmt.ok() {
+    // If input is only whitespace/comments, treat as empty program (complete)
+    if let Ok(program) = parser().parse(input) {
+        if program.definitions.is_empty() {
+            // Only comments/whitespace — nothing to execute
+            return ParseState::Complete(ReplInput::TopLevels(vec![]));
+        }
+    }
+
+    let stmt = stmt_parser().parse(input);
+    if let Ok(stmt) = stmt {
         return ParseState::Complete(ReplInput::Stmt(stmt));
     }
 
@@ -33,7 +40,7 @@ fn parse_input_for_repl(input: &str) -> ParseState {
     }
 
     let top_err = parser().parse(input).err();
-    let stmt_err = stmt_parser().then_ignore(end()).parse(input).err();
+    let stmt_err = stmt_parser().parse(input).err();
 
     let mut any_incomplete = false;
     if let Some(errors) = &top_err {
@@ -55,14 +62,15 @@ fn parse_input_for_repl(input: &str) -> ParseState {
     ParseState::Error(vec![])
 }
 
-fn is_incomplete_input(input: &str, errors: &[Simple<char>]) -> bool {
+fn is_incomplete_input(input: &str, errors: &[ParseError]) -> bool {
     if input.trim().is_empty() {
         return false;
     }
-    let len = input.chars().count();
+    let len = input.len();
     errors.iter().any(|err| {
-        let at_end = err.span().end >= len.saturating_sub(1);
-        err.found().is_none() && at_end
+        let at_end = err.span.end >= len.saturating_sub(1);
+        // If error is at end of input, it's likely incomplete
+        at_end && (err.message.contains("expected") || err.message.contains("got Eof"))
     })
 }
 
@@ -144,7 +152,7 @@ pub fn start() {
                                                 .with_color(Color::Red),
                                         )
                                         .finish()
-                                        .print(("<repl>", Source::from(&buffer)))
+                                        .print(("<repl>", Source::from(&*buffer)))
                                         .unwrap();
                                 }
                             },
@@ -168,7 +176,7 @@ pub fn start() {
                                                     .with_color(Color::Red),
                                             )
                                             .finish()
-                                            .print(("<repl>", Source::from(&buffer)))
+                                            .print(("<repl>", Source::from(&*buffer)))
                                             .unwrap();
                                     }
                                 }
@@ -179,15 +187,15 @@ pub fn start() {
                     ParseState::Incomplete => {}
                     ParseState::Error(errors) => {
                         for err in errors {
-                            Report::build(ReportKind::Error, "<repl>", err.span().start)
-                                .with_message(format!("{:?}", err))
+                            Report::build(ReportKind::Error, "<repl>", err.span.start)
+                                .with_message(&err.message)
                                 .with_label(
-                                    Label::new(("<repl>", err.span()))
-                                        .with_message(format!("{}", err))
+                                    Label::new(("<repl>", err.span.clone()))
+                                        .with_message(&err.message)
                                         .with_color(Color::Red),
                                 )
                                 .finish()
-                                .print(("<repl>", Source::from(&buffer)))
+                                .print(("<repl>", Source::from(&*buffer)))
                                 .unwrap();
                         }
                         buffer.clear();
@@ -237,7 +245,7 @@ mod tests {
 
     #[test]
     fn parse_complete_multi_line_if_stmt() {
-        let src = "if true then\n  let x = 1\nelse\n  let x = 2\nendif";
+        let src = "if true then\n  let x = 1\nelse\n  let x = 2\nend";
         assert!(matches!(
             parse_input_for_repl(src),
             ParseState::Complete(ReplInput::Stmt(_))
@@ -246,7 +254,7 @@ mod tests {
 
     #[test]
     fn parse_complete_top_level_fn() {
-        let src = "let id = fn (x: i64) -> i64 do\n  return x\nendfn";
+        let src = "let id = fn (x: i64) -> i64 do\n  return x\nend";
         assert!(matches!(
             parse_input_for_repl(src),
             ParseState::Complete(ReplInput::Stmt(_))
@@ -265,7 +273,7 @@ mod tests {
     #[test]
     fn parse_complete_multi_line_if_with_block_comment_stmt() {
         let src =
-            "if true then\n  /* block\n     comment */\n  let x = 1\nelse\n  let x = 2\nendif";
+            "if true then\n  /* block\n     comment */\n  let x = 1\nelse\n  let x = 2\nend";
         assert!(matches!(
             parse_input_for_repl(src),
             ParseState::Complete(ReplInput::Stmt(_))

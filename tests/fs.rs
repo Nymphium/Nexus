@@ -1,21 +1,27 @@
-use chumsky::Parser;
 use nexus::interpreter::{Interpreter, Value};
 use nexus::lang::parser::parser;
 use nexus::lang::typecheck::TypeChecker;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+fn prepare_test_source(src: &str) -> String {
+    let s = src.replace("let main = fn ()", "pub let __test = fn ()");
+    format!("{}\nlet main = fn () -> unit do\n  return ()\nend\n", s)
+}
+
 fn check(src: &str) -> Result<(), String> {
-    let p = parser().parse(src).map_err(|e| format!("{:?}", e))?;
+    let src = prepare_test_source(src);
+    let p = parser().parse(src.as_str()).map_err(|e| format!("{:?}", e))?;
     let mut checker = TypeChecker::new();
     checker.check_program(&p).map_err(|e| e.message)
 }
 
 fn run(src: &str) -> Result<Value, String> {
-    let p = parser().parse(src).map_err(|e| format!("{:?}", e))?;
+    let src = prepare_test_source(src);
+    let p = parser().parse(src.as_str()).map_err(|e| format!("{:?}", e))?;
     let mut checker = TypeChecker::new();
     checker.check_program(&p).map_err(|e| e.message)?;
     let mut interpreter = Interpreter::new(p);
-    interpreter.run_function("main", vec![])
+    interpreter.run_function("__test", vec![])
 }
 
 fn unique_temp_dir(label: &str) -> String {
@@ -54,18 +60,18 @@ fn fs_create_dir_and_exists_work() {
     let dir = dir_guard.path();
     let src = format!(
         r#"
-import {{ default_fs, Fs }} from nxlib/stdlib/fs.nx
+import {{ Fs }}, * as fs_mod from nxlib/stdlib/fs.nx
 
-let main = fn () -> bool do
-  inject default_fs do
+let main = fn () -> bool require {{ PermFs }} do
+  inject fs_mod.system_handler do
     try
       Fs.create_dir_all(path: [=[{dir}]=])
       return Fs.exists(path: [=[{dir}]=])
     catch e ->
       return false
-    endtry
-  endinject
-endfn
+    end
+  end
+end
 "#
     );
     assert_eq!(run(&src).unwrap(), Value::Bool(true));
@@ -78,27 +84,27 @@ fn fs_append_and_read_roundtrip() {
     let file = format!("{}/note.txt", dir);
     let src = format!(
         r#"
-import {{ default_fs, Fs }} from nxlib/stdlib/fs.nx
-import {{ string_length, string_contains }} from nxlib/stdlib/string.nx
+import {{ Fs }}, * as fs_mod from nxlib/stdlib/fs.nx
+import {{ length, contains }} from nxlib/stdlib/string.nx
 
-let main = fn () -> bool do
-  inject default_fs do
+let main = fn () -> bool require {{ PermFs }} do
+  inject fs_mod.system_handler do
     try
       Fs.create_dir_all(path: [=[{dir}]=])
       Fs.write_string(path: [=[{file}]=], content: [=[hello]=])
       Fs.append_string(path: [=[{file}]=], content: [=[ world]=])
       let content = Fs.read_to_string(path: [=[{file}]=])
-      let n = string_length(s: content)
+      let n = length(s: content)
       if n == 11 then
-        return string_contains(s: content, sub: [=[world]=])
+        return contains(s: content, sub: [=[world]=])
       else
         return false
-      endif
+      end
     catch e ->
       return false
-    endtry
-  endinject
-endfn
+    end
+  end
+end
 "#
     );
     assert_eq!(run(&src).unwrap(), Value::Bool(true));
@@ -111,10 +117,10 @@ fn fs_remove_file_updates_exists() {
     let file = format!("{}/trash.txt", dir);
     let src = format!(
         r#"
-import {{ default_fs, Fs }} from nxlib/stdlib/fs.nx
+import {{ Fs }}, * as fs_mod from nxlib/stdlib/fs.nx
 
-let main = fn () -> bool do
-  inject default_fs do
+let main = fn () -> bool require {{ PermFs }} do
+  inject fs_mod.system_handler do
     try
       Fs.create_dir_all(path: [=[{dir}]=])
       Fs.write_string(path: [=[{file}]=], content: [=[x]=])
@@ -124,12 +130,12 @@ let main = fn () -> bool do
         return false
       else
         return true
-      endif
+      end
     catch e ->
       return false
-    endtry
-  endinject
-endfn
+    end
+  end
+end
 "#
     );
     assert_eq!(run(&src).unwrap(), Value::Bool(true));
@@ -143,11 +149,11 @@ fn fs_read_dir_returns_handles() {
     let file_b = format!("{}/b.txt", dir);
     let src = format!(
         r#"
-import {{ default_fs, Fs, Handle }} from nxlib/stdlib/fs.nx
-import {{ string_contains }} from nxlib/stdlib/string.nx
+import {{ Fs, Handle }}, * as fs_mod from nxlib/stdlib/fs.nx
+import {{ length, contains }} from nxlib/stdlib/string.nx
 
-let main = fn () -> bool do
-  inject default_fs do
+let main = fn () -> bool require {{ PermFs }} do
+  inject fs_mod.system_handler do
     try
       Fs.create_dir_all(path: [=[{dir}]=])
       Fs.write_string(path: [=[{file_a}]=], content: [=[aaa]=])
@@ -163,16 +169,16 @@ let main = fn () -> bool do
                   Fs.close(handle: h2)
                   return true
                 case Cons(v: _, rest: _) -> return false
-              endmatch
+              end
             case Nil() -> return false
-          endmatch
+          end
         case Nil() -> return false
-      endmatch
+      end
     catch e ->
       return false
-    endtry
-  endinject
-endfn
+    end
+  end
+end
 "#
     );
     assert_eq!(run(&src).unwrap(), Value::Bool(true));
@@ -186,10 +192,10 @@ fn fs_read_dir_skips_subdirectories() {
     let sub = format!("{}/sub", dir);
     let src = format!(
         r#"
-import {{ default_fs, Fs, Handle }} from nxlib/stdlib/fs.nx
+import {{ Fs, Handle }}, * as fs_mod from nxlib/stdlib/fs.nx
 
-let main = fn () -> bool do
-  inject default_fs do
+let main = fn () -> bool require {{ PermFs }} do
+  inject fs_mod.system_handler do
     try
       Fs.create_dir_all(path: [=[{dir}]=])
       Fs.write_string(path: [=[{file}]=], content: [=[x]=])
@@ -202,14 +208,14 @@ let main = fn () -> bool do
               Fs.close(handle: h1)
               return true
             case Cons(v: _, rest: _) -> return false
-          endmatch
+          end
         case Nil() -> return false
-      endmatch
+      end
     catch e ->
       return false
-    endtry
-  endinject
-endfn
+    end
+  end
+end
 "#
     );
     assert_eq!(run(&src).unwrap(), Value::Bool(true));
@@ -221,22 +227,22 @@ fn fs_read_dir_empty_returns_nil() {
     let dir = dir_guard.path();
     let src = format!(
         r#"
-import {{ default_fs, Fs }} from nxlib/stdlib/fs.nx
+import {{ Fs }}, * as fs_mod from nxlib/stdlib/fs.nx
 
-let main = fn () -> bool do
-  inject default_fs do
+let main = fn () -> bool require {{ PermFs }} do
+  inject fs_mod.system_handler do
     try
       Fs.create_dir_all(path: [=[{dir}]=])
       let entries = Fs.read_dir(path: [=[{dir}]=])
       match entries do
         case Nil() -> return true
         case Cons(v: _, rest: _) -> return false
-      endmatch
+      end
     catch e ->
       return false
-    endtry
-  endinject
-endfn
+    end
+  end
+end
 "#
     );
     assert_eq!(run(&src).unwrap(), Value::Bool(true));
@@ -249,24 +255,24 @@ fn fs_linear_file_requires_close() {
     let file = format!("{}/x.txt", dir);
     let src = format!(
         r#"
-import {{ default_fs, Fs }} from nxlib/stdlib/fs.nx
+import {{ Fs }}, * as fs_mod from nxlib/stdlib/fs.nx
 
-let main = fn () -> unit do
-  inject default_fs do
+let main = fn () -> unit require {{ PermFs }} do
+  inject fs_mod.system_handler do
     let leak = fn () -> unit require {{ Fs }} effect {{ Exn }} do
       Fs.create_dir_all(path: [=[{dir}]=])
       Fs.write_string(path: [=[{file}]=], content: [=[abc]=])
       let %h = Fs.open_read(path: [=[{file}]=])
       return ()
-    endfn
+    end
     try
       leak()
     catch e ->
       return ()
-    endtry
+    end
     return ()
-  endinject
-endfn
+  end
+end
 "#
     );
     let program = parser().parse(src.as_str()).expect("program should parse");
@@ -288,10 +294,10 @@ fn fs_linear_file_double_close_is_rejected() {
     let file = format!("{}/x.txt", dir);
     let src = format!(
         r#"
-import {{ default_fs, Fs }} from nxlib/stdlib/fs.nx
+import {{ Fs }}, * as fs_mod from nxlib/stdlib/fs.nx
 
-let main = fn () -> unit do
-  inject default_fs do
+let main = fn () -> unit require {{ PermFs }} do
+  inject fs_mod.system_handler do
     let bad = fn () -> unit require {{ Fs }} effect {{ Exn }} do
       Fs.create_dir_all(path: [=[{dir}]=])
       Fs.write_string(path: [=[{file}]=], content: [=[abc]=])
@@ -299,15 +305,15 @@ let main = fn () -> unit do
       Fs.close(handle: %h)
       Fs.close(handle: %h)
       return ()
-    endfn
+    end
     try
       bad()
     catch e ->
       return ()
-    endtry
+    end
     return ()
-  endinject
-endfn
+  end
+end
 "#
     );
     let program = parser().parse(src.as_str()).expect("program should parse");
@@ -329,11 +335,11 @@ fn fs_linear_file_read_then_close_works() {
     let file = format!("{}/x.txt", dir);
     let src = format!(
         r#"
-import {{ default_fs, Fs, Handle }} from nxlib/stdlib/fs.nx
-import {{ string_length }} from nxlib/stdlib/string.nx
+import {{ Fs, Handle }}, * as fs_mod from nxlib/stdlib/fs.nx
+import {{ length, contains }} from nxlib/stdlib/string.nx
 
-let main = fn () -> bool do
-  inject default_fs do
+let main = fn () -> bool require {{ PermFs }} do
+  inject fs_mod.system_handler do
     try
       Fs.create_dir_all(path: [=[{dir}]=])
       Fs.write_string(path: [=[{file}]=], content: [=[abc]=])
@@ -341,17 +347,17 @@ let main = fn () -> bool do
       let %r = Fs.read(handle: %h)
       match %r do case {{ content: content, handle: %h2 }} ->
         Fs.close(handle: %h2)
-        if string_length(s: content) == 3 then
+        if length(s: content) == 3 then
           return true
         else
           return false
-        endif
-      endmatch
+        end
+      end
     catch e ->
       return false
-    endtry
-  endinject
-endfn
+    end
+  end
+end
 "#
     );
     assert_eq!(run(&src).unwrap(), Value::Bool(true));
@@ -364,10 +370,10 @@ fn fs_open_read_missing_file_raises_exn() {
     let file = format!("{}/missing.txt", dir);
     let src = format!(
         r#"
-import {{ default_fs, Fs }} from nxlib/stdlib/fs.nx
+import {{ Fs }}, * as fs_mod from nxlib/stdlib/fs.nx
 
-let main = fn () -> bool do
-  inject default_fs do
+let main = fn () -> bool require {{ PermFs }} do
+  inject fs_mod.system_handler do
     try
       let %h = Fs.open_read(path: [=[{file}]=])
       Fs.close(handle: %h)
@@ -376,10 +382,10 @@ let main = fn () -> bool do
       match e do
         case RuntimeError(val: _) -> return true
         case InvalidIndex(val: _) -> return false
-      endmatch
-    endtry
-  endinject
-endfn
+      end
+    end
+  end
+end
 "#
     );
     assert_eq!(run(&src).unwrap(), Value::Bool(true));
@@ -392,10 +398,10 @@ fn fs_open_write_missing_parent_raises_exn() {
     let file = format!("{}/no_parent/x.txt", dir);
     let src = format!(
         r#"
-import {{ default_fs, Fs }} from nxlib/stdlib/fs.nx
+import {{ Fs }}, * as fs_mod from nxlib/stdlib/fs.nx
 
-let main = fn () -> bool do
-  inject default_fs do
+let main = fn () -> bool require {{ PermFs }} do
+  inject fs_mod.system_handler do
     try
       let %h = Fs.open_write(path: [=[{file}]=])
       Fs.close(handle: %h)
@@ -404,10 +410,10 @@ let main = fn () -> bool do
       match e do
         case RuntimeError(val: _) -> return true
         case InvalidIndex(val: _) -> return false
-      endmatch
-    endtry
-  endinject
-endfn
+      end
+    end
+  end
+end
 "#
     );
     assert_eq!(run(&src).unwrap(), Value::Bool(true));
@@ -420,10 +426,10 @@ fn fs_open_append_missing_parent_raises_exn() {
     let file = format!("{}/no_parent/x.txt", dir);
     let src = format!(
         r#"
-import {{ default_fs, Fs }} from nxlib/stdlib/fs.nx
+import {{ Fs }}, * as fs_mod from nxlib/stdlib/fs.nx
 
-let main = fn () -> bool do
-  inject default_fs do
+let main = fn () -> bool require {{ PermFs }} do
+  inject fs_mod.system_handler do
     try
       let %h = Fs.open_append(path: [=[{file}]=])
       Fs.close(handle: %h)
@@ -432,10 +438,10 @@ let main = fn () -> bool do
       match e do
         case RuntimeError(val: _) -> return true
         case InvalidIndex(val: _) -> return false
-      endmatch
-    endtry
-  endinject
-endfn
+      end
+    end
+  end
+end
 "#
     );
     assert_eq!(run(&src).unwrap(), Value::Bool(true));
@@ -448,11 +454,11 @@ fn fs_write_through_controller() {
     let file = format!("{}/out.txt", dir);
     let src = format!(
         r#"
-import {{ default_fs, Fs, Handle }} from nxlib/stdlib/fs.nx
-import {{ string_length }} from nxlib/stdlib/string.nx
+import {{ Fs, Handle }}, * as fs_mod from nxlib/stdlib/fs.nx
+import {{ length, contains }} from nxlib/stdlib/string.nx
 
-let main = fn () -> bool do
-  inject default_fs do
+let main = fn () -> bool require {{ PermFs }} do
+  inject fs_mod.system_handler do
     try
       Fs.create_dir_all(path: [=[{dir}]=])
       let %h = Fs.open_write(path: [=[{file}]=])
@@ -461,20 +467,20 @@ let main = fn () -> bool do
         Fs.close(handle: %h2)
         if ok then
           let content = Fs.read_to_string(path: [=[{file}]=])
-          if string_length(s: content) == 16 then
+          if length(s: content) == 16 then
             return true
           else
             return false
-          endif
+          end
         else
           return false
-        endif
-      endmatch
+        end
+      end
     catch e ->
       return false
-    endtry
-  endinject
-endfn
+    end
+  end
+end
 "#
     );
     assert_eq!(run(&src).unwrap(), Value::Bool(true));
@@ -487,11 +493,11 @@ fn fs_path_returns_path() {
     let file = format!("{}/x.txt", dir);
     let src = format!(
         r#"
-import {{ default_fs, Fs, Handle }} from nxlib/stdlib/fs.nx
-import {{ string_length, string_contains }} from nxlib/stdlib/string.nx
+import {{ Fs, Handle }}, * as fs_mod from nxlib/stdlib/fs.nx
+import {{ length, contains }} from nxlib/stdlib/string.nx
 
-let main = fn () -> bool do
-  inject default_fs do
+let main = fn () -> bool require {{ PermFs }} do
+  inject fs_mod.system_handler do
     try
       Fs.create_dir_all(path: [=[{dir}]=])
       Fs.write_string(path: [=[{file}]=], content: [=[x]=])
@@ -499,13 +505,13 @@ let main = fn () -> bool do
       let %pr = Fs.fd_path(handle: %h)
       match %pr do case {{ path: p, handle: %h2 }} ->
         Fs.close(handle: %h2)
-        return string_contains(s: p, sub: [=[x.txt]=])
-      endmatch
+        return contains(s: p, sub: [=[x.txt]=])
+      end
     catch e ->
       return false
-    endtry
-  endinject
-endfn
+    end
+  end
+end
 "#
     );
     assert_eq!(run(&src).unwrap(), Value::Bool(true));
@@ -519,7 +525,7 @@ import { Fs } from nxlib/stdlib/fs.nx
 let main = fn () -> bool do
   let ok = Fs.exists(path: [=[/tmp]=])
   return ok
-endfn
+end
 "#;
     let err = check(src).expect_err("Fs.exists without inject Fs should be a type error");
     assert!(
@@ -533,57 +539,57 @@ endfn
 fn fs_mock_handler_replaces_read() {
     let src = format!(
         r#"
-import {{ default_fs, Fs, Handle }} from nxlib/stdlib/fs.nx
-import {{ string_length, string_contains }} from nxlib/stdlib/string.nx
+import {{ Fs, Handle }}, * as fs_mod from nxlib/stdlib/fs.nx
+import {{ length, contains }} from nxlib/stdlib/string.nx
 
 let mock_fs = handler Fs do
-  fn exists(path: string) -> bool do return false endfn
-  fn read_to_string(path: string) -> string do return [=[]=] endfn
-  fn write_string(path: string, content: string) -> unit effect {{ Exn }} do return () endfn
-  fn append_string(path: string, content: string) -> unit effect {{ Exn }} do return () endfn
-  fn remove_file(path: string) -> unit effect {{ Exn }} do return () endfn
-  fn create_dir_all(path: string) -> unit effect {{ Exn }} do return () endfn
-  fn read_dir(path: string) -> List<Handle> effect {{ Exn }} do return Nil() endfn
+  fn exists(path: string) -> bool do return false end
+  fn read_to_string(path: string) -> string do return [=[]=] end
+  fn write_string(path: string, content: string) -> unit effect {{ Exn }} do return () end
+  fn append_string(path: string, content: string) -> unit effect {{ Exn }} do return () end
+  fn remove_file(path: string) -> unit effect {{ Exn }} do return () end
+  fn create_dir_all(path: string) -> unit effect {{ Exn }} do return () end
+  fn read_dir(path: string) -> List<Handle> effect {{ Exn }} do return Nil() end
   fn open_read(path: string) -> %Handle effect {{ Exn }} do
     let h = Handle(id: 0)
     let %lh = h
     return %lh
-  endfn
+  end
   fn open_write(path: string) -> %Handle effect {{ Exn }} do
     let h = Handle(id: 0)
     let %lh = h
     return %lh
-  endfn
+  end
   fn open_append(path: string) -> %Handle effect {{ Exn }} do
     let h = Handle(id: 0)
     let %lh = h
     return %lh
-  endfn
+  end
   fn read(handle: %Handle) -> {{ content: string, handle: %Handle }} do
     match handle do case Handle(id: id) ->
       let h = Handle(id: id)
       let %lh = h
       return {{ content: [=[mock content]=], handle: %lh }}
-    endmatch
-  endfn
+    end
+  end
   fn fd_write(handle: %Handle, content: string) -> {{ ok: bool, handle: %Handle }} do
     match handle do case Handle(id: id) ->
       let h = Handle(id: id)
       let %lh = h
       return {{ ok: true, handle: %lh }}
-    endmatch
-  endfn
+    end
+  end
   fn fd_path(handle: %Handle) -> {{ path: string, handle: %Handle }} do
     match handle do case Handle(id: id) ->
       let h = Handle(id: id)
       let %lh = h
       return {{ path: [=[mock/path.txt]=], handle: %lh }}
-    endmatch
-  endfn
+    end
+  end
   fn close(handle: %Handle) -> unit do
-    match handle do case Handle(id: _) -> return () endmatch
-  endfn
-endhandler
+    match handle do case Handle(id: _) -> return () end
+  end
+end
 
 let main = fn () -> bool do
   inject mock_fs do
@@ -592,13 +598,13 @@ let main = fn () -> bool do
       let %r = Fs.read(handle: %h)
       match %r do case {{ content: c, handle: %h2 }} ->
         Fs.close(handle: %h2)
-        return string_contains(s: c, sub: [=[mock]=])
-      endmatch
+        return contains(s: c, sub: [=[mock]=])
+      end
     catch e ->
       return false
-    endtry
-  endinject
-endfn
+    end
+  end
+end
 "#
     );
     assert_eq!(run(&src).unwrap(), Value::Bool(true));
@@ -608,10 +614,10 @@ endfn
 fn fs_write_string_raises_on_failure() {
     let src = format!(
         r#"
-import {{ default_fs, Fs }} from nxlib/stdlib/fs.nx
+import {{ Fs }}, * as fs_mod from nxlib/stdlib/fs.nx
 
-let main = fn () -> bool do
-  inject default_fs do
+let main = fn () -> bool require {{ PermFs }} do
+  inject fs_mod.system_handler do
     try
       Fs.write_string(path: [=[/nonexistent_dir_xyz/file.txt]=], content: [=[x]=])
       return false
@@ -619,10 +625,10 @@ let main = fn () -> bool do
       match e do
         case RuntimeError(val: _) -> return true
         case InvalidIndex(val: _) -> return false
-      endmatch
-    endtry
-  endinject
-endfn
+      end
+    end
+  end
+end
 "#
     );
     assert_eq!(run(&src).unwrap(), Value::Bool(true));
@@ -632,24 +638,24 @@ endfn
 fn fs_read_dir_nonexistent_raises_exn() {
     let src = format!(
         r#"
-import {{ default_fs, Fs }} from nxlib/stdlib/fs.nx
+import {{ Fs }}, * as fs_mod from nxlib/stdlib/fs.nx
 
-let main = fn () -> bool do
-  inject default_fs do
+let main = fn () -> bool require {{ PermFs }} do
+  inject fs_mod.system_handler do
     try
       let entries = Fs.read_dir(path: [=[/nonexistent_dir_xyz_abc]=])
       match entries do
         case Nil() -> return false
         case Cons(v: _, rest: _) -> return false
-      endmatch
+      end
     catch e ->
       match e do
         case RuntimeError(val: _) -> return true
         case InvalidIndex(val: _) -> return false
-      endmatch
-    endtry
-  endinject
-endfn
+      end
+    end
+  end
+end
 "#
     );
     assert_eq!(run(&src).unwrap(), Value::Bool(true));

@@ -348,8 +348,6 @@ pub enum Stmt {
         handlers: Vec<String>,
         body: Vec<Spanned<Stmt>>,
     },
-    #[allow(dead_code)]
-    Comment,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -434,8 +432,6 @@ pub enum TopLevel {
     Import(Import),
     Port(Port),
     Let(GlobalLet),
-    #[allow(dead_code)]
-    Comment,
 }
 
 #[derive(Debug, Clone, PartialEq)]

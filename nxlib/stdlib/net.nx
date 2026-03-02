@@ -2,14 +2,14 @@
  * net: HTTP networking operations gated by the Net port (capability).
  *
  * All operations are defined in `port Net` and dispatched via handler.
- * Use `inject default_net do ... endinject` for real network access,
+ * Use `inject net_mod.system_handler do ... end` for real network access,
  * or inject a mock handler for testing.
  *
  * Headers are encoded as "name:value\n" pairs for transport, and the raw
  * response wire format is "status\nbody".
  */
-import external nxlib/stdlib/net.wasm
-import { string_length, string_substring, string_index_of, string_to_i64 } from nxlib/stdlib/string.nx
+import external nxlib/stdlib/stdlib.wasm
+import { length, substring, index_of, to_i64 } from nxlib/stdlib/string.nx
 
 /// An HTTP header with a name and value.
 pub type Header = Header(name: string, value: string)
@@ -36,7 +36,7 @@ external __nx_http_stop = [=[__nx_http_stop]=] : (server_id: i64) -> bool
 /// Creates a Header from a name and value.
 pub let header = fn (name: string, value: string) -> Header do
   return Header(name: name, value: value)
-endfn
+end
 
 let encode_headers_go = fn (headers: List<Header>, acc: string) -> string do
   match headers do
@@ -47,113 +47,113 @@ let encode_headers_go = fn (headers: List<Header>, acc: string) -> string do
           let line = name ++ [=[:]=] ++ value ++ [=[\n]=]
           let next = acc ++ line
           return encode_headers_go(headers: rest, acc: next)
-      endmatch
-  endmatch
-endfn
+      end
+  end
+end
 
 let encode_headers = fn (headers: List<Header>) -> string do
   return encode_headers_go(headers: headers, acc: [=[]=])
-endfn
+end
 
 let decode_response = fn (raw: string) -> Response do
-  let sep = string_index_of(s: raw, sub: [=[\n]=])
+  let sep = index_of(s: raw, sub: [=[\n]=])
   if sep < 0 then
     return Response(status: 0, body: raw)
   else
-    let status_s = string_substring(s: raw, start: 0, len: sep)
-    let raw_len = string_length(s: raw)
+    let status_s = substring(s: raw, start: 0, len: sep)
+    let raw_len = length(s: raw)
     let body_start = sep + 1
     let body_len = raw_len - body_start
-    let body_s = string_substring(s: raw, start: body_start, len: body_len)
-    let status = string_to_i64(s: status_s)
+    let body_s = substring(s: raw, start: body_start, len: body_len)
+    let status = to_i64(s: status_s)
     return Response(status: status, body: body_s)
-  endif
-endfn
+  end
+end
 
 let decode_body_from_raw = fn (raw: string) -> string do
-  let sep = string_index_of(s: raw, sub: [=[\n]=])
+  let sep = index_of(s: raw, sub: [=[\n]=])
   if sep < 0 then
     return raw
   else
-    let raw_len = string_length(s: raw)
+    let raw_len = length(s: raw)
     let body_start = sep + 1
     let body_len = raw_len - body_start
-    return string_substring(s: raw, start: body_start, len: body_len)
-  endif
-endfn
+    return substring(s: raw, start: body_start, len: body_len)
+  end
+end
 
 let decode_request = fn (raw: string) -> Request do
-  let sep1 = string_index_of(s: raw, sub: [=[\n]=])
+  let sep1 = index_of(s: raw, sub: [=[\n]=])
   if sep1 < 0 then
     return Request(method: [=[]=], path: [=[]=], headers: [=[]=], body: [=[]=], req_id: 0 - 1)
   else
-    let req_id_s = string_substring(s: raw, start: 0, len: sep1)
-    let req_id = string_to_i64(s: req_id_s)
+    let req_id_s = substring(s: raw, start: 0, len: sep1)
+    let req_id = to_i64(s: req_id_s)
     let rest1_start = sep1 + 1
-    let rest1_len = string_length(s: raw) - rest1_start
-    let rest1 = string_substring(s: raw, start: rest1_start, len: rest1_len)
+    let rest1_len = length(s: raw) - rest1_start
+    let rest1 = substring(s: raw, start: rest1_start, len: rest1_len)
 
-    let sep2 = string_index_of(s: rest1, sub: [=[\n]=])
+    let sep2 = index_of(s: rest1, sub: [=[\n]=])
     if sep2 < 0 then
       return Request(method: rest1, path: [=[]=], headers: [=[]=], body: [=[]=], req_id: req_id)
     else
-      let method = string_substring(s: rest1, start: 0, len: sep2)
+      let method = substring(s: rest1, start: 0, len: sep2)
       let rest2_start = sep2 + 1
-      let rest2_len = string_length(s: rest1) - rest2_start
-      let rest2 = string_substring(s: rest1, start: rest2_start, len: rest2_len)
+      let rest2_len = length(s: rest1) - rest2_start
+      let rest2 = substring(s: rest1, start: rest2_start, len: rest2_len)
 
-      let sep3 = string_index_of(s: rest2, sub: [=[\n]=])
+      let sep3 = index_of(s: rest2, sub: [=[\n]=])
       if sep3 < 0 then
         return Request(method: method, path: rest2, headers: [=[]=], body: [=[]=], req_id: req_id)
       else
-        let path = string_substring(s: rest2, start: 0, len: sep3)
+        let path = substring(s: rest2, start: 0, len: sep3)
         let rest3_start = sep3 + 1
-        let rest3_len = string_length(s: rest2) - rest3_start
-        let rest3 = string_substring(s: rest2, start: rest3_start, len: rest3_len)
+        let rest3_len = length(s: rest2) - rest3_start
+        let rest3 = substring(s: rest2, start: rest3_start, len: rest3_len)
 
-        let sep4 = string_index_of(s: rest3, sub: [=[\n]=])
+        let sep4 = index_of(s: rest3, sub: [=[\n]=])
         if sep4 < 0 then
           return Request(method: method, path: path, headers: rest3, body: [=[]=], req_id: req_id)
         else
-          let headers = string_substring(s: rest3, start: 0, len: sep4)
+          let headers = substring(s: rest3, start: 0, len: sep4)
           let body_start = sep4 + 1
-          let body_len = string_length(s: rest3) - body_start
-          let body = string_substring(s: rest3, start: body_start, len: body_len)
+          let body_len = length(s: rest3) - body_start
+          let body = substring(s: rest3, start: body_start, len: body_len)
           return Request(method: method, path: path, headers: headers, body: body, req_id: req_id)
-        endif
-      endif
-    endif
-  endif
-endfn
+        end
+      end
+    end
+  end
+end
 
 /// Extracts the status code from a Response.
 pub let response_status = fn (res: Response) -> i64 do
   match res do
     case Response(status: status, body: _) -> return status
-  endmatch
-endfn
+  end
+end
 
 /// Extracts the body string from a Response.
 pub let response_body = fn (res: Response) -> string do
   match res do
     case Response(status: _, body: body) -> return body
-  endmatch
-endfn
+  end
+end
 
 /// Returns the method from a request (borrowed).
 pub let request_method = fn (req: &Request) -> string do
-  match req do case Request(method: m, path: _, headers: _, body: _, req_id: _) -> return m endmatch
-endfn
+  match req do case Request(method: m, path: _, headers: _, body: _, req_id: _) -> return m end
+end
 
 /// Returns the path from a request (borrowed).
 pub let request_path = fn (req: &Request) -> string do
-  match req do case Request(method: _, path: p, headers: _, body: _, req_id: _) -> return p endmatch
-endfn
+  match req do case Request(method: _, path: p, headers: _, body: _, req_id: _) -> return p end
+end
 
 /// Returns the body from a request (borrowed).
 pub let request_body = fn (req: &Request) -> string do
-  match req do case Request(method: _, path: _, headers: _, body: b, req_id: _) -> return b endmatch
-endfn
+  match req do case Request(method: _, path: _, headers: _, body: b, req_id: _) -> return b end
+end
 
 // --- Port definition ---
 
@@ -167,34 +167,34 @@ pub port Net do
   fn respond(req: Request, status: i64, body: string) -> bool
   fn respond_with_headers(req: Request, status: i64, headers: List<Header>, body: string) -> bool
   fn stop(server: %Server) -> unit
-endport
+end
 
 /// Default Net handler — real network access via WASM FFI.
-pub let default_net = handler Net do
+pub let system_handler = handler Net require { PermNet } do
   fn get(url: string) -> string do
     let raw = __nx_http_request(method: [=[GET]=], url: url, headers: [=[]=], body: [=[]=])
     return decode_body_from_raw(raw: raw)
-  endfn
+  end
 
   fn request(method: string, url: string, headers: List<Header>) -> string do
     let encoded = encode_headers(headers: headers)
     let raw = __nx_http_request(method: method, url: url, headers: encoded, body: [=[]=])
     let res = decode_response(raw: raw)
     return response_body(res: res)
-  endfn
+  end
 
   fn request_with_body(method: string, url: string, headers: List<Header>, body: string) -> string do
     let encoded = encode_headers(headers: headers)
     let raw = __nx_http_request(method: method, url: url, headers: encoded, body: body)
     let res = decode_response(raw: raw)
     return response_body(res: res)
-  endfn
+  end
 
   fn request_response(method: string, url: string, headers: List<Header>, body: string) -> Response do
     let encoded = encode_headers(headers: headers)
     let raw = __nx_http_request(method: method, url: url, headers: encoded, body: body)
     return decode_response(raw: raw)
-  endfn
+  end
 
   fn listen(addr: string) -> %Server effect { Exn } do
     let id = __nx_http_listen(addr: addr)
@@ -204,33 +204,33 @@ pub let default_net = handler Net do
       let s = Server(id: id)
       let %ls = s
       return %ls
-    endif
-  endfn
+    end
+  end
 
   fn accept(server: &Server) -> Request do
     match server do case Server(id: id) ->
       let raw = __nx_http_accept(server_id: id)
       return decode_request(raw: raw)
-    endmatch
-  endfn
+    end
+  end
 
   fn respond(req: Request, status: i64, body: string) -> bool do
     match req do case Request(method: _, path: _, headers: _, body: _, req_id: rid) ->
       return __nx_http_respond(req_id: rid, status: status, headers: [=[]=], body: body)
-    endmatch
-  endfn
+    end
+  end
 
   fn respond_with_headers(req: Request, status: i64, headers: List<Header>, body: string) -> bool do
     match req do case Request(method: _, path: _, headers: _, body: _, req_id: rid) ->
       let encoded = encode_headers(headers: headers)
       return __nx_http_respond(req_id: rid, status: status, headers: encoded, body: body)
-    endmatch
-  endfn
+    end
+  end
 
   fn stop(server: %Server) -> unit do
     match server do case Server(id: id) ->
       let _ = __nx_http_stop(server_id: id)
       return ()
-    endmatch
-  endfn
-endhandler
+    end
+  end
+end

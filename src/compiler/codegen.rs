@@ -2199,23 +2199,6 @@ fn lir_expr_to_anf(expr: &LirExpr) -> AnfExpr {
                 .collect(),
             typ: typ.clone(),
         },
-        LirExpr::CallIndirect {
-            table_idx: _,
-            args,
-            typ,
-        } => {
-            // For now, CallIndirect is lowered as a regular call.
-            // TODO: emit actual call_indirect when funcref table is wired.
-            // The table_idx atom is currently unused in the ANF representation.
-            AnfExpr::Call {
-                func: "__indirect_call".to_string(),
-                args: args
-                    .iter()
-                    .map(|(l, a)| (l.clone(), lir_atom_to_anf(a)))
-                    .collect(),
-                typ: typ.clone(),
-            }
-        }
         LirExpr::Constructor { name, args, typ } => AnfExpr::Constructor {
             name: name.clone(),
             args: args.iter().map(|a| lir_atom_to_anf(a)).collect(),

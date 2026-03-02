@@ -1,21 +1,29 @@
 /**
  * random: Pseudo-random number generation.
  *
- * Delegates to a native WASM PRNG via FFI. The Console effect is
- * required because random number generation is an observable side
- * effect. next_i64 returns a full-range value; range returns a value
- * in [min, max); next_bool is derived from range.
+ * Provides Random port with next_i64, range, and next_bool operations.
+ * Requires PermRandom capability.
  */
-import external nxlib/stdlib/random.wasm
+import external nxlib/stdlib/stdlib.wasm
 
-/// Returns a random i64 value.
-pub external next_i64 = [=[__nx_random_i64]=] : () -> i64 effect { Console }
+external __nx_random_i64 = [=[__nx_random_i64]=] : () -> i64
+external __nx_random_range = [=[__nx_random_range]=] : (min: i64, max: i64) -> i64
 
-/// Returns a random i64 in the half-open range [min, max).
-pub external range = [=[__nx_random_range]=] : (min: i64, max: i64) -> i64 effect { Console }
+pub port Random do
+  fn next_i64() -> i64
+  fn range(min: i64, max: i64) -> i64
+  fn next_bool() -> bool
+end
 
-/// Returns a random boolean value.
-pub let next_bool = fn () -> bool effect { Console } do
-  let n = range(min: 0, max: 2)
-  return n == 1
-endfn
+pub let system_handler = handler Random require { PermRandom } do
+  fn next_i64() -> i64 do
+    return __nx_random_i64()
+  end
+  fn range(min: i64, max: i64) -> i64 do
+    return __nx_random_range(min: min, max: max)
+  end
+  fn next_bool() -> bool do
+    let n = __nx_random_range(min: 0, max: 2)
+    return n == 1
+  end
+end

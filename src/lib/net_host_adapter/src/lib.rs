@@ -8,12 +8,51 @@ mod bindings {
 
 use bindings::wasi::http::outgoing_handler;
 use bindings::wasi::http::types::{Fields, Method, OutgoingBody, OutgoingRequest, Scheme};
+use bindings::wasi::sockets::instance_network::instance_network;
+use bindings::wasi::sockets::network::{IpAddressFamily, IpSocketAddress, Ipv4SocketAddress};
+use bindings::wasi::sockets::tcp::TcpSocket;
+use bindings::wasi::sockets::tcp_create_socket::create_tcp_socket;
 use http::Uri;
+use std::cell::RefCell;
+use std::collections::HashMap;
 
 const MAX_HTTP_URL_BYTES: usize = 8 * 1024;
 const MAX_HTTP_HEADERS_BYTES: usize = 64 * 1024;
 const MAX_HTTP_BODY_BYTES: usize = 1024 * 1024;
 const MAX_HTTP_RESPONSE_BYTES: usize = 1024 * 1024;
+
+// ---------------------------------------------------------------------------
+// State for server operations
+// ---------------------------------------------------------------------------
+
+struct ServerEntry {
+    socket: TcpSocket,
+}
+
+struct ConnEntry {
+    output: bindings::wasi::io::streams::OutputStream,
+    // Hold references to keep the connection alive until respond/drop
+    _input: bindings::wasi::io::streams::InputStream,
+    _client_socket: TcpSocket,
+}
+
+thread_local! {
+    static SERVERS: RefCell<HashMap<i64, ServerEntry>> = RefCell::new(HashMap::new());
+    static CONNS: RefCell<HashMap<i64, ConnEntry>> = RefCell::new(HashMap::new());
+    static NEXT_ID: RefCell<i64> = RefCell::new(1);
+}
+
+fn next_id() -> i64 {
+    NEXT_ID.with(|cell| {
+        let v = *cell.borrow();
+        *cell.borrow_mut() = v + 1;
+        v
+    })
+}
+
+// ---------------------------------------------------------------------------
+// HTTP client helpers (existing)
+// ---------------------------------------------------------------------------
 
 fn validate_bridge_limits(url: &str, headers: &str, body: &str) -> Result<(), String> {
     if url.len() > MAX_HTTP_URL_BYTES {
@@ -76,7 +115,7 @@ fn parse_url(url: &str) -> Result<(Scheme, String, String), String> {
     Ok((scheme, authority, path))
 }
 
-fn parse_headers(headers: &str, authority: &str) -> Fields {
+fn parse_http_headers(headers: &str, authority: &str) -> Fields {
     let mut has_host = false;
     let fields = Fields::new();
 
@@ -113,7 +152,7 @@ fn perform_request(
 ) -> Result<(u16, String), String> {
     validate_bridge_limits(url, headers, body)?;
     let (scheme, authority, path) = parse_url(url)?;
-    let header_fields = parse_headers(headers, &authority);
+    let header_fields = parse_http_headers(headers, &authority);
     let request = OutgoingRequest::new(header_fields);
 
     request
@@ -177,6 +216,261 @@ fn perform_request(
     Ok((status, response_body))
 }
 
+// ---------------------------------------------------------------------------
+// Server helpers
+// ---------------------------------------------------------------------------
+
+fn parse_socket_address(addr: &str) -> Result<IpSocketAddress, String> {
+    let (host, port_str) = addr
+        .rsplit_once(':')
+        .ok_or_else(|| "missing port in address".to_string())?;
+    let port: u16 = port_str
+        .parse()
+        .map_err(|_| "invalid port number".to_string())?;
+
+    let parts: Vec<&str> = host.split('.').collect();
+    if parts.len() != 4 {
+        return Err(format!("invalid IPv4 address: {}", host));
+    }
+    let octets: Result<Vec<u8>, _> = parts.iter().map(|s| s.parse::<u8>()).collect();
+    let octets = octets.map_err(|_| "invalid IPv4 octet".to_string())?;
+
+    Ok(IpSocketAddress::Ipv4(Ipv4SocketAddress {
+        port,
+        address: (octets[0], octets[1], octets[2], octets[3]),
+    }))
+}
+
+fn do_listen(addr: &str) -> Result<i64, String> {
+    let socket_addr = parse_socket_address(addr)?;
+    let family = match &socket_addr {
+        IpSocketAddress::Ipv4(_) => IpAddressFamily::Ipv4,
+        IpSocketAddress::Ipv6(_) => IpAddressFamily::Ipv6,
+    };
+
+    let socket = create_tcp_socket(family).map_err(|e| format!("create socket: {:?}", e))?;
+    let network = instance_network();
+
+    socket
+        .start_bind(&network, socket_addr)
+        .map_err(|e| format!("bind: {:?}", e))?;
+    socket.subscribe().block();
+    socket
+        .finish_bind()
+        .map_err(|e| format!("finish bind: {:?}", e))?;
+
+    socket
+        .start_listen()
+        .map_err(|e| format!("listen: {:?}", e))?;
+    socket.subscribe().block();
+    socket
+        .finish_listen()
+        .map_err(|e| format!("finish listen: {:?}", e))?;
+
+    let id = next_id();
+    SERVERS.with(|servers| {
+        servers.borrow_mut().insert(id, ServerEntry { socket });
+    });
+    Ok(id)
+}
+
+fn do_accept(server_id: i64) -> Result<String, String> {
+    // Block until a connection is available, then accept it.
+    let (client_socket, input, output) = SERVERS.with(|servers| {
+        let servers = servers.borrow();
+        let entry = servers
+            .get(&server_id)
+            .ok_or_else(|| "invalid server id".to_string())?;
+
+        // Poll until accept succeeds
+        loop {
+            match entry.socket.accept() {
+                Ok(result) => return Ok(result),
+                Err(bindings::wasi::sockets::network::ErrorCode::WouldBlock) => {
+                    entry.socket.subscribe().block();
+                }
+                Err(e) => return Err(format!("accept: {:?}", e)),
+            }
+        }
+    })?;
+
+    // Read the HTTP request from the input stream
+    let req_data = read_http_request(&input)?;
+
+    let req_id = next_id();
+    CONNS.with(|conns| {
+        conns.borrow_mut().insert(
+            req_id,
+            ConnEntry {
+                output,
+                _input: input,
+                _client_socket: client_socket,
+            },
+        );
+    });
+
+    // Wire format: "{req_id}\n{method}\n{path}\n{headers}\n{body}"
+    Ok(format!(
+        "{}\n{}\n{}\n{}\n{}",
+        req_id, req_data.method, req_data.path, req_data.headers, req_data.body
+    ))
+}
+
+struct HttpRequestData {
+    method: String,
+    path: String,
+    headers: String,
+    body: String,
+}
+
+fn read_http_request(
+    input: &bindings::wasi::io::streams::InputStream,
+) -> Result<HttpRequestData, String> {
+    let mut buf = Vec::new();
+
+    // Read until we find \r\n\r\n (end of HTTP headers)
+    let header_end = loop {
+        input.subscribe().block();
+        match input.read(4096) {
+            Ok(chunk) if chunk.is_empty() => {
+                return Err("connection closed before headers complete".to_string());
+            }
+            Ok(chunk) => {
+                buf.extend_from_slice(&chunk);
+                if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                    break pos;
+                }
+                if buf.len() > MAX_HTTP_HEADERS_BYTES {
+                    return Err("request headers too large".to_string());
+                }
+            }
+            Err(_) => return Err("failed to read request".to_string()),
+        }
+    };
+
+    let header_str = String::from_utf8_lossy(&buf[..header_end]).to_string();
+    let body_start = header_end + 4;
+
+    // Parse request line: "METHOD /path HTTP/1.x"
+    let mut lines = header_str.lines();
+    let request_line = lines.next().unwrap_or("");
+    let mut parts = request_line.splitn(3, ' ');
+    let method = parts.next().unwrap_or("GET").to_string();
+    let path = parts.next().unwrap_or("/").to_string();
+
+    // Collect headers as "name:value\n" pairs
+    let mut headers_out = String::new();
+    let mut content_length: usize = 0;
+    for line in lines {
+        if line.is_empty() {
+            break;
+        }
+        if let Some((name, value)) = line.split_once(':') {
+            let name = name.trim();
+            let value = value.trim();
+            if name.eq_ignore_ascii_case("content-length") {
+                content_length = value.parse().unwrap_or(0);
+            }
+            headers_out.push_str(name);
+            headers_out.push(':');
+            headers_out.push_str(value);
+            headers_out.push('\n');
+        }
+    }
+
+    // Read body if Content-Length > 0
+    let mut body_buf: Vec<u8> = buf[body_start..].to_vec();
+    while body_buf.len() < content_length {
+        input.subscribe().block();
+        match input.read(4096) {
+            Ok(chunk) if chunk.is_empty() => break,
+            Ok(chunk) => body_buf.extend_from_slice(&chunk),
+            Err(_) => break,
+        }
+    }
+    body_buf.truncate(content_length);
+    let body = String::from_utf8_lossy(&body_buf).to_string();
+
+    Ok(HttpRequestData {
+        method,
+        path,
+        headers: headers_out,
+        body,
+    })
+}
+
+fn status_reason(code: i64) -> &'static str {
+    match code {
+        200 => "OK",
+        201 => "Created",
+        204 => "No Content",
+        301 => "Moved Permanently",
+        302 => "Found",
+        304 => "Not Modified",
+        400 => "Bad Request",
+        401 => "Unauthorized",
+        403 => "Forbidden",
+        404 => "Not Found",
+        405 => "Method Not Allowed",
+        500 => "Internal Server Error",
+        502 => "Bad Gateway",
+        503 => "Service Unavailable",
+        _ => "OK",
+    }
+}
+
+fn do_respond(req_id: i64, status: i64, headers: &str, body: &str) -> Result<(), String> {
+    let entry = CONNS.with(|conns| {
+        conns
+            .borrow_mut()
+            .remove(&req_id)
+            .ok_or_else(|| "invalid request id".to_string())
+    })?;
+
+    let mut response = format!("HTTP/1.1 {} {}\r\n", status, status_reason(status));
+    response.push_str(&format!("Content-Length: {}\r\n", body.len()));
+
+    for line in headers.lines() {
+        let line = line.trim();
+        if !line.is_empty() {
+            // Convert "name:value" to "name: value\r\n"
+            if let Some((name, value)) = line.split_once(':') {
+                response.push_str(name.trim());
+                response.push_str(": ");
+                response.push_str(value.trim());
+                response.push_str("\r\n");
+            }
+        }
+    }
+    response.push_str("Connection: close\r\n");
+    response.push_str("\r\n");
+    response.push_str(body);
+
+    entry
+        .output
+        .blocking_write_and_flush(response.as_bytes())
+        .map_err(|_| "failed to write response".to_string())?;
+
+    // Dropping entry closes streams and client socket
+    drop(entry);
+    Ok(())
+}
+
+fn do_stop(server_id: i64) -> Result<(), String> {
+    SERVERS.with(|servers| {
+        servers
+            .borrow_mut()
+            .remove(&server_id)
+            .ok_or_else(|| "invalid server id".to_string())
+    })?;
+    // Dropping the ServerEntry closes the TCP listener socket
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Guest implementation
+// ---------------------------------------------------------------------------
+
 struct Guest;
 
 impl bindings::exports::nexus::cli::nexus_host::Guest for Guest {
@@ -184,6 +478,34 @@ impl bindings::exports::nexus::cli::nexus_host::Guest for Guest {
         match perform_request(&method, &url, &headers, &body) {
             Ok((status, response_body)) => format!("{}\n{}", status, response_body),
             Err(err) => format!("0\nhttp request failed: {}", err),
+        }
+    }
+
+    fn host_http_listen(addr: String) -> i64 {
+        match do_listen(&addr) {
+            Ok(id) => id,
+            Err(_) => -1,
+        }
+    }
+
+    fn host_http_accept(server_id: i64) -> String {
+        match do_accept(server_id) {
+            Ok(s) => s,
+            Err(e) => format!("-1\n\n\n\n{}", e),
+        }
+    }
+
+    fn host_http_respond(req_id: i64, status: i64, headers: String, body: String) -> i32 {
+        match do_respond(req_id, status, &headers, &body) {
+            Ok(()) => 1,
+            Err(_) => 0,
+        }
+    }
+
+    fn host_http_stop(server_id: i64) -> i32 {
+        match do_stop(server_id) {
+            Ok(()) => 1,
+            Err(_) => 0,
         }
     }
 }

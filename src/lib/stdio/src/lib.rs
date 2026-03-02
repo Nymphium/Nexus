@@ -1,11 +1,13 @@
 use nexus_wasm_alloc::checked_ptr_len;
 use std::io::{self, Write};
 
+#[cfg(not(feature = "no_alloc_export"))]
 #[no_mangle]
 pub extern "C" fn allocate(size: i32) -> i32 {
     nexus_wasm_alloc::allocate(size)
 }
 
+#[cfg(not(feature = "no_alloc_export"))]
 #[no_mangle]
 pub unsafe extern "C" fn deallocate(ptr: i32, size: i32) {
     nexus_wasm_alloc::deallocate(ptr, size);

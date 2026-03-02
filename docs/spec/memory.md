@@ -27,7 +27,7 @@ A linear binding is consumed when it appears as:
 
 - A function argument: `release(handle: %handle)`
 - A return value: `return %handle`
-- A match target: `match %handle do case _ -> () endmatch`
+- A match target: `match %handle do case _ -> () end`
 - **Auto-drop at scope end** (primitives only)
 
 After consumption, any further use is a compile-time error:
@@ -55,9 +55,9 @@ Function parameters can be declared linear:
 
 ```nexus
 let consume = fn (%x: Handle) -> unit do
-  match x do case _ -> () endmatch
+  match x do case _ -> () end
   return ()
-endfn
+end
 ```
 
 **Linearity weakening** allows passing a plain (non-linear) value to a linear parameter:
@@ -77,7 +77,7 @@ let %resource = acquire()
 let f = fn () -> unit do
   release(r: %resource)   // captures %resource
   return ()
-endfn
+end
 // f is now %(() -> unit) -- must be called exactly once
 f()
 ```
@@ -112,7 +112,7 @@ The `&` expression creates a temporary, immutable view of a binding **without co
 let %arr = [| 10, 20, 30 |]
 let first = (&%arr)[0]     // read without consuming
 let second = (&%arr)[1]    // &again
-match %arr do case _ -> () endmatch  // consume the array
+match %arr do case _ -> () end  // consume the array
 ```
 
 ### Consume-and-return Pattern
@@ -131,7 +131,7 @@ let %r = Fs.read(handle: %h)
 match %r do case { content: content, handle: %h2 } ->
   Fs.close(handle: %h2)
   // use content
-endmatch
+end
 ```
 
 This pattern enables mock handlers that can construct handle values freely (the handle type is non-opaque) while preserving linear resource safety.
@@ -144,11 +144,11 @@ Functions that only need read access should accept `&T`:
 let sum = fn (xs: &[| i64 |]) -> i64 do
   // xs is borrowed -- caller retains ownership
   return xs[0] + xs[1]
-endfn
+end
 
 let %data = [| 3, 7 |]
 let total = sum(xs: &%data)
-match %data do case _ -> () endmatch
+match %data do case _ -> () end
 ```
 
 ## Automatic Resource Management
@@ -161,7 +161,7 @@ Primitive types (`i64`, `f64`, `bool`, `string`, `unit`) are automatically relea
 
 ```nexus
 let msg = [=[hello]=]
-print(val: msg)
+Console.println(val: msg)
 // msg is automatically cleaned up at scope end
 ```
 
@@ -175,7 +175,7 @@ match %handle do
   case Resource { id: id } ->
     // id is a primitive: auto-dropped at scope end
     process(id: id)
-endmatch
+end
 // %handle is consumed by the match
 ```
 
@@ -189,7 +189,7 @@ if condition then
   release(r: %x)    // consumed in then-branch
 else
   release(r: %x)    // must also be consumed in else-branch
-endif
+end
 ```
 
 Omitting consumption in either branch is a compile-time error ("linear mismatch").
@@ -230,7 +230,7 @@ Arrays support element-level mutation through index assignment:
 let %arr = [| 1, 2, 3 |]
 %arr[0] <- 42
 let val = (&%arr)[0]   // val == 42
-match %arr do case _ -> () endmatch
+match %arr do case _ -> () end
 ```
 
 Note that the array itself is linear (`%`), not mutable (`~`). Index assignment is a special form that mutates the array in-place without requiring a mutable reference wrapper.

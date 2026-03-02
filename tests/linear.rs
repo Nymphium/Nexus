@@ -1,4 +1,3 @@
-use chumsky::Parser;
 use nexus::lang::ast::*;
 use nexus::lang::parser::parser;
 use nexus::lang::typecheck::TypeChecker;
@@ -69,13 +68,13 @@ fn test_linear_basic_pass() {
     let src = r#"
     let consume = fn (x: %i64) -> unit do
         return ()
-    endfn
+    end
 
     let main = fn () -> unit do
         let %x = 10
         consume(x: %x)
         return ()
-    endfn
+    end
     "#;
     match check(src) {
         Ok(_) => (),
@@ -88,12 +87,12 @@ fn test_linear_param_accepts_plain_value_via_weakening() {
     let src = r#"
     let consume = fn (x: %i64) -> i64 do
         return 1
-    endfn
+    end
 
     let main = fn () -> unit do
         let y = consume(x: 10)
         return ()
-    endfn
+    end
     "#;
     assert!(check(src).is_ok());
 }
@@ -105,7 +104,7 @@ fn test_linear_primitive_auto_drop_pass() {
         let %x = 10
         // No explicit consumption needed for primitives
         return ()
-    endfn
+    end
     "#;
     assert!(check(src).is_ok());
 }
@@ -117,7 +116,7 @@ fn test_linear_primitive_wildcard_pass() {
         let %x = 10
         let _ = %x // Allowed for primitives
         return ()
-    endfn
+    end
     "#;
     assert!(check(src).is_ok());
 }
@@ -129,8 +128,8 @@ fn test_linear_primitive_match_wildcard_pass() {
         let %x = 10
         match %x do
             case _ -> return () // Allowed for primitives
-        endmatch
-    endfn
+        end
+    end
     "#;
     assert!(check(src).is_ok());
 }
@@ -138,22 +137,24 @@ fn test_linear_primitive_match_wildcard_pass() {
 #[test]
 fn test_linear_borrow_basic() {
     let src = r#"
-    import { print } from nxlib/stdlib/stdio.nx
-    import { i64_to_string } from nxlib/stdlib/string.nx
-    let peek = fn (x: &i64) -> unit effect { Console } do
-        let msg = i64_to_string(val: x)
-        print(val: msg)
+    import { Console }, * as stdio from nxlib/stdlib/stdio.nx
+    import { from_i64 } from nxlib/stdlib/string.nx
+    let peek = fn (x: &i64) -> unit require { Console } do
+        let msg = from_i64(val: x)
+        Console.print(val: msg)
         return ()
-    endfn
+    end
 
-    let main = fn () -> unit effect { Console } do
-        let %x = 10
-        let x_ref1 = &%x
-        peek(x: x_ref1)
-        let x_ref2 = &%x
-        peek(x: x_ref2) // Borrow again
+    let main = fn () -> unit require { PermConsole } do
+        inject stdio.system_handler do
+            let %x = 10
+            let x_ref1 = &%x
+            peek(x: x_ref1)
+            let x_ref2 = &%x
+            peek(x: x_ref2)
+        end
         return ()
-    endfn
+    end
     "#;
     assert!(check(src).is_ok());
 }
@@ -166,7 +167,7 @@ fn test_generic_drop_accepts_non_linear_primitives() {
         let y: f64 = 2.0
         let s = [=[hello]=]
         return ()
-    endfn
+    end
     "#;
     assert!(check(src).is_ok());
 }
@@ -181,7 +182,7 @@ fn test_generic_drop_user_defined_linear_consumes_once() {
     let main = fn () -> unit do
         let %t: Token = { id: 1 }
         return ()
-    endfn
+    end
     "#;
     assert!(check(src).is_err());
 }
@@ -205,7 +206,7 @@ fn test_linear_primitive_emits_unnecessary_warning() {
 let main = fn () -> unit do
     let %x = 42
     return ()
-endfn
+end
 "#,
     );
     assert!(
@@ -221,9 +222,9 @@ fn test_linear_record_does_not_emit_unnecessary_warning() {
         r#"
     let main = fn () -> unit do
         let %r = { id: 1 }
-        match %r do case _ -> () endmatch
+        match %r do case _ -> () end
         return ()
-    endfn
+    end
 "#,
     );
     assert!(
@@ -244,7 +245,7 @@ fn test_adt_with_linear_arg_is_promoted_to_linear() {
         let %r = { id: 1 }
         let w = Wrap(val: %r)
         return ()
-    endfn
+    end
     "#;
     assert!(
         check(src).is_err(),
@@ -262,10 +263,10 @@ fn test_adt_with_linear_arg_consumed_once_passes() {
         let w = Wrap(val: %r)
         match w do
             case Wrap(val: inner) ->
-                match inner do case { id: _ } -> () endmatch
-        endmatch
+                match inner do case { id: _ } -> () end
+        end
         return ()
-    endfn
+    end
     "#;
     match check(src) {
         Ok(_) => (),

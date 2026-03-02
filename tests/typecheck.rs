@@ -1,4 +1,3 @@
-use chumsky::Parser;
 use nexus::lang::parser;
 use nexus::lang::typecheck::TypeChecker;
 
@@ -33,7 +32,7 @@ fn check_code(src: &str) -> Result<(), String> {
             "let __test_main = fn () -> unit do",
         );
     let parser = parser::parser();
-    let program = parser.parse(src).map_err(|e| format!("{:?}", e))?;
+    let program = parser.parse(&src).map_err(|e| format!("{:?}", e))?;
 
     let mut checker = TypeChecker::new();
     checker.check_program(&program).map_err(|e| e.message)
@@ -44,13 +43,13 @@ fn test_basic_poly() {
     let src = r#"
     let id = fn <T>(x: T) -> T do
         return x
-    endfn
+    end
 
     let main = fn () -> unit do
         let i = id(x: 10)
         let b = id(x: true)
         return ()
-    endfn
+    end
     "#;
     match check_code(src) {
         Ok(_) => (),
@@ -65,11 +64,11 @@ fn test_basic_poly() {
 #[test]
 fn test_nested_calls() {
     let src = r#"
-    let id = fn <T>(x: T) -> T do return x endfn
+    let id = fn <T>(x: T) -> T do return x end
     let main = fn () -> i64 do
         let v = id(x: 10)
         return id(x: v)
-    endfn
+    end
     "#;
     match check_code(src) {
         Ok(_) => (),
@@ -80,11 +79,11 @@ fn test_nested_calls() {
 #[test]
 fn test_label_punning_is_rejected() {
     let src = r#"
-    let id = fn <T>(x: T) -> T do return x endfn
+    let id = fn <T>(x: T) -> T do return x end
     let main = fn () -> i64 do
         let x = 10
         return id(x)
-    endfn
+    end
     "#;
     assert!(check_code(src).is_err());
 }
@@ -98,11 +97,11 @@ fn test_enum_declaration_syntax_is_rejected() {
     enum Color { Red, Green }
     let main = fn () -> unit do
         return ()
-    endfn
+    end
     "#;
     let parser = parser::parser();
     assert!(
-        parser.parse(src).is_err(),
+        parser.parse(&src).is_err(),
         "enum declaration syntax should not be accepted; use type sum syntax"
     );
 }
@@ -112,13 +111,13 @@ fn test_two_generics() {
     let src = r#"
     let first = fn <A, B>(a: A, b: B) -> A do
         return a
-    endfn
+    end
 
     let main = fn () -> i64 do
         let f = first(a: 10, b: true)
         let s = first(a: true, b: 10)
         return f
-    endfn
+    end
     "#;
     match check_code(src) {
         Ok(_) => (),
@@ -133,13 +132,13 @@ fn test_record_access() {
     
     let unbox = fn <T>(b: Box<T>) -> T do
         return b.val
-    endfn
+    end
 
     let main = fn () -> i64 do
         // Since my infer for Record currently returns AnonymousRecord, 
         // we can't test full record inference yet, but unbox signature check works.
         return 42
-    endfn
+    end
     "#;
     match check_code(src) {
         Ok(_) => (),
@@ -152,14 +151,14 @@ fn test_let_poly_binding() {
     let src = r#"
     let id = fn <T>(x: T) -> T do
         return x
-    endfn
+    end
 
     let main = fn () -> i64 do
         let f = id
         let a = f(x: 10)
         let b = f(x: true)
         return a
-    endfn
+    end
     "#;
     match check_code(src) {
         Ok(_) => (),
@@ -172,13 +171,13 @@ fn test_complex_poly_logic() {
     let src = r#"
     let weird = fn <T>(x: T) -> T do
         return x
-    endfn
+    end
 
     let main = fn () -> unit do
         let a = weird(x: 1)
         let b = weird(x: [=[string]=])
         return ()
-    endfn
+    end
     "#;
     match check_code(src) {
         Ok(_) => (),
@@ -196,9 +195,9 @@ fn test_poly_variants() {
         match r1 do
             case Ok(val: v) -> let x = v + 1
             case Err(err: e) -> ()
-        endmatch
+        end
         return ()
-    endfn
+    end
     "#;
     match check_code(src) {
         Ok(_) => (),
@@ -215,8 +214,8 @@ fn test_type_sum_definition_with_labeled_variant_fields() {
         match r do
             case Ok(val: v) -> return v
             case Err(err: e) -> return fallback
-        endmatch
-    endfn
+        end
+    end
 
     let main = fn () -> i64 do
         let a: Result<i64, i64> = Ok(val: 10)
@@ -224,7 +223,7 @@ fn test_type_sum_definition_with_labeled_variant_fields() {
         let x = unwrap_or(r: a, fallback: 0)
         let y = unwrap_or(r: b, fallback: 7)
         return x + y
-    endfn
+    end
     "#;
     assert!(check_code(src).is_ok());
 }
@@ -232,10 +231,10 @@ fn test_type_sum_definition_with_labeled_variant_fields() {
 #[test]
 fn test_arg_mismatch() {
     let src = r#"
-    let foo = fn (x: i64) -> i64 do return x endfn
+    let foo = fn (x: i64) -> i64 do return x end
     let main = fn () -> i64 do
         return foo(x: true)
-    endfn
+    end
     "#;
     assert!(check_code(src).is_err());
 }
@@ -248,7 +247,7 @@ fn test_int_literal_defaults_to_i64() {
     let main = fn () -> i64 do
         let x = 1
         return x
-    endfn
+    end
     "#;
     assert!(check_code(src).is_ok());
 }
@@ -259,7 +258,7 @@ fn test_int_literal_is_not_i32_without_annotation() {
     let main = fn () -> i32 do
         let x = 1
         return x
-    endfn
+    end
     "#;
     assert!(check_code(src).is_err());
 }
@@ -271,7 +270,7 @@ fn test_int_literal_annotation_can_select_i32() {
         let x: i32 = 1
         let y = x + 2
         return y
-    endfn
+    end
     "#;
     assert!(check_code(src).is_ok());
 }
@@ -283,7 +282,7 @@ fn test_float_literal_annotation_can_select_f32() {
         let x: f32 = 1.25
         let y = x +. 2.0
         return y
-    endfn
+    end
     "#;
     assert!(check_code(src).is_ok());
 }
@@ -293,12 +292,12 @@ fn test_named_function_can_be_used_as_value() {
     let src = r#"
     let id = fn (x: i64) -> i64 do
         return x
-    endfn
+    end
 
     let main = fn () -> i64 do
         let f = id
         return f(x: 42)
-    endfn
+    end
     "#;
     assert!(check_code(src).is_ok());
 }
@@ -309,9 +308,9 @@ fn test_inline_lambda_literal_typechecks() {
     let main = fn () -> i64 do
         let f = fn (x: i64) -> i64 do
             return x + 1
-        endfn
+        end
         return f(x: 41)
-    endfn
+    end
     "#;
     assert!(check_code(src).is_ok());
 }
@@ -323,9 +322,9 @@ fn test_lambda_cannot_capture_ref() {
         let ~counter = 1
         let read_counter = fn () -> i64 do
             return ~counter
-        endfn
+        end
         return read_counter()
-    endfn
+    end
     "#;
     let err = check_code(src).unwrap_err();
     assert!(
@@ -341,12 +340,12 @@ fn test_linear_capture_makes_lambda_linear_and_single_use() {
     let main = fn () -> i64 do
         let %x = 7
         let f = fn () -> i64 do
-            match %x do case _ -> () endmatch
+            match %x do case _ -> () end
             return 1
-        endfn
+        end
         let y = f()
         return y
-    endfn
+    end
     "#;
     match check_code(src) {
         Ok(_) => (),
@@ -360,13 +359,13 @@ fn test_linear_capturing_lambda_cannot_be_called_twice() {
     let main = fn () -> i64 do
         let %x = 7
         let f = fn () -> i64 do
-            match %x do case _ -> () endmatch
+            match %x do case _ -> () end
             return 1
-        endfn
+        end
         let _a = f()
         let _b = f()
         return 0
-    endfn
+    end
     "#;
     let err = check_code(src).unwrap_err();
     assert!(
@@ -387,10 +386,10 @@ fn test_recursive_lambda_with_annotation_typechecks() {
                 let n1 = n - 1
                 let rec = fact(n: n1)
                 return n * rec
-            endif
-        endfn
+            end
+        end
         return fact(n: 5)
-    endfn
+    end
     "#;
     match check_code(src) {
         Ok(_) => (),
@@ -406,7 +405,7 @@ fn test_constructor_arity_error_is_llm_friendly() {
     let main = fn () -> i64 do
         let _p = Pair(left: 1)
         return 0
-    endfn
+    end
     "#;
     let err = check_code(src).unwrap_err();
     assert!(
@@ -435,8 +434,8 @@ fn test_constructor_pattern_arity_error_is_llm_friendly() {
         let p: Pair = Pair(left: 1, right: 2)
         match p do
             case Pair(left: x) -> return x
-        endmatch
-    endfn
+        end
+    end
     "#;
     let err = check_code(src).unwrap_err();
     assert!(
@@ -456,11 +455,11 @@ fn test_binary_op_in_call_arg() {
     let src = r#"
     let add = fn (a: i64, b: i64) -> i64 do
         return a + b
-    endfn
+    end
 
     let main = fn () -> i64 do
         return add(a: 1 + 2, b: 3 * 4)
-    endfn
+    end
     "#;
     assert!(check_code(src).is_ok(), "binary ops should be allowed in call args");
 }
@@ -470,11 +469,11 @@ fn test_string_concat_in_call_arg() {
     let src = r#"
     let greet = fn (msg: string) -> string do
         return msg
-    endfn
+    end
 
     let main = fn () -> string do
         return greet(msg: [=[hello ]=] ++ [=[world]=])
-    endfn
+    end
     "#;
     assert!(check_code(src).is_ok(), "string concat should be allowed in call args");
 }
@@ -484,11 +483,11 @@ fn test_function_arity_mismatch_shows_expected() {
     let src = r#"
     let add = fn (a: i64, b: i64) -> i64 do
         return a + b
-    endfn
+    end
 
     let main = fn () -> i64 do
         return add(a: 1)
-    endfn
+    end
     "#;
     let err = check_code(src).unwrap_err();
     assert!(
@@ -508,11 +507,11 @@ fn test_function_arity_mismatch_too_many_args() {
     let src = r#"
     let inc = fn (x: i64) -> i64 do
         return x + 1
-    endfn
+    end
 
     let main = fn () -> i64 do
         return inc(x: 1, y: 2)
-    endfn
+    end
     "#;
     let err = check_code(src).unwrap_err();
     assert!(

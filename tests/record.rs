@@ -1,4 +1,3 @@
-use chumsky::Parser;
 use nexus::lang::parser::parser;
 use nexus::lang::typecheck::TypeChecker;
 
@@ -11,17 +10,18 @@ fn check(src: &str) -> Result<(), String> {
 #[test]
 fn test_anonymous_record() {
     let src = r#"
-    import { print } from nxlib/stdlib/stdio.nx
-    import { i64_to_string } from nxlib/stdlib/string.nx
-    let main = fn () -> unit effect { Console } do
-        let r = { x: 1, y: [=[hello]=] }
-        let i = r.x
-        // let s = r.y // Type of s is Str. Unused variable? (No check yet)
-        let i_s = i64_to_string(val: i)
-        let msg = [=[i=]=] ++ i_s
-        print(val: msg)
+    import { Console }, * as stdio from nxlib/stdlib/stdio.nx
+    import { from_i64 } from nxlib/stdlib/string.nx
+    let main = fn () -> unit require { PermConsole } do
+        inject stdio.system_handler do
+            let r = { x: 1, y: [=[hello]=] }
+            let i = r.x
+            let i_s = from_i64(val: i)
+            let msg = [=[i=]=] ++ i_s
+            Console.print(val: msg)
+        end
         return ()
-    endfn
+    end
     "#;
     assert!(check(src).is_ok());
 }
@@ -32,7 +32,7 @@ fn test_record_unification() {
     let src = r#"
     let take_record = fn (r: { x: i64, y: i64 }) -> unit do
         return ()
-    endfn
+    end
 
     let main = fn () -> unit do
         let r1 = { x: 1, y: 2 }
@@ -40,7 +40,7 @@ fn test_record_unification() {
         take_record(r: r1)
         take_record(r: r2)
         return ()
-    endfn
+    end
     "#;
     assert!(check(src).is_ok());
 }
@@ -52,7 +52,7 @@ fn test_record_fail() {
         let r = { x: 1 }
         let y = r.y // Field missing
         return ()
-    endfn
+    end
     "#;
     assert!(check(src).is_err());
 }

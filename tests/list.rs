@@ -1,20 +1,26 @@
-use chumsky::Parser;
 use nexus::interpreter::{Interpreter, Value};
 use nexus::lang::parser::parser;
 use nexus::lang::typecheck::TypeChecker;
 
+fn prepare_test_source(src: &str) -> String {
+    let s = src.replace("let main = fn ()", "pub let __test = fn ()");
+    format!("{}\nlet main = fn () -> unit do\n  return ()\nend\n", s)
+}
+
 fn check(src: &str) -> Result<(), String> {
-    let p = parser().parse(src).map_err(|e| format!("{:?}", e))?;
+    let src = prepare_test_source(src);
+    let p = parser().parse(src.as_str()).map_err(|e| format!("{:?}", e))?;
     let mut checker = TypeChecker::new();
     checker.check_program(&p).map_err(|e| e.message)
 }
 
 fn run(src: &str) -> Result<Value, String> {
-    let p = parser().parse(src).map_err(|e| format!("{:?}", e))?;
+    let src = prepare_test_source(src);
+    let p = parser().parse(src.as_str()).map_err(|e| format!("{:?}", e))?;
     let mut checker = TypeChecker::new();
     checker.check_program(&p).map_err(|e| e.message)?;
     let mut interpreter = Interpreter::new(p);
-    interpreter.run_function("main", vec![])
+    interpreter.run_function("__test", vec![])
 }
 
 #[test]
@@ -23,7 +29,7 @@ fn test_list_type_mismatch() {
     let main = fn () -> unit do
         let l = [1, true]
         return ()
-    endfn
+    end
     "#;
     assert!(check(src).is_err(), "Should fail: mixed types in list");
 }
@@ -38,7 +44,7 @@ fn test_list_literal_and_head_tail() {
       let t = list.tail(xs: xs)
       let h2 = list.head(xs: t)
       return h * 10 + h2
-    endfn
+    end
     "#;
     assert_eq!(run(src).unwrap(), Value::Int(12));
 }
@@ -50,7 +56,7 @@ fn test_list_type_annotation_sugar() {
     let main = fn () -> i64 do
       let xs: [i64] = [1, 2, 3]
       return list.nth(xs: xs, n: 2)
-    endfn
+    end
     "#;
     assert_eq!(run(src).unwrap(), Value::Int(3));
 }
@@ -65,11 +71,11 @@ fn test_list_is_empty() {
       let a = list.is_empty(xs: empty)
       let b = list.is_empty(xs: nonempty)
       if a then
-        if b then return 0 else return 1 endif
+        if b then return 0 else return 1 end
       else
         return 0
-      endif
-    endfn
+      end
+    end
     "#;
     assert_eq!(run(src).unwrap(), Value::Int(1));
 }
@@ -86,7 +92,7 @@ fn test_list_reverse_concat_length() {
       let h = list.head(xs: r)
       let len = list.length(xs: c)
       return h * 10 + len
-    endfn
+    end
     "#;
     assert_eq!(run(src).unwrap(), Value::Int(44));
 }
@@ -101,7 +107,7 @@ fn test_list_cons_last() {
       let h = list.head(xs: ys)
       let l = list.last(xs: ys)
       return h * 10 + l
-    endfn
+    end
     "#;
     assert_eq!(run(src).unwrap(), Value::Int(13));
 }
@@ -117,7 +123,7 @@ fn test_list_take_and_drop() {
       let th = list.head(xs: d)
       let tl = list.length(xs: t)
       return th * 10 + tl
-    endfn
+    end
     "#;
     assert_eq!(run(src).unwrap(), Value::Int(33));
 }
@@ -129,7 +135,7 @@ fn test_list_nth() {
     let main = fn () -> i64 do
       let xs = Cons(v: 10, rest: Cons(v: 20, rest: Cons(v: 30, rest: Cons(v: 40, rest: Nil()))))
       return list.nth(xs: xs, n: 2)
-    endfn
+    end
     "#;
     assert_eq!(run(src).unwrap(), Value::Int(30));
 }
@@ -143,11 +149,11 @@ fn test_list_contains() {
       let a = list.contains(xs: xs, val: 2)
       let b = list.contains(xs: xs, val: 5)
       if a then
-        if b then return 0 else return 1 endif
+        if b then return 0 else return 1 end
       else
         return 0
-      endif
-    endfn
+      end
+    end
     "#;
     assert_eq!(run(src).unwrap(), Value::Int(1));
 }
@@ -159,12 +165,12 @@ fn test_list_fold_left_sum() {
 
     let add = fn (acc: i64, val: i64) -> i64 do
       return acc + val
-    endfn
+    end
 
     let main = fn () -> i64 do
       let xs = Cons(v: 1, rest: Cons(v: 2, rest: Cons(v: 3, rest: Cons(v: 4, rest: Nil()))))
       return list.fold_left(xs: xs, init: 0, f: add)
-    endfn
+    end
     "#;
     assert_eq!(run(src).unwrap(), Value::Int(10));
 }
@@ -176,7 +182,7 @@ fn test_list_map_and_map_rev() {
 
     let twice = fn (val: i64) -> i64 do
       return val * 2
-    endfn
+    end
 
     let main = fn () -> i64 do
       let xs = Cons(v: 1, rest: Cons(v: 2, rest: Cons(v: 3, rest: Nil())))
@@ -185,7 +191,7 @@ fn test_list_map_and_map_rev() {
       let a = list.nth(xs: mapped, n: 1)
       let b = list.head(xs: rev_mapped)
       return a * 10 + b
-    endfn
+    end
     "#;
     assert_eq!(run(src).unwrap(), Value::Int(46));
 }

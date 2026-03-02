@@ -18,7 +18,7 @@ Functions are first-class values in Nexus. At the top level, they are defined by
 ```nexus
 pub let add = fn (a: i64, b: i64) -> i64 do
   return a + b
-endfn
+end
 ```
 
 - `pub let` makes the function visible to other modules.
@@ -28,7 +28,7 @@ endfn
 ```nexus
 let identity = fn <T>(x: T) -> T do
   return x
-endfn
+end
 ```
 
 ### Function values and lambdas
@@ -36,19 +36,19 @@ endfn
 ```nexus
 let add1 = fn (x: i64) -> i64 do
   return x + 1
-endfn
+end
 
 let main = fn () -> unit do
   let f = add1
   let g = fn (x: i64) -> i64 do
     return x * 2
-  endfn
+  end
   let _ = g(x: f(x: 10))
   return ()
-endfn
+end
 ```
 
-- Local lambda literals use `fn (...) -> T do ... endfn`.
+- Local lambda literals use `fn (...) -> T do ... end`.
 - A local recursive lambda must use an immutable binding with an explicit type annotation.
 
 ### Coeffect/effect annotation
@@ -61,11 +61,11 @@ Functions may declare:
 Both are optional; omitted means an empty row.
 
 ```nexus
-let greet = fn (name: string) -> unit require { Logger } effect { Console } do
+let greet = fn (name: string) -> unit require { Logger, Console } do
   Logger.log(msg: name)
-  print(val: name)
+  Console.println(val: name)
   return ()
-endfn
+end
 ```
 
 ### External functions
@@ -117,7 +117,7 @@ let main = fn() -> unit do
   let %resource: %Handle = acquire()
   // ...
   return ()
-endfn
+end
 ```
 
 Variables are lexically scoped.
@@ -184,7 +184,7 @@ Assigns a new value to a mutable binding. The left-hand side is any expression t
 ```nexus
 (label: T) -> R                       // pure function
 (a: i64, b: i64) -> i64               // labeled parameters
-() -> unit effect { Console }         // builtin effects
+() -> unit effect { Exn }             // builtin effects
 () -> string require { Net }          // coeffect requirements
 (x: T) -> R require { C | r } effect { E | e } // open rows
 ```
@@ -196,9 +196,9 @@ An unlabeled parameter uses `_` as an internal label.
 `require`/`effect` rows use `{}` with optional tail variables:
 
 ```nexus
-{ Console }             // single entry
+{ Exn }                 // single entry
 { Net, Fs }             // multiple entries
-{ Console | e }         // open row with tail variable
+{ Console | e }         // open row with tail variable (coeffect)
 ```
 
 ### Type definitions
@@ -236,7 +236,7 @@ if condition then
   // ...
 else
   // ...
-endif
+end
 ```
 
 The `else` branch is optional.
@@ -251,7 +251,7 @@ match result do
     // ...
   case Err(e) ->
     // ...
-endmatch
+end
 ```
 
 Supported patterns:
@@ -273,10 +273,10 @@ try
   return result
 catch err ->
   match err do
-    case NotFound(msg) -> print(val: msg)
-  endmatch
+    case NotFound(msg: msg) -> ()
+  end
   return ()
-endtry
+end
 ```
 
 `catch` binds the raised `Exn` value to a single identifier. Only one catch clause is allowed.
@@ -305,7 +305,7 @@ raise err
 Function calls are direct:
 
 ```nexus
-print(val: [=[ hello ]=])
+Console.println(val: [=[ hello ]=])
 Logger.log(msg: text)
 ```
 
@@ -333,39 +333,55 @@ A `port` defines a coeffect interface.
 pub port Logger do
   fn log(msg: string) -> unit
   fn warn(msg: string) -> unit
-endport
+end
 ```
 
 ### Handler and Inject
 
-A handler is an expression that implements one port.
+A handler is an expression that implements one port. Handlers may optionally declare `require { ... }` to specify runtime capabilities they need:
 
 ```nexus
-let stdout_logger = handler Logger do
-  fn log(msg: string) -> unit effect { Console } do
-    print(val: msg)
+// Handler with runtime permission requirement
+let stdout_logger = handler Logger require { Console } do
+  fn log(msg: string) -> unit do
+    Console.println(val: msg)
     return ()
-  endfn
-  fn warn(msg: string) -> unit effect { Console } do
-    print(val: msg)
+  end
+  fn warn(msg: string) -> unit do
+    Console.println(val: msg)
     return ()
-  endfn
-endhandler
+  end
+end
 
-inject stdout_logger do
+// Mock handler — no runtime needs
+let mock_logger = handler Logger do
+  fn log(msg: string) -> unit do return () end
+  fn warn(msg: string) -> unit do return () end
+end
+```
+
+When a handler with `require { X }` is injected, the `X` capability is propagated to the caller's require row:
+
+```nexus
+inject stdout_logger do       // caller requires { PermFs }
   Logger.log(msg: [=[from handler]=])
-endinject
+end
+
+inject mock_logger do          // caller requires {} — no capabilities
+  Logger.log(msg: [=[from mock]=])
+end
 ```
 
 ## Imports
 
-Three import forms are available:
+Four import forms are available:
 
 ```nexus
-import from path/to/module.nx              // anonymous import
-import as math from path/to/math.nx        // namespace alias
-import { add, sub } from path/to/math.nx   // named items
-import external path/to/lib.wasm           // Wasm module
+import from path/to/module.nx                        // anonymous import
+import as math from path/to/math.nx                  // namespace alias
+import { add, sub } from path/to/math.nx             // named items
+import { add, sub }, * as math from path/to/math.nx  // named items + namespace alias
+import external path/to/lib.wasm                     // Wasm module
 ```
 
 ## Concurrency (`conc`)
@@ -376,11 +392,11 @@ Structured concurrency via `conc` blocks. Task names are identifiers:
 conc do
   task worker1 do
     // ...
-  endtask
+  end
   task worker2 do
     // ...
-  endtask
-endconc
+  end
+end
 ```
 
 `conc` waits for all tasks to complete.
@@ -429,12 +445,12 @@ variant_field ::= type | IDENT ":" type
 exception_def ::= [ "pub" ] "exception" UIDENT [ "(" variant_field ( "," variant_field )* ")" ]
 
 import_def    ::= "import" "external" import_path
-                | "import" "{" IDENT ( "," IDENT )* "}" "from" import_path
+                | "import" "{" IDENT ( "," IDENT )* "}" [ "," "*" "as" IDENT ] "from" import_path
                 | "import" "as" IDENT "from" import_path
                 | "import" "from" import_path
 import_path   ::= ( ALPHA | DIGIT | "_" | "-" | "/" | "." )+
 
-port_def      ::= [ "pub" ] "port" UIDENT "do" fn_signature* "endport"
+port_def      ::= [ "pub" ] "port" UIDENT "do" fn_signature* "end"
 fn_signature  ::= "fn" IDENT param_list "->" type [ "require" effect_type ] [ "effect" effect_type ]
 
 let_def       ::= [ "pub" ] "let" IDENT [ ":" type ] "=" expr
@@ -500,16 +516,16 @@ let_stmt      ::= "let" [ sigil ] IDENT [ ":" type ] "=" expr
 return_stmt   ::= "return" expr
 assign_stmt   ::= expr "<-" expr
 
-if_stmt       ::= "if" expr "then" stmt* [ "else" stmt* ] "endif"
+if_stmt       ::= "if" expr "then" stmt* [ "else" stmt* ] "end"
 
-match_stmt    ::= "match" expr "do" match_case* "endmatch"
+match_stmt    ::= "match" expr "do" match_case* "end"
 match_case    ::= "case" pattern "->" stmt*
 
-try_stmt      ::= "try" stmt* "catch" IDENT "->" stmt* "endtry"
-inject_stmt   ::= "inject" IDENT ( "," IDENT )* "do" stmt* "endinject"
+try_stmt      ::= "try" stmt* "catch" IDENT "->" stmt* "end"
+inject_stmt   ::= "inject" dotted_ident ( "," dotted_ident )* "do" stmt* "end"
 
-conc_stmt     ::= "conc" "do" task_def* "endconc"
-task_def      ::= "task" IDENT [ "effect" effect_type ] "do" stmt* "endtask"
+conc_stmt     ::= "conc" "do" task_def* "end"
+task_def      ::= "task" IDENT [ "effect" effect_type ] "do" stmt* "end"
 
 expr_stmt     ::= expr
 
@@ -549,11 +565,11 @@ raise_expr        ::= "raise" expr
 borrow_expr       ::= "&" [ sigil ] IDENT
 lambda_expr       ::= "fn" [ type_params ] "(" [ param ( "," param )* ] ")"
                       "->" type [ "require" effect_type ] [ "effect" effect_type ]
-                      "do" stmt* "endfn"
-handler_expr      ::= "handler" UIDENT "do" handler_fn* "endhandler"
+                      "do" stmt* "end"
+handler_expr      ::= "handler" UIDENT [ "require" row_type ] "do" handler_fn* "end"
 handler_fn        ::= "fn" IDENT [ type_params ] "(" [ param ( "," param )* ] ")"
                       "->" type [ "require" effect_type ] [ "effect" effect_type ]
-                      "do" stmt* "endfn"
+                      "do" stmt* "end"
 call_expr         ::= dotted_ident "(" [ labeled_arg ( "," labeled_arg )* ] ")"
 labeled_arg       ::= IDENT ":" expr
 constructor_expr  ::= UIDENT "(" [ ctor_arg ( "," ctor_arg )* ] ")"

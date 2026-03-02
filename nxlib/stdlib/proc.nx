@@ -1,0 +1,19 @@
+/**
+ * proc: Process operations.
+ *
+ * Provides Proc port with exit operation.
+ * Requires PermProc capability.
+ */
+import external nxlib/stdlib/stdlib.wasm
+
+external __nx_exit = [=[__nx_exit]=] : (status: i64) -> unit
+
+pub port Proc do
+  fn exit(status: i64) -> unit
+end
+
+pub let system_handler = handler Proc require { PermProc } do
+  fn exit(status: i64) -> unit do
+    return __nx_exit(status: status)
+  end
+end

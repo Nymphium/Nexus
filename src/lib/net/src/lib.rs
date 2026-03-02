@@ -1,6 +1,5 @@
 use nexus_wasm_alloc::{checked_ptr_len, remember_allocation, take_allocation};
 use std::alloc::{Layout, alloc, realloc};
-use std::io::{self, Write};
 
 const HOST_HTTP_MODULE: &str = "nexus:cli/nexus-host";
 const HOST_HTTP_FUNC: &str = "host-http-request";
@@ -13,14 +12,6 @@ fn has_valid_optional_region(ptr: i32, len: i32) -> bool {
         return true;
     }
     checked_ptr_len(ptr, len).is_some()
-}
-
-fn read_string_lossy(ptr: i32, len: i32) -> String {
-    let Some((offset, len)) = checked_ptr_len(ptr, len) else {
-        return String::new();
-    };
-    let bytes = unsafe { std::slice::from_raw_parts(offset as *const u8, len) };
-    String::from_utf8_lossy(bytes).to_string()
 }
 
 #[link(wasm_import_module = "nexus:cli/nexus-host")]
@@ -58,25 +49,16 @@ extern "C" {
     fn host_http_stop(server_id: i64) -> i32;
 }
 
+#[cfg(not(feature = "no_alloc_export"))]
 #[no_mangle]
 pub extern "C" fn allocate(size: i32) -> i32 {
     nexus_wasm_alloc::allocate(size)
 }
 
+#[cfg(not(feature = "no_alloc_export"))]
 #[no_mangle]
 pub unsafe extern "C" fn deallocate(ptr: i32, size: i32) {
     nexus_wasm_alloc::deallocate(ptr, size);
-}
-
-#[no_mangle]
-pub extern "C" fn __nx_print(ptr: i32, len: i32) {
-    let Some((offset, len)) = checked_ptr_len(ptr, len) else {
-        return;
-    };
-    let bytes = unsafe { std::slice::from_raw_parts(offset as *const u8, len) };
-    let mut out = io::stdout();
-    let _ = out.write_all(bytes);
-    let _ = out.flush();
 }
 
 #[no_mangle]
@@ -139,35 +121,6 @@ pub extern "C" fn __nx_http_request(
 }
 
 #[no_mangle]
-pub extern "C" fn __nx_string_to_i64(s_ptr: i32, s_len: i32) -> i64 {
-    read_string_lossy(s_ptr, s_len)
-        .trim()
-        .parse::<i64>()
-        .unwrap_or_default()
-}
-
-#[no_mangle]
-pub extern "C" fn __nx_string_length(s_ptr: i32, s_len: i32) -> i64 {
-    read_string_lossy(s_ptr, s_len).len() as i64
-}
-
-#[no_mangle]
-pub extern "C" fn __nx_string_index_of(s_ptr: i32, s_len: i32, sub_ptr: i32, sub_len: i32) -> i64 {
-    let s = read_string_lossy(s_ptr, s_len);
-    let sub = read_string_lossy(sub_ptr, sub_len);
-    s.find(sub.as_str()).map(|idx| idx as i64).unwrap_or(-1)
-}
-
-#[no_mangle]
-pub extern "C" fn __nx_string_substring(s_ptr: i32, s_len: i32, start: i64, len: i64) -> i64 {
-    let s = read_string_lossy(s_ptr, s_len);
-    let start = start.max(0) as usize;
-    let len = len.max(0) as usize;
-    let result: String = s.chars().skip(start).take(len).collect();
-    nexus_wasm_alloc::store_string_result(result)
-}
-
-#[no_mangle]
 pub extern "C" fn __nx_http_listen(addr_ptr: i32, addr_len: i32) -> i64 {
     if checked_ptr_len(addr_ptr, addr_len).is_none() {
         return -1;
@@ -215,6 +168,7 @@ fn pack_ptr_len(ptr: i32, len: i32) -> i64 {
 }
 
 // Exported for component canonical ABI lowering of string returns.
+#[cfg(not(feature = "no_alloc_export"))]
 #[no_mangle]
 pub unsafe extern "C" fn cabi_realloc(
     old_ptr: i32,

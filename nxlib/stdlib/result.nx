@@ -15,24 +15,24 @@ pub let is_ok = fn <T, E>(res: Result<T, E>) -> bool do
   match res do
     case Ok(val: _) -> return true
     case Err(err: _) -> return false
-  endmatch
-endfn
+  end
+end
 
 /// Returns true if the result is Err.
 pub let is_err = fn <T, E>(res: Result<T, E>) -> bool do
   match res do
     case Ok(val: _) -> return false
     case Err(err: _) -> return true
-  endmatch
-endfn
+  end
+end
 
 /// Returns the Ok value, or the default if Err.
 pub let unwrap_or = fn <T, E>(res: Result<T, E>, default: T) -> T do
   match res do
     case Ok(val: v) -> return v
     case Err(err: _) -> return default
-  endmatch
-endfn
+  end
+end
 
 /// Transforms the Ok value using f, leaving Err unchanged.
 pub let map = fn <T, U, E>(res: Result<T, E>, f: (val: T) -> U) -> Result<U, E> do
@@ -41,8 +41,8 @@ pub let map = fn <T, U, E>(res: Result<T, E>, f: (val: T) -> U) -> Result<U, E> 
       let mapped = f(val: v)
       return Ok(val: mapped)
     case Err(err: e) -> return Err(err: e)
-  endmatch
-endfn
+  end
+end
 
 /// Transforms the Err value using f, leaving Ok unchanged.
 pub let map_err = fn <T, E, F>(res: Result<T, E>, f: (val: E) -> F) -> Result<T, F> do
@@ -51,8 +51,8 @@ pub let map_err = fn <T, E, F>(res: Result<T, E>, f: (val: E) -> F) -> Result<T,
     case Err(err: e) ->
       let mapped = f(val: e)
       return Err(err: mapped)
-  endmatch
-endfn
+  end
+end
 
 /**
  * Chains a fallible operation on the Ok value (monadic bind).
@@ -65,18 +65,18 @@ pub let and_then = fn <T, U, E>(res: Result<T, E>, f: (val: T) -> Result<U, E>) 
   match res do
     case Ok(val: v) -> return f(val: v)
     case Err(err: e) -> return Err(err: e)
-  endmatch
-endfn
+  end
+end
 
 /// Wraps a caught exception as Err.
 pub let from_exn = fn <T>(exn: Exn) -> Result<T, Exn> do
   return Err(err: exn)
-endfn
+end
 
 /// Unwraps Ok or re-raises the Exn error.
 pub let to_exn = fn <T>(res: Result<T, Exn>) -> T effect { Exn } do
   match res do
     case Ok(val: v) -> return v
     case Err(err: e) -> raise e
-  endmatch
-endfn
+  end
+end

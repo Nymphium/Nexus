@@ -79,7 +79,7 @@ db.commit(tx: %tx) // tx is consumed
 The `&` keyword allows temporary, immutable access to a linear value without consuming it.
 
 ```nexus
-fn peek(x: &i64) -> unit do ... endfn
+fn peek(x: &i64) -> unit do ... end
 
 let %x = 10
 let x_ref = &%x
@@ -106,7 +106,7 @@ Function signatures are split into:
 Both use row-polymorphic forms like `{ E1, E2 | r }`.
 
 ```nexus
-fn g() -> unit require { Net } effect { Console } do ... endfn
+fn g() -> unit require { Net, Console } do ... end
 ```
 
 Calls use normal function-call syntax; compatibility with `require`/`effect` is checked statically.
@@ -118,7 +118,7 @@ Functions are first-class values, including inline lambda literals.
 ```nexus
 let f = fn (x: i64) -> i64 do
   return x + 1
-endfn
+end
 ```
 
 Closure rules:

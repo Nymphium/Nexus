@@ -1,16 +1,24 @@
 /**
  * stdio: Standard I/O operations for console output.
  *
- * Provides print (no newline) and println (with newline) for writing
- * strings to stdout. Both require the Console effect.
+ * Provides Console port with print (no newline) and println (with newline)
+ * for writing strings to stdout. Requires PermConsole capability.
  */
-import external nxlib/stdlib/stdio.wasm
+import external nxlib/stdlib/stdlib.wasm
 
-/// Prints a string to stdout (no trailing newline).
-pub external print = [=[__nx_print]=] : (val: string) -> unit effect { Console }
+external __nx_print = [=[__nx_print]=] : (val: string) -> unit
 
-/// Prints a string to stdout followed by a newline.
-pub let println = fn (val: string) -> unit effect { Console } do
-  let msg = val ++ [=[\n]=]
-  return print(val: msg)
-endfn
+pub port Console do
+  fn print(val: string) -> unit
+  fn println(val: string) -> unit
+end
+
+pub let system_handler = handler Console require { PermConsole } do
+  fn print(val: string) -> unit do
+    return __nx_print(val: val)
+  end
+  fn println(val: string) -> unit do
+    let msg = val ++ [=[\n]=]
+    return __nx_print(val: msg)
+  end
+end

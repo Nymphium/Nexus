@@ -1,9 +1,12 @@
 import as math from examples/math.nx
-import { i64_to_string } from nxlib/stdlib/string.nx
-import { print } from nxlib/stdlib/stdio.nx
+import { from_i64 } from nxlib/stdlib/string.nx
+import { Console }, * as stdio from nxlib/stdlib/stdio.nx
 
-let main = fn () -> unit effect { Console } do
-  let res = math.add(a: 10, b: 20)
-  let msg = i64_to_string(val: res)
-  print(val: msg)
-endfn
+let main = fn () -> unit require { PermConsole } do
+  inject stdio.system_handler do
+    let res = math.add(a: 10, b: 20)
+    let msg = from_i64(val: res)
+    Console.print(val: msg)
+  end
+  return ()
+end

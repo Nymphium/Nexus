@@ -1,4 +1,3 @@
-use chumsky::Parser;
 use nexus::lang::ast::*;
 use nexus::lang::parser::parser;
 use nexus::lang::typecheck::TypeChecker;
@@ -87,8 +86,8 @@ fn test_nested_result_exhaustive() {
             case Ok(val: Ok(val: v)) -> return ()
             case Ok(val: Err(err: e)) -> return ()
             case Err(err: e) -> return ()
-        endmatch
-    endfn
+        end
+    end
     "#;
     if let Err(e) = check(src) {
         panic!("Failed: {}", e);
@@ -104,8 +103,8 @@ fn test_nested_result_non_exhaustive() {
             case Ok(val: Ok(val: v)) -> return ()
             // Missing Ok(val: Err(err: _)) case
             case Err(err: e) -> return ()
-        endmatch
-    endfn
+        end
+    end
     "#;
     assert!(
         check(src).is_err(),
@@ -121,8 +120,8 @@ fn test_bool_exhaustive() {
         match b do
             case true -> return ()
             case false -> return ()
-        endmatch
-    endfn
+        end
+    end
     "#;
     assert!(check(src).is_ok());
 }
@@ -135,8 +134,8 @@ fn test_bool_non_exhaustive() {
         match b do
             case true -> return ()
             // Missing false
-        endmatch
-    endfn
+        end
+    end
     "#;
     assert!(check(src).is_err(), "Should fail due to missing false case");
 }
@@ -149,8 +148,8 @@ fn test_wildcard_exhaustive() {
         match i do
             case 0 -> return ()
             case _ -> return ()
-        endmatch
-    endfn
+        end
+    end
     "#;
     assert!(check(src).is_ok());
 }
@@ -164,8 +163,8 @@ fn test_int_non_exhaustive() {
             case 0 -> return ()
             case 1 -> return ()
             // Missing wildcard for integer
-        endmatch
-    endfn
+        end
+    end
     "#;
     assert!(
         check(src).is_err(),
@@ -182,8 +181,8 @@ fn test_record_exhaustive() {
             case { x: true, y: true } -> return ()
             case { x: true, y: false } -> return ()
             case { x: false, _ } -> return ()
-        endmatch
-    endfn
+        end
+    end
     "#;
     assert!(check(src).is_ok());
 }
@@ -196,8 +195,8 @@ fn test_record_non_exhaustive() {
         match r do
             case { x: true, y: true } -> return ()
             // Missing cases
-        endmatch
-    endfn
+        end
+    end
     "#;
     assert!(check(src).is_err(), "Should fail");
 }
@@ -260,8 +259,8 @@ proptest! {
     let main = fn () -> unit do
         let b = true
         match b do
-{cases}        endmatch
-    endfn
+{cases}        end
+    end
 "#
         );
         let result = check(&src);

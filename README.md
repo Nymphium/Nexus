@@ -5,7 +5,7 @@ Nexus is an **LLM-friendly** programming language designed for maximum readabili
 ## Key Philosophy: LLM-Native
 
 Nexus is designed from the ground up to be "AI-friendly":
-- **Explicit Context:** Keyword-terminated blocks (`endfn`, `endmatch`) provide clear boundaries for LLM context windows.
+- **Explicit Context:** Keyword-terminated blocks (`end`) provide clear boundaries for LLM context windows.
 - **Labeled Clarity:** Labeled arguments are mandatory at call sites, reducing ambiguity for both humans and AI.
 - **Predictable Structure:** A strict internal A-Normal Form (ANF) ensures the language remains easy to reason about and transform.
 - **Human-Reviewable:** The same properties that help LLMs — explicit block endings, mandatory labels, no implicit behavior — make LLM-generated code straightforward for humans to review and verify.
@@ -32,7 +32,12 @@ Nexus is designed from the ground up to be "AI-friendly":
 Run the REPL:
 ```bash
 nexus
->> print(val: [=[hello]=])
+Nexus REPL (JIT compiled)
+Type :help for available commands, :exit to quit.
+>> import { Console, system_handler } form nxlib/stdlib/stdio.nx
+>> inject system_handler do
+.. Console.print(val: [=[hello]=])
+.. end
 hello
 () : unit
 ```
@@ -42,13 +47,13 @@ Run a script:
 nexus run example.nx
 ```
 
-Build artifacts:
+Build a WebAssembly component:
 ```bash
-nexus build example.nx         # writes packed ./main.out
-nexus build example.nx --wasm  # writes ./main.wasm (component wasm)
+nexus build example.nx            # writes ./main.wasm
+nexus build example.nx -o out.wasm  # explicit output path
 ```
 
-Run `--wasm` output with wasmtime:
+Run with wasmtime:
 ```bash
 # basic component execution
 wasmtime run -Scli main.wasm
@@ -57,38 +62,34 @@ wasmtime run -Scli main.wasm
 wasmtime run -Scli -Shttp -Sinherit-network -Sallow-ip-name-lookup -Stcp main.wasm
 ```
 
-Build packed executable with explicit output:
-```bash
-nexus build example.nx -o example
-# writes ./example
-```
-
 See [docs/cli.md](docs/cli.md) for the full CLI reference.
 
 ## Example
 
 ```nexus
+import { Console }, * as stdio from nxlib/stdlib/stdio.nx
+import { i64_to_string } from nxlib/stdlib/string.nx
+
 let fib = fn (n: i64) -> i64 do
   if n == 0 then
     return 0
-  endif
+  end
   if n == 1 then
     return 1
-  endif
-  let n1 = n - 1
-  let n2 = n - 2
-  let a = fib(n: n1)
-  let b = fib(n: n2)
+  end
+  let a = fib(n: n - 1)
+  let b = fib(n: n - 2)
   return a + b
-endfn
+end
 
-let main = fn () -> unit effect { Console } do
-  let res = fib(n: 10)
-  let s = i64_to_string(val: res)
-  let msg = [=[ Fibonacci(10) = ]=] ++ s
-  print(val: msg)
+let main = fn () -> unit require { PermConsole } do
+  inject stdio.system_handler do
+    let v = fib(n: 30)
+    let val = i64_to_string(val: v)
+    Console.print(val: val)
+  end
   return ()
-endfn
+end
 ```
 
 ## Documentation

@@ -1,4 +1,4 @@
-import as stdio from nxlib/stdlib/stdio.nx
+import { Console }, * as stdio from nxlib/stdlib/stdio.nx
 import as result from nxlib/stdlib/result.nx
 
 // --- Type Definitions ---
@@ -10,32 +10,32 @@ type User = {
 
 // --- Port Definition ---
 port UserRepository do
-  fn exists(email: string) -> Result<bool, string> effect { Console }
-  fn create(u: User) -> Result<unit, string> effect { Console }
-endport
+  fn exists(email: string) -> Result<bool, string>
+  fn create(u: User) -> Result<unit, string>
+end
 
 // --- Main Logic ---
-pub let register_user = fn (name: string, email: string) -> Result<unit, string> effect { Console, Net } do
+pub let register_user = fn (name: string, email: string) -> Result<unit, string> require { UserRepository, Console } do
   conc do
-    task audit_log effect { Console } do
+    task audit_log do
        let msg = [=[Registration started: ]=] ++ email
-       stdio.print(val: msg)
-    endtask
-  endconc
+       Console.println(val: msg)
+    end
+  end
 
   let exists_res = UserRepository.exists(email: email)
 
   match exists_res do
     case Err(err: msg) ->
       return Err(err: msg)
-    
+
     case Ok(val: is_exists) ->
       if is_exists then
         return Err(err: [=[User already exists]=])
       else
         ()
-      endif
-  endmatch
+      end
+  end
 
   let new_user = {
     id: 0,
@@ -44,4 +44,4 @@ pub let register_user = fn (name: string, email: string) -> Result<unit, string>
   }
 
   return UserRepository.create(u: new_user)
-endfn
+end

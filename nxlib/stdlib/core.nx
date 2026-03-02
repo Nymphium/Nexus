@@ -1,6 +1,6 @@
 /** core: Utility types and functions. */
 
-import external nxlib/stdlib/core.wasm
+import external nxlib/stdlib/stdlib.wasm
 
 /// A pair of two values.
 pub type Pair<A, B> = Pair(left: A, right: B)
@@ -9,15 +9,15 @@ pub type Pair<A, B> = Pair(left: A, right: B)
 pub let fst = fn <A, B>(p: Pair<A, B>) -> A do
   match p do
     case Pair(left: l, _) -> return l
-  endmatch
-endfn
+  end
+end
 
 /// Returns the second element of a pair.
 pub let snd = fn <A, B>(p: Pair<A, B>) -> B do
   match p do
     case Pair(right: r, _) -> return r
-  endmatch
-endfn
+  end
+end
 
 /// Result of partitioning: elements matching the predicate and the rest.
 pub type Partition<T> = Partition(matched: List<T>, rest: List<T>)
@@ -28,5 +28,5 @@ pub let negate = fn (val: bool) -> bool do
     return false
   else
     return true
-  endif
-endfn
+  end
+end

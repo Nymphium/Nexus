@@ -6,7 +6,7 @@ The `nexus` command-line interface is the primary tool for running and interacti
 
 ```bash
 nexus run [FILE|-]
-nexus build [FILE|-] [-o OUTPUT] [--wasm] [--wasm-merge PATH]
+nexus build [FILE|-] [-o OUTPUT] [--wasm-merge PATH]
 nexus check [FILE|-]
 ```
 
@@ -26,7 +26,7 @@ nexus run < example.nx
 ```
 
 `nexus run` does not execute wasm modules.
-Build component wasm with `nexus build --wasm`, then run with `wasmtime`.
+Build component wasm with `nexus build`, then run with `wasmtime`.
 
 #### Shebang scripts
 
@@ -36,39 +36,30 @@ Build component wasm with `nexus build --wasm`, then run with `wasmtime`.
 #!/usr/bin/env -S nexus run
 fn main() -> i64 do
   return 42
-endfn
+end
 ```
 
 ### `build`
 
 Builds after parse + typecheck.
-By default, `build` emits:
-- a packed executable embedding component wasm (default `./main.out`)
+`build` emits a WASM Component (default `./main.wasm`).
 
 ```bash
 nexus build program.nx
-# writes ./main.out
-```
-
-Emit component-model wasm explicitly:
-
-```bash
-nexus build program.nx --wasm
 # writes ./main.wasm
 ```
-This path performs component embedding/encoding/composition in-process (Rust crates).
 
-When `--wasm` needs file-backed wasm import bundling, `wasm-merge` is invoked externally.
+When file-backed wasm import bundling is needed, `wasm-merge` is invoked externally.
 You can override the command path explicitly:
 
 ```bash
-nexus build program.nx --wasm --wasm-merge /opt/bin/wasm-merge
+nexus build program.nx --wasm-merge /opt/bin/wasm-merge
 ```
 
 Or via env var:
 
 ```bash
-NEXUS_WASM_MERGE=/opt/bin/wasm-merge nexus build program.nx --wasm
+NEXUS_WASM_MERGE=/opt/bin/wasm-merge nexus build program.nx
 ```
 
 Resolution order is: `--wasm-merge` > `NEXUS_WASM_MERGE` > `wasm-merge` from `PATH`.
@@ -82,27 +73,21 @@ wasmtime run -Scli -Shttp -Sinherit-network -Sallow-ip-name-lookup -Stcp main.wa
 Specify an explicit output path:
 
 ```bash
-nexus build program.nx -o out/program
-# writes out/program
-nexus build program.nx --wasm -o out/program.wasm
+nexus build program.nx -o out/program.wasm
 ```
 
 Current codegen coverage is intentionally limited to the typed-ANF monomorphic subset.
 external calls are emitted as wasm imports (including `print` from `nxlib/stdlib/stdio.wasm`).
-`nexus build` (packed executable) bundles file-based wasm imports into the embedded pack format
-and resolves them via the runtime linker.
-`nexus build --wasm` also bundles file-based imports before component encoding using
+`nexus build` bundles file-based imports before component encoding using
 external `wasm-merge`.
 Preview2/component import modules (for example `wasi:http/...`) are preserved and not merged.
-Network IO should use component builds (`--wasm`) and execute via `wasmtime run`
+Network IO should use component builds and execute via `wasmtime run`
 with WASI HTTP enabled.
 `cargo build` automatically rebuilds `nxlib/stdlib/{stdio,stdlib}.wasm` via `build.rs`.
 If needed, wasm rebuild can be skipped with `NEXUS_SKIP_WASM_BUILD=1`.
 For example, `examples/fib.nx` can be built and run as wasm.
 
-If no file is provided and stdin is piped:
-- `nexus build` writes `main.out` by default.
-- `nexus build --wasm` writes `main.wasm` by default.
+If no file is provided and stdin is piped, `nexus build` writes `main.wasm` by default.
 
 ### `check`
 
@@ -139,11 +124,8 @@ cat example.nx | cargo run -- run
 # Start REPL
 cargo run
 
-# Emit wasm
-cargo run -- build example.nx --wasm
-
-# Emit packed executable
-cargo run -- build example.nx -o out/example
+# Build component wasm
+cargo run -- build example.nx
 
 # Check only
 cargo run -- check example.nx

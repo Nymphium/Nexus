@@ -1,4 +1,3 @@
-use chumsky::Parser;
 use nexus::lang::parser;
 use nexus::lang::typecheck::TypeChecker;
 
@@ -16,7 +15,7 @@ fn test_ref_creation_and_type() {
     let main = fn () -> unit do
         let ~c = 0 
         return ()
-    endfn
+    end
     "#;
     match check_code(src) {
         Ok(_) => (),
@@ -46,7 +45,7 @@ fn test_gravity_rule_immutable_holds_value() {
         // If I pass `x` (which holds Ref) to `fn f(~p)`, `p` becomes Ref.
         // But `x` is `i64`.
         return ()
-    endfn
+    end
     "#;
     match check_code(src) {
         Ok(_) => (),
@@ -79,7 +78,7 @@ fn test_cannot_return_ref() {
         let ~c = 0
         // return c // Variable not found
         return ()
-    endfn
+    end
     "#;
     match check_code(src) {
         Ok(_) => (),
@@ -94,7 +93,7 @@ fn test_ref_assignment() {
         let ~c = 0
         ~c <- 1
         return ()
-    endfn
+    end
     "#;
     match check_code(src) {
         Ok(_) => (),
@@ -109,7 +108,7 @@ fn test_ref_read() {
         let ~c = 10
         let v = ~c
         return v
-    endfn
+    end
     "#;
     match check_code(src) {
         Ok(_) => (),
@@ -126,13 +125,13 @@ fn test_ref_generic() {
         let ~r = x
         let v = ~r
         return ()
-    endfn
+    end
 
     let main = fn () -> unit do
         box(x: 10)
         box(x: true)
         return ()
-    endfn
+    end
     "#;
     match check_code(src) {
         Ok(_) => (),

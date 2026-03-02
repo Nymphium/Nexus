@@ -4,7 +4,7 @@ Let binding with lambda — simple function
 
 pub let add = fn (a: i64, b: i64) -> i64 do
   return a + b
-endfn
+end
 
 -----------------------------------------------
 
@@ -27,7 +27,7 @@ Function with effects
 
 let main = fn () -> unit effect { IO } do
   return ()
-endfn
+end
 
 -----------------------------------------------
 
@@ -47,7 +47,7 @@ Let statement
 let f = fn () -> i64 do
   let x: i64 = 42
   return x
-endfn
+end
 
 -----------------------------------------------
 
@@ -71,7 +71,7 @@ String literal [=[ ... ]=]
 let greet = fn () -> unit effect { IO } do
   let msg = [=[ hello world ]=]
   print(val: msg)
-endfn
+end
 
 -----------------------------------------------
 
@@ -166,8 +166,8 @@ let describe = fn (s: Shape) -> unit do
       return ()
     case _ ->
       return ()
-  endmatch
-endfn
+  end
+end
 
 -----------------------------------------------
 
@@ -207,8 +207,8 @@ let abs = fn (x: i64) -> i64 do
     return -1
   else
     return x
-  endif
-endfn
+  end
+end
 
 -----------------------------------------------
 
@@ -274,8 +274,8 @@ let safe = fn () -> unit do
     return ()
   catch err ->
     return ()
-  endtry
-endfn
+  end
+end
 
 -----------------------------------------------
 
@@ -298,10 +298,10 @@ let run = fn () -> unit do
   conc do
     task a do
       return ()
-    endtask
-  endconc
+    end
+  end
   return ()
-endfn
+end
 
 -----------------------------------------------
 
@@ -324,7 +324,7 @@ Borrow expression
 let f = fn () -> unit do
   let b = &x
   return ()
-endfn
+end
 
 -----------------------------------------------
 
@@ -345,7 +345,7 @@ Raise expression
 
 let fail = fn () -> unit do
   raise [=[ error ]=]
-endfn
+end
 
 -----------------------------------------------
 
@@ -367,7 +367,7 @@ let counter = fn () -> unit do
   let ~count: i64 = 0
   ~count <- 42
   return ()
-endfn
+end
 
 -----------------------------------------------
 
@@ -393,7 +393,7 @@ Generic function
 
 let identity = fn <T>(x: T) -> T do
   return x
-endfn
+end
 
 -----------------------------------------------
 
@@ -414,7 +414,7 @@ Port definition
 
 port Logger do
   fn log(msg: string) -> unit
-endport
+end
 
 -----------------------------------------------
 
@@ -434,8 +434,8 @@ Handler expression
 let stdout_logger = handler Logger do
   fn log(msg: string) -> unit do
     return ()
-  endfn
-endhandler
+  end
+end
 
 -----------------------------------------------
 
@@ -459,8 +459,8 @@ let get_x = fn (p: Point) -> float do
   match p do
     case { x: v, _ } ->
       return v
-  endmatch
-endfn
+  end
+end
 
 -----------------------------------------------
 
@@ -487,7 +487,7 @@ List with trailing comma
 
 let nums = fn () -> [i64] do
   return [1, 2, 3,]
-endfn
+end
 
 -----------------------------------------------
 
@@ -510,7 +510,7 @@ Block comment
 /* this is a block comment */
 let f = fn () -> unit do
   return ()
-endfn
+end
 
 -----------------------------------------------
 
@@ -530,9 +530,9 @@ Lambda expression
 let main = fn () -> i64 do
   let g = fn (x: i64) -> i64 do
     return x
-  endfn
+  end
   return g(x: 1)
-endfn
+end
 
 -----------------------------------------------
 
@@ -562,7 +562,7 @@ New primitive types i32 f32 f64
 
 let f = fn (a: i32, b: f64) -> f32 do
   return a
-endfn
+end
 
 -----------------------------------------------
 
@@ -583,7 +583,7 @@ Drop statement
 let f = fn (%r: unit) -> unit do
   drop %r
   return ()
-endfn
+end
 
 -----------------------------------------------
 
@@ -606,7 +606,7 @@ Labeled call (no punning)
 
 let f = fn (x: i64) -> i64 do
   return add(x: x)
-endfn
+end
 
 -----------------------------------------------
 
@@ -631,7 +631,7 @@ Constructor expression with labels
 let f = fn () -> unit do
   let err = PermissionDenied(msg: [=[/tmp/data]=], code: 13)
   raise err
-endfn
+end
 
 -----------------------------------------------
 
@@ -665,8 +665,8 @@ let f = fn (r: Result) -> unit do
       return ()
     case Err(err: e) ->
       return ()
-  endmatch
-endfn
+  end
+end
 
 -----------------------------------------------
 
@@ -701,7 +701,7 @@ Port-qualified call
 let f = fn () -> unit require { Logger } effect { IO } do
   Logger.info(msg: [=[ hello ]=])
   return ()
-endfn
+end
 
 -----------------------------------------------
 
@@ -730,13 +730,13 @@ let main = fn () -> unit do
     fn log(msg: string) -> unit effect { Console } do
       print(val: msg)
       return ()
-    endfn
-  endhandler
+    end
+  end
   inject logger do
     Logger.log(msg: [=[ hello ]=])
-  endinject
+  end
   return ()
-endfn
+end
 
 -----------------------------------------------
 
@@ -764,10 +764,39 @@ endfn
                   value: (variable name: (identifier)))))
             body: (return_stmt value: (literal (unit_literal))))))
       body: (inject_stmt
-        handler: (identifier)
+        handler: (inject_handler (identifier))
         body: (expr_stmt
           (call_expr
             func: (dotted_identifier (uident) (identifier))
+            args: (labeled_arg
+              label: (identifier)
+              value: (literal (string_literal))))))
+      body: (return_stmt value: (literal (unit_literal))))))
+
+===============================================
+Inject with dotted handler name
+===============================================
+
+let main = fn () -> unit do
+  inject stdio.system_handler do
+    print(val: [=[ hello ]=])
+  end
+  return ()
+end
+
+-----------------------------------------------
+
+(source_file
+  (let_def
+    name: (identifier)
+    value: (lambda_expr
+      params: (param_list)
+      ret_type: (primitive_type)
+      body: (inject_stmt
+        handler: (inject_handler (identifier) (identifier))
+        body: (expr_stmt
+          (call_expr
+            func: (dotted_identifier (identifier))
             args: (labeled_arg
               label: (identifier)
               value: (literal (string_literal))))))
@@ -780,7 +809,7 @@ Port signature with require
 port FileSystem do
   fn read(path: string) -> string require { Auth }
   fn write(path: string, data: string) -> unit require { Auth } effect { IO }
-endport
+end
 
 -----------------------------------------------
 
@@ -808,7 +837,7 @@ Binary expression in call arguments
 
 let f = fn (a: i64, b: i64) -> i64 do
   return add(a: a + 1, b: a * b + 2)
-endfn
+end
 
 -----------------------------------------------
 
@@ -842,7 +871,7 @@ Chained binary expression
 
 let f = fn (a: i64, b: i64, c: i64) -> i64 do
   return a + b + c
-endfn
+end
 
 -----------------------------------------------
 
@@ -866,15 +895,15 @@ endfn
 Import with uppercase items (ports, types)
 ===============================================
 
-import { default_fs, Fs, Handle } from nxlib/stdlib/fs.nx
+import { Fs, Handle }, * as fs from nxlib/stdlib/fs.nx
 
 -----------------------------------------------
 
 (source_file
   (import_def
-    items: (identifier)
     items: (uident)
     items: (uident)
+    alias: (identifier)
     path: (import_path)))
 
 ===============================================
@@ -885,7 +914,7 @@ pub port Fs do
   fn open_read(path: string) -> %Handle effect { Exn }
   fn read(handle: %Handle) -> { content: string, handle: %Handle }
   fn close(handle: %Handle) -> unit
-endport
+end
 
 -----------------------------------------------
 
@@ -920,8 +949,8 @@ let f = fn () -> unit do
   match %r do case { content: c, handle: %h2 } ->
     Fs.close(handle: %h2)
     return ()
-  endmatch
-endfn
+  end
+end
 
 -----------------------------------------------
 

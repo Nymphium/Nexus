@@ -16,16 +16,11 @@ use wasm_encoder as wenc;
 use wit_component::{embed_component_metadata, ComponentEncoder, StringEncoding};
 use wit_parser::Resolve;
 
-mod compiler;
-mod constants;
-mod ir;
-mod lang;
-
-mod repl;
-mod runtime;
-
-use constants::{is_preview2_wasi_module, Permission, ENTRYPOINT, NEXUS_HOST_HTTP_MODULE, WASI_SNAPSHOT_MODULE};
-use runtime::ExecutionCapabilities;
+use nexus::compiler;
+use nexus::constants::{is_preview2_wasi_module, Permission, ENTRYPOINT, NEXUS_HOST_HTTP_MODULE, WASI_SNAPSHOT_MODULE};
+use nexus::lang;
+use nexus::repl;
+use nexus::runtime::{self, ExecutionCapabilities};
 
 #[derive(Debug, Clone, clap::ValueEnum)]
 enum ExplainCapabilities {

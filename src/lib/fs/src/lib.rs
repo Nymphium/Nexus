@@ -63,11 +63,13 @@ fn fd_with<R>(fd: i64, f: impl FnOnce(&mut FdEntry) -> R) -> Option<R> {
 
 // --- allocate / deallocate ---
 
+#[cfg(not(feature = "no_alloc_export"))]
 #[no_mangle]
 pub extern "C" fn allocate(size: i32) -> i32 {
     nexus_wasm_alloc::allocate(size)
 }
 
+#[cfg(not(feature = "no_alloc_export"))]
 #[no_mangle]
 pub unsafe extern "C" fn deallocate(ptr: i32, size: i32) {
     nexus_wasm_alloc::deallocate(ptr, size);
@@ -321,31 +323,3 @@ fn read_optional_string(ptr: i32, len: i32) -> Option<String> {
     Some(String::from_utf8_lossy(bytes).to_string())
 }
 
-fn read_string_lossy(ptr: i32, len: i32) -> String {
-    let Some((offset, len)) = checked_ptr_len(ptr, len) else {
-        return String::new();
-    };
-    let bytes = unsafe { std::slice::from_raw_parts(offset as *const u8, len) };
-    String::from_utf8_lossy(bytes).to_string()
-}
-
-#[no_mangle]
-pub extern "C" fn __nx_string_length(s_ptr: i32, s_len: i32) -> i64 {
-    read_string_lossy(s_ptr, s_len).len() as i64
-}
-
-#[no_mangle]
-pub extern "C" fn __nx_string_index_of(s_ptr: i32, s_len: i32, sub_ptr: i32, sub_len: i32) -> i64 {
-    let s = read_string_lossy(s_ptr, s_len);
-    let sub = read_string_lossy(sub_ptr, sub_len);
-    s.find(sub.as_str()).map(|idx| idx as i64).unwrap_or(-1)
-}
-
-#[no_mangle]
-pub extern "C" fn __nx_string_substring(s_ptr: i32, s_len: i32, start: i64, len: i64) -> i64 {
-    let s = read_string_lossy(s_ptr, s_len);
-    let start = start.max(0) as usize;
-    let len = len.max(0) as usize;
-    let result: String = s.chars().skip(start).take(len).collect();
-    nexus_wasm_alloc::store_string_result(result)
-}

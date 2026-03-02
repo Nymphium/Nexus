@@ -1,4 +1,3 @@
-use chumsky::Parser;
 use nexus::compiler::codegen::compile_program_to_wasm;
 use nexus::lang::parser;
 use std::fs;
@@ -59,11 +58,50 @@ fn run_main_unit_traps(wasm: &[u8]) -> Result<(), String> {
         .and_then(|_| Err("expected trap but main returned successfully".to_string()))
 }
 
+/// Provide stub (trap) implementations for `nexus:cli/nexus-host` so that
+/// the stdlib bundle can be instantiated even when the test doesn't use net.
+fn define_nexus_host_stubs(
+    linker: &mut Linker<wasmtime_wasi::p1::WasiP1Ctx>,
+) -> Result<(), String> {
+    const MOD: &str = "nexus:cli/nexus-host";
+    linker
+        .func_wrap(
+            MOD,
+            "host-http-request",
+            |_: wasmtime::Caller<'_, _>,
+             _: i32, _: i32, _: i32, _: i32,
+             _: i32, _: i32, _: i32, _: i32, _: i32| {},
+        )
+        .map_err(|e| e.to_string())?;
+    linker
+        .func_wrap(MOD, "host-http-listen", |_: wasmtime::Caller<'_, _>, _: i32, _: i32| -> i64 {
+            -1
+        })
+        .map_err(|e| e.to_string())?;
+    linker
+        .func_wrap(MOD, "host-http-accept", |_: wasmtime::Caller<'_, _>, _: i64, _: i32| {})
+        .map_err(|e| e.to_string())?;
+    linker
+        .func_wrap(
+            MOD,
+            "host-http-respond",
+            |_: wasmtime::Caller<'_, _>, _: i64, _: i64, _: i32, _: i32, _: i32, _: i32| -> i32 {
+                0
+            },
+        )
+        .map_err(|e| e.to_string())?;
+    linker
+        .func_wrap(MOD, "host-http-stop", |_: wasmtime::Caller<'_, _>, _: i64| -> i32 { 0 })
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 fn run_main_unit_with_wasi(wasm: &[u8]) -> Result<(), String> {
     let engine = Engine::default();
     let module = Module::from_binary(&engine, wasm).map_err(|e| e.to_string())?;
     let mut linker = Linker::new(&engine);
     wasmtime_wasi::p1::add_to_linker_sync(&mut linker, |ctx| ctx).map_err(|e| e.to_string())?;
+    define_nexus_host_stubs(&mut linker)?;
 
     let mut builder = WasiCtxBuilder::new();
     builder.inherit_stdio();
@@ -102,11 +140,11 @@ fn codegen_i64_function_call_works() {
     let src = r#"
 let add = fn (x: i64, y: i64) -> i64 do
     return x + y
-endfn
+end
 
 let main = fn () -> i64 do
     return add(x: 40, y: 2)
-endfn
+end
 "#;
     let wasm = compile_src(src).expect("compile should succeed");
     let result = run_main_i64(&wasm).expect("wasm main should run");
@@ -118,7 +156,7 @@ fn codegen_exports_wasi_cli_run_wrapper() {
     let src = r#"
 let main = fn () -> i64 do
     return 42
-endfn
+end
 "#;
     let wasm = compile_src(src).expect("compile should succeed");
     let main = run_main_i64(&wasm).expect("wasm main should run");
@@ -132,12 +170,12 @@ fn codegen_i32_arithmetic_works() {
     let src = r#"
 let inc = fn (x: i32) -> i32 do
     return x + 1
-endfn
+end
 
 let main = fn () -> i32 do
     let x: i32 = 41
     return inc(x: x)
-endfn
+end
 "#;
     let wasm = compile_src(src).expect("compile should succeed");
     let result = run_main_i32(&wasm).expect("wasm main should run");
@@ -149,7 +187,7 @@ fn codegen_bool_return_is_i32_flag() {
     let src = r#"
 let main = fn () -> bool do
     return 10 < 11
-endfn
+end
 "#;
     let wasm = compile_src(src).expect("compile should succeed");
     let result = run_main_i32(&wasm).expect("wasm main should run");
@@ -163,7 +201,7 @@ import as math from examples/math.nx
 
 let main = fn () -> i64 do
     return math.add(a: 19, b: 23)
-endfn
+end
 "#;
     let wasm = compile_src(src).expect("compile should succeed");
     let result = run_main_i64(&wasm).expect("wasm main should run");
@@ -175,7 +213,7 @@ fn codegen_string_return_is_supported() {
     let src = r#"
 let main = fn () -> string do
     return [=[hello]=]
-endfn
+end
 "#;
     let wasm = compile_src(src).expect("compile should succeed");
     let packed = run_main_i64(&wasm).expect("wasm main should run");
@@ -189,7 +227,7 @@ fn codegen_string_concat_operator_is_supported() {
 let main = fn () -> string do
     let msg = [=[foo]=] ++ [=[bar]=]
     return msg
-endfn
+end
 "#;
     let wasm = compile_src(src).expect("compile should succeed");
     let packed = run_main_i64(&wasm).expect("wasm main should run");
@@ -213,7 +251,7 @@ let main = fn () -> unit effect { Exn } do
     let err = Boom(42)
     raise err
     return ()
-endfn
+end
 "#;
 
     let wasm = compile_src(src).expect("compile should succeed");
@@ -232,9 +270,9 @@ let main = fn () -> i64 effect { Exn } do
       return 1
     catch e ->
       return 7
-    endtry
+    end
     return 0
-endfn
+end
 "#;
 
     let wasm = compile_src(src).expect("compile should succeed");
@@ -255,13 +293,13 @@ let main = fn () -> i64 effect { Exn } do
       catch e ->
         raise e
         return -2
-      endtry
+      end
       return -3
     catch outer ->
       return 9
-    endtry
+    end
     return 0
-endfn
+end
 "#;
 
     let wasm = compile_src(src).expect("compile should succeed");
@@ -278,9 +316,9 @@ let main = fn () -> i64 do
       case 1 -> return 10
       case 2 -> return 20
       case _ -> return 30
-    endmatch
+    end
     return 0
-endfn
+end
 "#;
 
     let wasm = compile_src(src).expect("compile should succeed");
@@ -301,10 +339,10 @@ let main = fn () -> i64 effect { Exn } do
       match e do
         case Boom(_) -> return 1
         case _ -> return 2
-      endmatch
-    endtry
+      end
+    end
     return 0
-endfn
+end
 "#;
 
     let wasm = compile_src(src).expect("compile should succeed");
@@ -325,10 +363,10 @@ let main = fn () -> i64 effect { Exn } do
       match e do
         case Boom(code) -> return code
         case _ -> return -2
-      endmatch
-    endtry
+      end
+    end
     return 0
-endfn
+end
 "#;
 
     let wasm = compile_src(src).expect("compile should succeed");
@@ -343,9 +381,9 @@ let main = fn () -> i64 do
     let r = { y: 2, x: 40 }
     match r do
       case { x: a, y: b } -> return a + b
-    endmatch
+    end
     return 0
-endfn
+end
 "#;
 
     let wasm = compile_src(src).expect("compile should succeed");
@@ -360,9 +398,9 @@ let main = fn () -> i64 do
     let x = 42
     match x do
       case v -> return v
-    endmatch
+    end
     return 0
-endfn
+end
 "#;
 
     let wasm = compile_src(src).expect("compile should succeed");
@@ -378,9 +416,9 @@ let main = fn () -> i64 do
     match x do
       case 0 -> return 0
       case other -> return other
-    endmatch
+    end
     return -1
-endfn
+end
 "#;
 
     let wasm = compile_src(src).expect("compile should succeed");
@@ -389,7 +427,6 @@ endfn
 }
 
 #[test]
-#[ignore] // codegen path does not support port/handler/inject yet
 fn codegen_fixture_network_access_compiles() {
     let src = fs::read_to_string("examples/network_access.nx").expect("fixture should exist");
     let wasm = compile_src(&src).expect("network_access fixture should compile");
@@ -399,10 +436,13 @@ fn codegen_fixture_network_access_compiles() {
 #[test]
 fn codegen_print_works_via_external_stdio_module() {
     let src = r#"
-let main = fn () -> unit effect { Console } do
-    print(val: [=[hello wasm]=])
+import external nxlib/stdlib/stdio.wasm
+external __nx_print = [=[__nx_print]=] : (val: string) -> unit
+
+let main = fn () -> unit do
+    __nx_print(val: [=[hello wasm]=])
     return ()
-endfn
+end
 "#;
 
     let wasm = compile_src(src).expect("compile should succeed");
@@ -410,13 +450,16 @@ endfn
 }
 
 #[test]
-fn codegen_print_after_i64_to_string_works_via_single_string_abi_module() {
+fn codegen_print_after_from_i64_works_via_single_string_abi_module() {
     let src = r#"
-let main = fn () -> unit effect { Console } do
-    let s = i64_to_string(val: 42)
-    print(val: s)
+import external nxlib/stdlib/stdio.wasm
+external __nx_print = [=[__nx_print]=] : (val: string) -> unit
+
+let main = fn () -> unit do
+    let s = from_i64(val: 42)
+    __nx_print(val: s)
     return ()
-endfn
+end
 "#;
 
     let wasm = compile_src(src).expect("compile should succeed");
@@ -430,7 +473,7 @@ let main = fn () -> i64 do
     let r = { y: 2, x: 40 }
     let v = r.x
     return v
-endfn
+end
 "#;
     let wasm = compile_src(src).expect("compile");
     assert_eq!(run_main_i64(&wasm).unwrap(), 40);
@@ -444,7 +487,7 @@ let main = fn () -> i64 do
     let x = r.a
     let y = r.b
     return x + y
-endfn
+end
 "#;
     let wasm = compile_src(src).expect("compile");
     assert_eq!(run_main_i64(&wasm).unwrap(), 42);
@@ -458,7 +501,7 @@ let main = fn () -> i64 do
     let a = r.x
     let b = r.y
     return a + b
-endfn
+end
 "#;
     let wasm = compile_src(src).expect("compile");
     assert_eq!(run_main_i64(&wasm).unwrap(), 42);
@@ -472,10 +515,52 @@ let main = fn () -> i64 do
     let t = negate(val: true)
     let f = negate(val: false)
     if t then return 1 else
-    if f then return 42 else return 0 endif
-    endif
-endfn
+    if f then return 42 else return 0 end
+    end
+end
 "#;
     let wasm = compile_src(src).expect("compile");
     assert_eq!(run_main_i64(&wasm).unwrap(), 42);
+}
+
+#[test]
+fn codegen_handler_reachability_resolves_port_call() {
+    let src = r#"
+import { Console }, * as stdio from nxlib/stdlib/stdio.nx
+
+let main = fn () -> unit require { PermConsole } do
+    inject stdio.system_handler do
+        Console.print(val: [=[hello]=])
+    end
+    return ()
+end
+"#;
+    let wasm = compile_src(src).expect("handler port call should compile");
+    run_main_unit_with_wasi(&wasm).expect("wasm main should run");
+}
+
+#[test]
+fn codegen_exn_constructor_lowering() {
+    let src = r#"
+let main = fn () -> unit effect { Exn } do
+    raise RuntimeError(val: [=[test error]=])
+    return ()
+end
+"#;
+    let wasm = compile_src(src).expect("Exn constructor should compile");
+    let _err = run_main_unit_traps(&wasm).expect_err("main should trap");
+}
+
+#[test]
+fn codegen_fixture_di_port_compiles() {
+    let src = fs::read_to_string("examples/di_port.nx").expect("fixture should exist");
+    let wasm = compile_src(&src).expect("di_port fixture should compile");
+    run_main_unit_with_wasi(&wasm).expect("wasm main should run");
+}
+
+#[test]
+fn codegen_fixture_module_test_compiles() {
+    let src = fs::read_to_string("examples/module_test.nx").expect("fixture should exist");
+    let wasm = compile_src(&src).expect("module_test fixture should compile");
+    run_main_unit_with_wasi(&wasm).expect("wasm main should run");
 }

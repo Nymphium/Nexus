@@ -1,6 +1,5 @@
 //! Low-level IR — ANF form, WASM-ready.
 //! Adapted from the original `src/compiler/anf.rs` with additions for evidence-passing.
-#![allow(dead_code)]
 
 use crate::lang::ast::{BinaryOp, Type};
 
@@ -81,12 +80,6 @@ pub enum LirExpr {
     },
     Call {
         func: String,
-        args: Vec<(String, LirAtom)>,
-        typ: Type,
-    },
-    /// Port method call via funcref table
-    CallIndirect {
-        table_idx: LirAtom, // i32 expression: evidence_base + method_offset
         args: Vec<(String, LirAtom)>,
         typ: Type,
     },

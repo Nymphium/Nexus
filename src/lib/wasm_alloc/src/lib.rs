@@ -69,6 +69,14 @@ pub fn checked_mut_ptr(ptr: i32, len: usize) -> Option<*mut u8> {
     Some(offset as *mut u8)
 }
 
+pub fn read_string(ptr: i32, len: i32) -> String {
+    let Some((offset, len)) = checked_ptr_len(ptr, len) else {
+        return String::new();
+    };
+    let bytes = unsafe { std::slice::from_raw_parts(offset as *const u8, len) };
+    String::from_utf8_lossy(bytes).to_string()
+}
+
 pub fn pack_ptr_len(ptr: i32, len: i32) -> i64 {
     (((ptr as u32 as u64) << 32) | (len as u32 as u64)) as i64
 }

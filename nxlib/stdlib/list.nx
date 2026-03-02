@@ -17,58 +17,58 @@ pub type List<T> = Nil | Cons(v: T, rest: List<T>)
 /// Returns an empty list.
 pub let empty = fn <T>() -> List<T> do
   return Nil()
-endfn
+end
 
 /// Prepends an element to the front of the list.
 pub let cons = fn <T>(x: T, xs: List<T>) -> List<T> do
   return Cons(v: x, rest: xs)
-endfn
+end
 
 /// Returns true if the list is empty.
 pub let is_empty = fn <T>(xs: List<T>) -> bool do
   match xs do
     case Nil() -> return true
     case Cons(v: _, rest: _) -> return false
-  endmatch
-endfn
+  end
+end
 
 /// Returns the number of elements in the list.
 pub let length = fn <T>(xs: List<T>) -> i64 do
   match xs do
     case Nil() -> return 0
     case Cons(v: _, rest: rest) -> return 1 + length(xs: rest)
-  endmatch
-endfn
+  end
+end
 
 /// Returns the first element. Diverges on empty list.
 pub let head = fn <T>(xs: List<T>) -> T do
   match xs do
     case Nil() -> return head(xs: xs)
     case Cons(v: v, rest: _) -> return v
-  endmatch
-endfn
+  end
+end
 
 /// Returns the list without its first element. Diverges on empty list.
 pub let tail = fn <T>(xs: List<T>) -> List<T> do
   match xs do
     case Nil() -> return tail(xs: xs)
     case Cons(v: _, rest: rest) -> return rest
-  endmatch
-endfn
+  end
+end
 
 pub let reverse_go = fn <T>(xs: List<T>, acc: List<T>) -> List<T> do
   match xs do
     case Nil() -> return acc
     case Cons(v: v, rest: rest) -> let next = Cons(v: v, rest: acc)
       return reverse_go(xs: rest, acc: next)
-  endmatch
-endfn
+  end
+end
 
 /// Reverses the list.
 pub let reverse = fn <T>(xs: List<T>) -> List<T> do
   let acc = Nil()
   return reverse_go(xs: xs, acc: acc)
-endfn
+end
 
 /**
  * Concatenates two lists (xs ++ ys).
@@ -79,8 +79,8 @@ pub let concat = fn <T>(xs: List<T>, ys: List<T>) -> List<T> do
   match xs do
     case Nil() -> return ys
     case Cons(v: v, rest: rest) -> return Cons(v: v, rest: concat(xs: rest, ys: ys))
-  endmatch
-endfn
+  end
+end
 
 /// Returns the last element. Diverges on empty list.
 pub let last = fn <T>(xs: List<T>) -> T do
@@ -90,9 +90,9 @@ pub let last = fn <T>(xs: List<T>) -> T do
       match rest do
         case Nil() -> return v
         case Cons(v: _, rest: _) -> return last(xs: rest)
-      endmatch
-  endmatch
-endfn
+      end
+  end
+end
 
 /// Returns the first n elements.
 pub let take = fn <T>(xs: List<T>, n: i64) -> List<T> do
@@ -105,9 +105,9 @@ pub let take = fn <T>(xs: List<T>, n: i64) -> List<T> do
         let next_n = n - 1
         let taken = take(xs: rest, n: next_n)
         return Cons(v: v, rest: taken)
-    endmatch
-  endif
-endfn
+    end
+  end
+end
 
 /// Drops the first n elements.
 pub let drop_n = fn <T>(xs: List<T>, n: i64) -> List<T> do
@@ -118,9 +118,9 @@ pub let drop_n = fn <T>(xs: List<T>, n: i64) -> List<T> do
       case Nil() -> return Nil()
       case Cons(v: _, rest: rest) -> let next_n = n - 1
         return drop_n(xs: rest, n: next_n)
-    endmatch
-  endif
-endfn
+    end
+  end
+end
 
 /// Returns the element at index n (0-based). Diverges on out-of-bounds.
 pub let nth = fn <T>(xs: List<T>, n: i64) -> T do
@@ -135,10 +135,10 @@ pub let nth = fn <T>(xs: List<T>, n: i64) -> T do
         else
           let next_n = n - 1
           return nth(xs: rest, n: next_n)
-        endif
-    endmatch
-  endif
-endfn
+        end
+    end
+  end
+end
 
 /// Returns true if the i64 list contains the given value.
 pub let contains = fn (xs: List<i64>, val: i64) -> bool do
@@ -149,9 +149,9 @@ pub let contains = fn (xs: List<i64>, val: i64) -> bool do
         return true
       else
         return contains(xs: rest, val: val)
-      endif
-  endmatch
-endfn
+      end
+  end
+end
 
 /**
  * Left fold: reduces the list to a single value by applying f to each
@@ -165,8 +165,8 @@ pub let fold_left = fn <T, U>(xs: List<T>, init: U, f: (acc: U, val: T) -> U) ->
     case Cons(v: v, rest: rest) ->
       let next = f(acc: init, val: v)
       return fold_left(xs: rest, init: next, f: f)
-  endmatch
-endfn
+  end
+end
 
 pub let map_rev_go = fn <T, U>(xs: List<T>, acc: List<U>, f: (val: T) -> U) -> List<U> do
   match xs do
@@ -175,8 +175,8 @@ pub let map_rev_go = fn <T, U>(xs: List<T>, acc: List<U>, f: (val: T) -> U) -> L
       let mapped = f(val: v)
       let next = Cons(v: mapped, rest: acc)
       return map_rev_go(xs: rest, acc: next, f: f)
-  endmatch
-endfn
+  end
+end
 
 /**
  * Maps f over the list, returning elements in reverse order.
@@ -186,7 +186,7 @@ endfn
 pub let map_rev = fn <T, U>(xs: List<T>, f: (val: T) -> U) -> List<U> do
   let acc = Nil()
   return map_rev_go(xs: xs, acc: acc, f: f)
-endfn
+end
 
 /**
  * Maps f over the list, preserving order.
@@ -197,4 +197,4 @@ endfn
 pub let map = fn <T, U>(xs: List<T>, f: (val: T) -> U) -> List<U> do
   let mapped_rev = map_rev(xs: xs, f: f)
   return reverse(xs: mapped_rev)
-endfn
+end

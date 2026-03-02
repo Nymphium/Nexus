@@ -1932,6 +1932,21 @@
     }
   },
   {
+    "type": "inject_handler",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "identifier",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "inject_stmt",
     "named": true,
     "fields": {
@@ -1990,7 +2005,7 @@
         "required": true,
         "types": [
           {
-            "type": "identifier",
+            "type": "inject_handler",
             "named": true
           }
         ]
@@ -4288,39 +4303,7 @@
     "named": false
   },
   {
-    "type": "endconc",
-    "named": false
-  },
-  {
-    "type": "endfn",
-    "named": false
-  },
-  {
-    "type": "endhandler",
-    "named": false
-  },
-  {
-    "type": "endif",
-    "named": false
-  },
-  {
-    "type": "endinject",
-    "named": false
-  },
-  {
-    "type": "endmatch",
-    "named": false
-  },
-  {
-    "type": "endport",
-    "named": false
-  },
-  {
-    "type": "endtask",
-    "named": false
-  },
-  {
-    "type": "endtry",
+    "type": "end",
     "named": false
   },
   {

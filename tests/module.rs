@@ -1,4 +1,3 @@
-use chumsky::Parser;
 use nexus::interpreter::Interpreter;
 use nexus::lang::parser;
 use nexus::lang::stdlib::list_stdlib_nx_paths;
@@ -7,27 +6,34 @@ use std::fs;
 
 use nexus::interpreter::Value;
 
+fn prepare_test_source(src: &str) -> String {
+    let s = src.replace("let main = fn ()", "pub let __test = fn ()");
+    format!("{}\nlet main = fn () -> unit do\n  return ()\nend\n", s)
+}
+
 fn run(src: &str) -> Result<Value, String> {
+    let src = prepare_test_source(src);
     let p = parser::parser()
-        .parse(src)
+        .parse(&src)
         .map_err(|e| format!("{:?}", e))?;
     let mut checker = TypeChecker::new();
     checker.check_program(&p).map_err(|e| e.message)?;
     let mut interpreter = Interpreter::new(p);
-    interpreter.run_function("main", vec![])
+    interpreter.run_function("__test", vec![])
 }
 
 fn check_and_run(src_path: &str) -> Result<(), String> {
-    let src = fs::read_to_string(src_path).map_err(|e| e.to_string())?;
+    let raw_src = fs::read_to_string(src_path).map_err(|e| e.to_string())?;
+    let src = prepare_test_source(&raw_src);
     let parser = parser::parser();
-    let program = parser.parse(src).map_err(|e| format!("{:?}", e))?;
+    let program = parser.parse(&src).map_err(|e| format!("{:?}", e))?;
 
     let mut checker = TypeChecker::new();
     checker.check_program(&program).map_err(|e| e.message)?;
 
     let mut interpreter = Interpreter::new(program);
     interpreter
-        .run_function("main", vec![])
+        .run_function("__test", vec![])
         .map(|_| ())
         .map_err(|e| e)
 }
@@ -40,18 +46,18 @@ fn test_module_import() {
 
 #[test]
 fn test_module_default_alias() {
-    let src = r#"
+    let src = prepare_test_source(r#"
     import from examples/math.nx
-    let __test_main = fn () -> i64 do
+    let main = fn () -> i64 do
       return math.add(a: 5, b: 5)
-    endfn
-    "#;
+    end
+    "#);
     let parser = parser::parser();
-    let program = parser.parse(src).unwrap();
+    let program = parser.parse(&src).unwrap();
     let mut checker = TypeChecker::new();
     checker.check_program(&program).unwrap();
     let mut interpreter = Interpreter::new(program);
-    let res = interpreter.run_function("__test_main", vec![]).unwrap();
+    let res = interpreter.run_function("__test", vec![]).unwrap();
     match res {
         nexus::interpreter::Value::Int(10) => (),
         _ => panic!("Expected 10, got {:?}", res),
@@ -60,18 +66,18 @@ fn test_module_default_alias() {
 
 #[test]
 fn test_module_selective_import() {
-    let src = r#"
+    let src = prepare_test_source(r#"
     import { add } from examples/math.nx
-    let __test_main = fn () -> i64 do
+    let main = fn () -> i64 do
       return add(a: 1, b: 2)
-    endfn
-    "#;
+    end
+    "#);
     let parser = parser::parser();
-    let program = parser.parse(src).unwrap();
+    let program = parser.parse(&src).unwrap();
     let mut checker = TypeChecker::new();
     checker.check_program(&program).unwrap();
     let mut interpreter = Interpreter::new(program);
-    let res = interpreter.run_function("__test_main", vec![]).unwrap();
+    let res = interpreter.run_function("__test", vec![]).unwrap();
     match res {
         nexus::interpreter::Value::Int(3) => (),
         _ => panic!("Expected 3, got {:?}", res),
@@ -80,12 +86,12 @@ fn test_module_selective_import() {
 
 #[test]
 fn test_import_external_syntax() {
-    let src = r#"
+    let src = prepare_test_source(r#"
     import external math.wasm
     pub external add = [=[add]=] : (a: i64, b: i64) -> i64
-    "#;
+    "#);
     let parser = parser::parser();
-    let program = parser.parse(src).unwrap();
+    let program = parser.parse(&src).unwrap();
     let mut checker = TypeChecker::new();
     checker.check_program(&program).unwrap();
 }
@@ -96,28 +102,28 @@ fn test_pub_import_syntax_is_rejected() {
     pub import from examples/math.nx
     let main = fn () -> i64 do
       return 0
-    endfn
+    end
     "#;
     let parser = parser::parser();
-    assert!(parser.parse(src).is_err());
+    assert!(parser.parse(&src).is_err());
 }
 
 #[test]
 fn test_stdlib_list_module_length() {
-    let src = r#"
+    let src = prepare_test_source(r#"
     import as list from nxlib/stdlib/list.nx
 
-    let __test_main = fn () -> i64 do
+    let main = fn () -> i64 do
       let xs = Cons(v: 1, rest: Cons(v: 2, rest: Cons(v: 3, rest: Cons(v: 4, rest: Nil()))))
       return list.length(xs: xs)
-    endfn
-    "#;
+    end
+    "#);
     let parser = parser::parser();
-    let program = parser.parse(src).unwrap();
+    let program = parser.parse(&src).unwrap();
     let mut checker = TypeChecker::new();
     checker.check_program(&program).unwrap();
     let mut interpreter = Interpreter::new(program);
-    let res = interpreter.run_function("__test_main", vec![]).unwrap();
+    let res = interpreter.run_function("__test", vec![]).unwrap();
     match res {
         nexus::interpreter::Value::Int(4) => (),
         _ => panic!("Expected 4, got {:?}", res),
@@ -126,23 +132,23 @@ fn test_stdlib_list_module_length() {
 
 #[test]
 fn test_stdlib_array_module_length() {
-    let src = r#"
+    let src = prepare_test_source(r#"
     import as array from nxlib/stdlib/array.nx
 
-    let __test_main = fn () -> i64 do
+    let main = fn () -> i64 do
       let %arr = [| 10, 20, 30 |]
       let arr_ref = &%arr
       let n = array.length(arr: arr_ref)
-      match %arr do case _ -> () endmatch
+      match %arr do case _ -> () end
       return n
-    endfn
-    "#;
+    end
+    "#);
     let parser = parser::parser();
-    let program = parser.parse(src).unwrap();
+    let program = parser.parse(&src).unwrap();
     let mut checker = TypeChecker::new();
     checker.check_program(&program).unwrap();
     let mut interpreter = Interpreter::new(program);
-    let res = interpreter.run_function("__test_main", vec![]).unwrap();
+    let res = interpreter.run_function("__test", vec![]).unwrap();
     match res {
         nexus::interpreter::Value::Int(3) => (),
         _ => panic!("Expected 3, got {:?}", res),
@@ -151,27 +157,27 @@ fn test_stdlib_array_module_length() {
 
 #[test]
 fn test_stdlib_result_module_helpers() {
-    let src = r#"
+    let src = prepare_test_source(r#"
     import as result from nxlib/stdlib/result.nx
 
     let inc = fn (val: i64) -> i64 do
       return val + 1
-    endfn
+    end
 
-    let __test_main = fn () -> i64 do
+    let main = fn () -> i64 do
       let ok = Ok(val: 10)
       let err = Err(err: [=[boom]=])
       let a = result.unwrap_or(res: ok, default: 0)
       let b = result.unwrap_or(res: err, default: 31)
       return a + b + inc(val: a)
-    endfn
-    "#;
+    end
+    "#);
     let parser = parser::parser();
-    let program = parser.parse(src).unwrap();
+    let program = parser.parse(&src).unwrap();
     let mut checker = TypeChecker::new();
     checker.check_program(&program).unwrap();
     let mut interpreter = Interpreter::new(program);
-    let res = interpreter.run_function("__test_main", vec![]).unwrap();
+    let res = interpreter.run_function("__test", vec![]).unwrap();
     match res {
         nexus::interpreter::Value::Int(52) => (),
         _ => panic!("Expected 52, got {:?}", res),
@@ -180,14 +186,14 @@ fn test_stdlib_result_module_helpers() {
 
 #[test]
 fn test_stdlib_module_not_auto_exported() {
-    let src = r#"
+    let src = prepare_test_source(r#"
     let main = fn () -> i64 do
       let xs = [1, 2, 3]
       return list.length(xs: xs)
-    endfn
-    "#;
+    end
+    "#);
     let parser = parser::parser();
-    let program = parser.parse(src).unwrap();
+    let program = parser.parse(&src).unwrap();
     let mut checker = TypeChecker::new();
     assert!(checker.check_program(&program).is_err());
 }
@@ -198,9 +204,10 @@ fn test_stdlib_public_names_are_not_native_functions_and_drop_is_statement() {
     let program = parser.parse("").unwrap();
     let interpreter = Interpreter::new(program);
 
-    assert!(!interpreter.native_functions.contains_key("i64_to_string"));
-    assert!(!interpreter.native_functions.contains_key("float_to_string"));
-    assert!(!interpreter.native_functions.contains_key("bool_to_string"));
+    // from_i64 has a native fallback for interpreter-only mode (no Wasm FFI).
+    assert!(interpreter.native_functions.contains_key("from_i64"));
+    assert!(!interpreter.native_functions.contains_key("from_float"));
+    assert!(!interpreter.native_functions.contains_key("from_bool"));
     assert!(!interpreter.native_functions.contains_key("drop"));
     assert!(!interpreter.native_functions.contains_key("drop_i64"));
     assert!(!interpreter.native_functions.contains_key("drop_array"));
@@ -226,24 +233,30 @@ fn test_stdlib_public_names_are_not_native_functions_and_drop_is_statement() {
         .external_functions
         .contains_key("length"));
     assert!(interpreter.external_functions.contains_key("abs"));
-    assert!(interpreter.external_functions.contains_key("string_length"));
-    assert!(interpreter.external_functions.contains_key("i64_to_string"));
+    assert!(interpreter.external_functions.contains_key("length"));
+    assert!(interpreter.external_functions.contains_key("from_i64"));
     assert!(interpreter
         .external_functions
-        .contains_key("float_to_string"));
+        .contains_key("from_float"));
     assert!(interpreter
         .external_functions
-        .contains_key("bool_to_string"));
+        .contains_key("from_bool"));
     assert!(!interpreter.external_functions.contains_key("__nx_drop_i64"));
 }
 
 #[test]
-fn test_stdio_defines_print_and_println() {
+fn test_stdio_defines_console_port_and_system_handler() {
     let src = fs::read_to_string("nxlib/stdlib/stdio.nx").unwrap();
     let parser = parser::parser();
-    let program = parser.parse(src).unwrap();
+    let program = parser.parse(&src).unwrap();
 
-    let defined_names: Vec<String> = program
+    let has_console_port = program
+        .definitions
+        .iter()
+        .any(|d| matches!(&d.node, nexus::lang::ast::TopLevel::Port(p) if p.name == "Console"));
+    assert!(has_console_port, "Console port should be defined in stdio.nx");
+
+    let let_names: Vec<String> = program
         .definitions
         .iter()
         .filter_map(|d| match &d.node {
@@ -251,9 +264,7 @@ fn test_stdio_defines_print_and_println() {
             _ => None,
         })
         .collect();
-
-    assert!(defined_names.contains(&"print".to_string()));
-    assert!(defined_names.contains(&"println".to_string()));
+    assert!(let_names.contains(&"system_handler".to_string()), "system_handler should be defined in stdio.nx");
 }
 
 #[test]
@@ -273,22 +284,22 @@ fn test_stdlib_loader_uses_nx_only() {
 
 #[test]
 fn test_stdlib_global_array_length() {
-    let src = r#"
+    let src = prepare_test_source(r#"
     import { length } from nxlib/stdlib/array.nx
-    let __test_main = fn () -> i64 do
+    let main = fn () -> i64 do
       let %arr = [| 10, 20, 30 |]
       let arr_ref = &%arr
       let n = length(arr: arr_ref)
-      match %arr do case _ -> () endmatch
+      match %arr do case _ -> () end
       return n
-    endfn
-    "#;
+    end
+    "#);
     let parser = parser::parser();
-    let program = parser.parse(src).unwrap();
+    let program = parser.parse(&src).unwrap();
     let mut checker = TypeChecker::new();
     checker.check_program(&program).unwrap();
     let mut interpreter = Interpreter::new(program);
-    let res = interpreter.run_function("__test_main", vec![]).unwrap();
+    let res = interpreter.run_function("__test", vec![]).unwrap();
     match res {
         nexus::interpreter::Value::Int(3) => (),
         _ => panic!("Expected 3, got {:?}", res),
@@ -297,10 +308,10 @@ fn test_stdlib_global_array_length() {
 
 #[test]
 fn test_exception_constructor_raise_and_catch() {
-    let src = r#"
+    let src = prepare_test_source(r#"
     exception Boom(i64)
 
-    let __test_main = fn () -> i64 do
+    let main = fn () -> i64 do
       try
         let err = Boom(42)
         raise err
@@ -309,17 +320,17 @@ fn test_exception_constructor_raise_and_catch() {
           case Boom(code) -> return code
           case RuntimeError(_) -> return -1
           case InvalidIndex(_) -> return -2
-        endmatch
-      endtry
+        end
+      end
       return 0
-    endfn
-    "#;
+    end
+    "#);
     let parser = parser::parser();
-    let program = parser.parse(src).unwrap();
+    let program = parser.parse(&src).unwrap();
     let mut checker = TypeChecker::new();
     checker.check_program(&program).unwrap();
     let mut interpreter = Interpreter::new(program);
-    let res = interpreter.run_function("__test_main", vec![]).unwrap();
+    let res = interpreter.run_function("__test", vec![]).unwrap();
     match res {
         nexus::interpreter::Value::Int(42) => (),
         _ => panic!("Expected 42, got {:?}", res),
@@ -328,10 +339,10 @@ fn test_exception_constructor_raise_and_catch() {
 
 #[test]
 fn test_exception_constructor_with_labels_raise_and_catch() {
-    let src = r#"
+    let src = prepare_test_source(r#"
     exception Boom(code: i64)
 
-    let __test_main = fn () -> i64 do
+    let main = fn () -> i64 do
       try
         let err = Boom(code: 42)
         raise err
@@ -340,17 +351,17 @@ fn test_exception_constructor_with_labels_raise_and_catch() {
           case Boom(code: c) -> return c
           case RuntimeError(val: _) -> return -1
           case InvalidIndex(val: _) -> return -2
-        endmatch
-      endtry
+        end
+      end
       return 0
-    endfn
-    "#;
+    end
+    "#);
     let parser = parser::parser();
-    let program = parser.parse(src).unwrap();
+    let program = parser.parse(&src).unwrap();
     let mut checker = TypeChecker::new();
     checker.check_program(&program).unwrap();
     let mut interpreter = Interpreter::new(program);
-    let res = interpreter.run_function("__test_main", vec![]).unwrap();
+    let res = interpreter.run_function("__test", vec![]).unwrap();
     match res {
         nexus::interpreter::Value::Int(42) => (),
         _ => panic!("Expected 42, got {:?}", res),
@@ -359,7 +370,7 @@ fn test_exception_constructor_with_labels_raise_and_catch() {
 
 #[test]
 fn test_try_catch_can_catch_runtime_error_as_exception() {
-    let src = r#"
+    let src = prepare_test_source(r#"
     let main = fn () -> unit do
       try
         let _ = [| 1 |][10]
@@ -367,17 +378,17 @@ fn test_try_catch_can_catch_runtime_error_as_exception() {
         match e do
           case RuntimeError(val: _) -> return ()
           case InvalidIndex(val: _) -> return ()
-        endmatch
-      endtry
+        end
+      end
       return ()
-    endfn
-    "#;
+    end
+    "#);
     let parser = parser::parser();
-    let program = parser.parse(src).unwrap();
+    let program = parser.parse(&src).unwrap();
     let mut checker = TypeChecker::new();
     checker.check_program(&program).unwrap();
     let mut interpreter = Interpreter::new(program);
-    let res = interpreter.run_function("main", vec![]);
+    let res = interpreter.run_function("__test", vec![]);
     assert!(
         res.is_ok(),
         "runtime error should be reified as Exn and caught"
@@ -391,7 +402,7 @@ fn all_examples_parse() {
         if path.extension().map_or(false, |e| e == "nx") {
             let src = fs::read_to_string(&path).unwrap();
             parser::parser()
-                .parse(src)
+                .parse(&src)
                 .unwrap_or_else(|e| panic!("{}: parse error: {:?}", path.display(), e));
         }
     }
@@ -400,6 +411,8 @@ fn all_examples_parse() {
 #[test]
 fn all_examples_typecheck() {
     // TODO(Claude): 2025-02-20 user_registry.nx fails because the typechecker
+    // does not resolve module imports inside conc task blocks. Skip it until fixed.
+    // TODO(Claude): 2026-02-28 user_registry.nx fails because the typechecker
     // does not resolve module imports inside conc task blocks. Skip it until fixed.
     let skip = ["user_registry.nx"];
     for entry in fs::read_dir("examples").unwrap() {
@@ -410,7 +423,7 @@ fn all_examples_typecheck() {
             }
             let src = fs::read_to_string(&path).unwrap();
             let program = parser::parser()
-                .parse(src)
+                .parse(&src)
                 .unwrap_or_else(|e| panic!("{}: parse error: {:?}", path.display(), e));
             let mut checker = TypeChecker::new();
             checker
@@ -425,10 +438,10 @@ fn all_examples_typecheck() {
 #[test]
 fn test_stdlib_string_length() {
     let src = r#"
-    import { string_length } from nxlib/stdlib/string.nx
+    import as string from nxlib/stdlib/string.nx
     let main = fn () -> i64 do
-      return string_length(s: [=[hello]=])
-    endfn
+      return string.length(s: [=[hello]=])
+    end
     "#;
     assert_eq!(run(src).unwrap(), Value::Int(5));
 }
@@ -436,10 +449,10 @@ fn test_stdlib_string_length() {
 #[test]
 fn test_stdlib_string_contains() {
     let src = r#"
-    import { string_contains } from nxlib/stdlib/string.nx
+    import as string from nxlib/stdlib/string.nx
     let main = fn () -> bool do
-      return string_contains(s: [=[hello world]=], sub: [=[world]=])
-    endfn
+      return string.contains(s: [=[hello world]=], sub: [=[world]=])
+    end
     "#;
     assert_eq!(run(src).unwrap(), Value::Bool(true));
 }
@@ -447,10 +460,10 @@ fn test_stdlib_string_contains() {
 #[test]
 fn test_stdlib_string_contains_false() {
     let src = r#"
-    import { string_contains } from nxlib/stdlib/string.nx
+    import as string from nxlib/stdlib/string.nx
     let main = fn () -> bool do
-      return string_contains(s: [=[hello]=], sub: [=[xyz]=])
-    endfn
+      return string.contains(s: [=[hello]=], sub: [=[xyz]=])
+    end
     "#;
     assert_eq!(run(src).unwrap(), Value::Bool(false));
 }
@@ -458,10 +471,10 @@ fn test_stdlib_string_contains_false() {
 #[test]
 fn test_stdlib_string_substring() {
     let src = r#"
-    import { string_substring } from nxlib/stdlib/string.nx
+    import as string from nxlib/stdlib/string.nx
     let main = fn () -> string do
-      return string_substring(s: [=[hello world]=], start: 6, len: 5)
-    endfn
+      return string.substring(s: [=[hello world]=], start: 6, len: 5)
+    end
     "#;
     assert_eq!(run(src).unwrap(), Value::String("world".to_string()));
 }
@@ -469,10 +482,10 @@ fn test_stdlib_string_substring() {
 #[test]
 fn test_stdlib_string_index_of() {
     let src = r#"
-    import { string_index_of } from nxlib/stdlib/string.nx
+    import as string from nxlib/stdlib/string.nx
     let main = fn () -> i64 do
-      return string_index_of(s: [=[abcdef]=], sub: [=[cd]=])
-    endfn
+      return string.index_of(s: [=[abcdef]=], sub: [=[cd]=])
+    end
     "#;
     assert_eq!(run(src).unwrap(), Value::Int(2));
 }
@@ -480,10 +493,10 @@ fn test_stdlib_string_index_of() {
 #[test]
 fn test_stdlib_string_index_of_not_found() {
     let src = r#"
-    import { string_index_of } from nxlib/stdlib/string.nx
+    import as string from nxlib/stdlib/string.nx
     let main = fn () -> i64 do
-      return string_index_of(s: [=[abc]=], sub: [=[xyz]=])
-    endfn
+      return string.index_of(s: [=[abc]=], sub: [=[xyz]=])
+    end
     "#;
     assert_eq!(run(src).unwrap(), Value::Int(-1));
 }
@@ -491,10 +504,10 @@ fn test_stdlib_string_index_of_not_found() {
 #[test]
 fn test_stdlib_string_starts_with() {
     let src = r#"
-    import { string_starts_with } from nxlib/stdlib/string.nx
+    import as string from nxlib/stdlib/string.nx
     let main = fn () -> bool do
-      return string_starts_with(s: [=[hello]=], prefix: [=[hel]=])
-    endfn
+      return string.starts_with(s: [=[hello]=], prefix: [=[hel]=])
+    end
     "#;
     assert_eq!(run(src).unwrap(), Value::Bool(true));
 }
@@ -502,10 +515,10 @@ fn test_stdlib_string_starts_with() {
 #[test]
 fn test_stdlib_string_ends_with() {
     let src = r#"
-    import { string_ends_with } from nxlib/stdlib/string.nx
+    import as string from nxlib/stdlib/string.nx
     let main = fn () -> bool do
-      return string_ends_with(s: [=[hello]=], suffix: [=[llo]=])
-    endfn
+      return string.ends_with(s: [=[hello]=], suffix: [=[llo]=])
+    end
     "#;
     assert_eq!(run(src).unwrap(), Value::Bool(true));
 }
@@ -513,10 +526,10 @@ fn test_stdlib_string_ends_with() {
 #[test]
 fn test_stdlib_string_trim() {
     let src = r#"
-    import { string_trim } from nxlib/stdlib/string.nx
+    import as string from nxlib/stdlib/string.nx
     let main = fn () -> string do
-      return string_trim(s: [=[  hi  ]=])
-    endfn
+      return string.trim(s: [=[  hi  ]=])
+    end
     "#;
     assert_eq!(run(src).unwrap(), Value::String("hi".to_string()));
 }
@@ -524,10 +537,10 @@ fn test_stdlib_string_trim() {
 #[test]
 fn test_stdlib_string_to_upper() {
     let src = r#"
-    import { string_to_upper } from nxlib/stdlib/string.nx
+    import as string from nxlib/stdlib/string.nx
     let main = fn () -> string do
-      return string_to_upper(s: [=[hello]=])
-    endfn
+      return string.to_upper(s: [=[hello]=])
+    end
     "#;
     assert_eq!(run(src).unwrap(), Value::String("HELLO".to_string()));
 }
@@ -535,10 +548,10 @@ fn test_stdlib_string_to_upper() {
 #[test]
 fn test_stdlib_string_to_lower() {
     let src = r#"
-    import { string_to_lower } from nxlib/stdlib/string.nx
+    import as string from nxlib/stdlib/string.nx
     let main = fn () -> string do
-      return string_to_lower(s: [=[HELLO]=])
-    endfn
+      return string.to_lower(s: [=[HELLO]=])
+    end
     "#;
     assert_eq!(run(src).unwrap(), Value::String("hello".to_string()));
 }
@@ -546,10 +559,10 @@ fn test_stdlib_string_to_lower() {
 #[test]
 fn test_stdlib_string_replace() {
     let src = r#"
-    import { string_replace } from nxlib/stdlib/string.nx
+    import as string from nxlib/stdlib/string.nx
     let main = fn () -> string do
-      return string_replace(s: [=[hello world]=], from_str: [=[world]=], to_str: [=[nexus]=])
-    endfn
+      return string.replace(s: [=[hello world]=], from_str: [=[world]=], to_str: [=[nexus]=])
+    end
     "#;
     assert_eq!(run(src).unwrap(), Value::String("hello nexus".to_string()));
 }
@@ -557,12 +570,12 @@ fn test_stdlib_string_replace() {
 #[test]
 fn test_stdlib_string_split() {
     let src = r#"
-    import { string_split } from nxlib/stdlib/string.nx
+    import as string from nxlib/stdlib/string.nx
     import as list from nxlib/stdlib/list.nx
     let main = fn () -> i64 do
-      let parts = string_split(s: [=[a,b,c]=], sep: [=[,]=])
+      let parts = string.split(s: [=[a,b,c]=], sep: [=[,]=])
       return list.length(xs: parts)
-    endfn
+    end
     "#;
     assert_eq!(run(src).unwrap(), Value::Int(3));
 }
@@ -570,10 +583,10 @@ fn test_stdlib_string_split() {
 #[test]
 fn test_stdlib_string_char_at() {
     let src = r#"
-    import { string_char_at } from nxlib/stdlib/string.nx
+    import as string from nxlib/stdlib/string.nx
     let main = fn () -> string do
-      return string_char_at(s: [=[hello]=], idx: 1)
-    endfn
+      return string.char_at(s: [=[hello]=], idx: 1)
+    end
     "#;
     assert_eq!(run(src).unwrap(), Value::String("e".to_string()));
 }
@@ -587,7 +600,7 @@ fn test_stdlib_abs() {
     let main = fn () -> i64 do
       let x = 0 - 42
       return abs(val: x)
-    endfn
+    end
     "#;
     assert_eq!(run(src).unwrap(), Value::Int(42));
 }
@@ -598,7 +611,7 @@ fn test_stdlib_max() {
     import { max } from nxlib/stdlib/math.nx
     let main = fn () -> i64 do
       return max(a: 10, b: 20)
-    endfn
+    end
     "#;
     assert_eq!(run(src).unwrap(), Value::Int(20));
 }
@@ -609,7 +622,7 @@ fn test_stdlib_min() {
     import { min } from nxlib/stdlib/math.nx
     let main = fn () -> i64 do
       return min(a: 10, b: 20)
-    endfn
+    end
     "#;
     assert_eq!(run(src).unwrap(), Value::Int(10));
 }
@@ -620,7 +633,7 @@ fn test_stdlib_mod_i64() {
     import { mod_i64 } from nxlib/stdlib/math.nx
     let main = fn () -> i64 do
       return mod_i64(a: 10, b: 3)
-    endfn
+    end
     "#;
     assert_eq!(run(src).unwrap(), Value::Int(1));
 }
@@ -631,7 +644,7 @@ fn test_stdlib_sqrt() {
     import { sqrt } from nxlib/stdlib/math.nx
     let main = fn () -> float do
       return sqrt(val: 9.0)
-    endfn
+    end
     "#;
     assert_eq!(run(src).unwrap(), Value::Float(3.0));
 }
@@ -642,7 +655,7 @@ fn test_stdlib_floor() {
     import { floor } from nxlib/stdlib/math.nx
     let main = fn () -> float do
       return floor(val: 3.7)
-    endfn
+    end
     "#;
     assert_eq!(run(src).unwrap(), Value::Float(3.0));
 }
@@ -653,7 +666,7 @@ fn test_stdlib_ceil() {
     import { ceil } from nxlib/stdlib/math.nx
     let main = fn () -> float do
       return ceil(val: 3.2)
-    endfn
+    end
     "#;
     assert_eq!(run(src).unwrap(), Value::Float(4.0));
 }
@@ -664,7 +677,7 @@ fn test_stdlib_pow() {
     import { pow } from nxlib/stdlib/math.nx
     let main = fn () -> float do
       return pow(base: 2.0, exp: 10.0)
-    endfn
+    end
     "#;
     assert_eq!(run(src).unwrap(), Value::Float(1024.0));
 }
@@ -676,7 +689,7 @@ fn test_stdlib_abs_float() {
     let main = fn () -> float do
       let x = 0.0 -. 5.5
       return abs_float(val: x)
-    endfn
+    end
     "#;
     assert_eq!(run(src).unwrap(), Value::Float(5.5));
 }
@@ -689,7 +702,7 @@ fn test_stdlib_i64_to_float() {
     import { i64_to_float } from nxlib/stdlib/math.nx
     let main = fn () -> float do
       return i64_to_float(val: 42)
-    endfn
+    end
     "#;
     assert_eq!(run(src).unwrap(), Value::Float(42.0));
 }
@@ -700,7 +713,7 @@ fn test_stdlib_float_to_i64() {
     import { float_to_i64 } from nxlib/stdlib/math.nx
     let main = fn () -> i64 do
       return float_to_i64(val: 3.9)
-    endfn
+    end
     "#;
     assert_eq!(run(src).unwrap(), Value::Int(3));
 }
@@ -708,10 +721,10 @@ fn test_stdlib_float_to_i64() {
 #[test]
 fn test_stdlib_string_to_i64() {
     let src = r#"
-    import { string_to_i64 } from nxlib/stdlib/string.nx
+    import as string from nxlib/stdlib/string.nx
     let main = fn () -> i64 do
-      return string_to_i64(s: [=[123]=])
-    endfn
+      return string.to_i64(s: [=[123]=])
+    end
     "#;
     assert_eq!(run(src).unwrap(), Value::Int(123));
 }
@@ -719,12 +732,12 @@ fn test_stdlib_string_to_i64() {
 // ── stdio ────────────────────────────────────────────────
 
 #[test]
-fn test_stdio_println_defined() {
+fn test_stdio_system_handler_defined() {
     let src = fs::read_to_string("nxlib/stdlib/stdio.nx").unwrap();
     let p = parser::parser();
-    let program = p.parse(src).unwrap();
+    let program = p.parse(&src).unwrap();
 
-    let defined_names: Vec<String> = program
+    let let_names: Vec<String> = program
         .definitions
         .iter()
         .filter_map(|d| match &d.node {
@@ -734,8 +747,8 @@ fn test_stdio_println_defined() {
         .collect();
 
     assert!(
-        defined_names.contains(&"println".to_string()),
-        "println should be defined in stdio.nx"
+        let_names.contains(&"system_handler".to_string()),
+        "system_handler should be defined in stdio.nx"
     );
 }
 
@@ -748,13 +761,13 @@ fn test_result_map_ok() {
 
     let double = fn (val: i64) -> i64 do
       return val * 2
-    endfn
+    end
 
     let main = fn () -> i64 do
       let ok = Ok(val: 5)
       let mapped = result.map(res: ok, f: double)
       return result.unwrap_or(res: mapped, default: 0)
-    endfn
+    end
     "#;
     assert_eq!(run(src).unwrap(), Value::Int(10));
 }
@@ -766,13 +779,13 @@ fn test_result_map_err_case() {
 
     let double = fn (val: i64) -> i64 do
       return val * 2
-    endfn
+    end
 
     let main = fn () -> i64 do
       let err = Err(err: [=[oops]=])
       let mapped = result.map(res: err, f: double)
       return result.unwrap_or(res: mapped, default: 99)
-    endfn
+    end
     "#;
     assert_eq!(run(src).unwrap(), Value::Int(99));
 }
@@ -784,13 +797,13 @@ fn test_result_and_then_ok() {
 
     let try_double = fn (val: i64) -> Result<i64, string> do
       return Ok(val: val * 2)
-    endfn
+    end
 
     let main = fn () -> i64 do
       let ok = Ok(val: 5)
       let r = result.and_then(res: ok, f: try_double)
       return result.unwrap_or(res: r, default: 0)
-    endfn
+    end
     "#;
     assert_eq!(run(src).unwrap(), Value::Int(10));
 }
@@ -802,13 +815,13 @@ fn test_result_map_err_fn() {
 
     let wrap = fn (val: string) -> i64 do
       return 42
-    endfn
+    end
 
     let main = fn () -> bool do
       let err = Err(err: [=[oops]=])
       let mapped = result.map_err(res: err, f: wrap)
       return result.is_err(res: mapped)
-    endfn
+    end
     "#;
     assert_eq!(run(src).unwrap(), Value::Bool(true));
 }

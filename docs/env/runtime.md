@@ -13,20 +13,20 @@ The `main` function must have the following signature:
 ```nexus
 let main = fn () -> unit require { ... } effect { ... } do
   ...
-endfn
+end
 ```
 
 - **Parameters**: It must take no arguments.
 - **Return Type**: It must return `unit`.
 - **Visibility**: It must be private (`pub let main` is rejected).
-- **Effects**: `main` may declare only `Console` in `effect` (or be empty).
-- **Coeffects**: `main` may declare only `Net` and/or `Fs` in `require` (or be empty).
+- **Effects**: `main` must have an empty `effect` row (or omit it). All I/O is expressed via coeffects.
+- **Coeffects**: `main` may declare any subset of `{ PermFs, PermNet, PermConsole, PermRandom, PermClock, PermProc }` in `require` (or be empty).
 - **Exn**: `main` cannot expose `Exn` in its effect row.
 
 ### Execution
 
 When the program starts, the runtime executes the `main` function.
-Any side effects (such as printing to stdout via `print` or logging) must be performed within `main` or functions called by it.
+Any side effects (such as printing to stdout via `Console.println` or logging) must be performed within `main` or functions called by it.
 
 ### Exit Code
 

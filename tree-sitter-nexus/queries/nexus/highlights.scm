@@ -2,18 +2,18 @@
 
 ; Definition keywords
 "fn" @keyword.function
-"endfn" @keyword.function
 "external" @keyword.function
 "pub" @keyword.modifier.pub
+
+; Unified block-end keyword
+"end" @keyword
 
 ; Control flow
 "if" @keyword.if
 "then" @keyword.if
 "else" @keyword.if
-"endif" @keyword.if
 "match" @keyword.match
 "case" @keyword.match.case
-"endmatch" @keyword.match
 "return" @keyword.return
 "raise" @keyword.raise
 
@@ -21,19 +21,15 @@
 "effect" @keyword.effect
 "require" @keyword.require
 "inject" @keyword.inject
-"endinject" @keyword.inject
 
 ; Error handling
 "try" @keyword.try
 "catch" @keyword.try
-"endtry" @keyword.try
 
 ; Concurrency
 "conc" @keyword.conc
 "do" @keyword
-"endconc" @keyword.conc
 "task" @keyword.task
-"endtask" @keyword.task
 
 ; Type/exception definitions
 "type" @keyword.type
@@ -46,9 +42,7 @@
 
 ; Port/handler
 "port" @keyword.port
-"endport" @keyword.port
 "handler" @keyword.handler
-"endhandler" @keyword.handler
 
 "let" @keyword.let
 
@@ -189,4 +183,5 @@
   port_name: (uident) @type)
 
 (inject_stmt
-  handler: (identifier) @variable)
+  handler: (inject_handler
+    (identifier) @variable))

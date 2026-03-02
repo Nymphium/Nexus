@@ -1,0 +1,24 @@
+/**
+ * clock: Time and sleep operations.
+ *
+ * Provides Clock port with sleep and now operations.
+ * Requires PermClock capability.
+ */
+import external nxlib/stdlib/stdlib.wasm
+
+external __nx_sleep = [=[__nx_sleep]=] : (ms: i64) -> unit
+external __nx_now = [=[__nx_now]=] : () -> i64
+
+pub port Clock do
+  fn sleep(ms: i64) -> unit
+  fn now() -> i64
+end
+
+pub let system_handler = handler Clock require { PermClock } do
+  fn sleep(ms: i64) -> unit do
+    return __nx_sleep(ms: ms)
+  end
+  fn now() -> i64 do
+    return __nx_now()
+  end
+end

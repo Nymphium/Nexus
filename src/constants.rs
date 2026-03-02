@@ -6,7 +6,6 @@ pub const WASI_SNAPSHOT_MODULE: &str = "wasi_snapshot_preview1";
 pub const WASI_MODULE_PREFIX: &str = "wasi:";
 pub const WASI_CLI_RUN_EXPORT: &str = "wasi:cli/run@0.2.6#run";
 pub const NEXUS_HOST_HTTP_MODULE: &str = "nexus:cli/nexus-host";
-#[allow(dead_code)] // used by interpreter (lib crate)
 pub const NEXUS_HOST_HTTP_FUNC: &str = "host-http-request";
 pub const MEMORY_EXPORT: &str = "memory";
 
@@ -23,16 +22,6 @@ pub enum Permission {
     Clock,
     Proc,
 }
-
-#[allow(dead_code)]
-static ALL_PERMISSIONS: [Permission; 6] = [
-    Permission::Fs,
-    Permission::Net,
-    Permission::Console,
-    Permission::Random,
-    Permission::Clock,
-    Permission::Proc,
-];
 
 impl Permission {
     /// Parse a permission type name (e.g. "PermFs") → Some(Permission::Fs)
@@ -97,11 +86,6 @@ impl Permission {
         }
     }
 
-    /// All permissions.
-    #[allow(dead_code)]
-    pub fn all() -> &'static [Permission] {
-        &ALL_PERMISSIONS
-    }
 }
 
 pub fn is_preview2_wasi_module(module_name: &str) -> bool {

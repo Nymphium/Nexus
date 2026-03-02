@@ -119,14 +119,8 @@ impl<'a> MirLowerer<'a> {
 
             let base_index = self.evidence_table.entries.len();
 
-            for method_name in &port_methods {
-                let func_name = format!("__handler_{}_{}", binding_name, method_name);
-                self.evidence_table.entries.push(EvidenceEntry {
-                    port_name: port_name.clone(),
-                    method_name: method_name.clone(),
-                    func_name,
-                    handler_name: binding_name.clone(),
-                });
+            for _method_name in &port_methods {
+                self.evidence_table.entries.push(EvidenceEntry);
             }
 
             self.handler_base_indices
@@ -259,7 +253,6 @@ impl<'a> MirLowerer<'a> {
         match stmt {
             HirStmt::Let {
                 name,
-                sigil: _,
                 typ,
                 value,
             } => Ok(InjectResult::Single(MirStmt::Let {
@@ -347,13 +340,7 @@ impl<'a> MirLowerer<'a> {
                     ret_type,
                 })
             }
-            HirExpr::PortCall {
-                port,
-                method,
-                args,
-            } => self.lower_port_call(port, method, args, scope),
             HirExpr::Constructor {
-                enum_name: _,
                 variant,
                 args,
             } => {
@@ -416,38 +403,19 @@ impl<'a> MirLowerer<'a> {
                 })
             }
             HirExpr::Lambda {
-                type_params: _,
-                params,
-                ret_type,
-                requires: _,
-                effects: _,
-                body,
+                params: _,
+                ret_type: _,
+                body: _,
             } => {
-                let mir_params: Vec<MirParam> = params
-                    .iter()
-                    .map(|p| MirParam {
-                        label: p.label.clone(),
-                        name: p.name.clone(),
-                        typ: p.typ.clone(),
-                    })
-                    .collect();
-
-                Ok(MirExpr::Lambda {
-                    params: mir_params,
-                    evidence_params: vec![],
-                    ret_type: ret_type.clone(),
-                    body: self.lower_stmts(body, scope)?,
-                })
+                // Lambda in expression position — should have been lifted to top-level
+                // by the time we reach MIR lowering. Emit unit as placeholder.
+                Ok(MirExpr::Literal(crate::lang::ast::Literal::Unit))
             }
             HirExpr::Raise(expr) => {
                 Ok(MirExpr::Raise(Box::new(self.lower_expr(expr, scope)?)))
             }
             HirExpr::External(sym, _tparams, _typ) => Ok(MirExpr::Variable(sym.clone())),
-            HirExpr::Handler {
-                coeffect_name: _,
-                requires: _,
-                functions: _,
-            } => {
+            HirExpr::Handler { functions: _ } => {
                 // Handler expressions collected into handler_bindings during HIR build
                 Ok(MirExpr::Literal(crate::lang::ast::Literal::Unit))
             }
@@ -495,7 +463,6 @@ impl<'a> MirLowerer<'a> {
                 MirPattern::Variable(name.clone(), sigil.clone())
             }
             HirPattern::Constructor {
-                enum_name: _,
                 variant,
                 fields,
             } => MirPattern::Constructor {

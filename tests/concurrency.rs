@@ -1,45 +1,44 @@
-use chumsky::Parser;
 use nexus::interpreter::{Interpreter, Value};
 use nexus::lang::parser::parser;
 use nexus::lang::typecheck::TypeChecker;
 use proptest::prelude::*;
 
+fn prepare_test_source(src: &str) -> String {
+    let s = src.replace("let main = fn ()", "pub let __test = fn ()");
+    format!("{}\nlet main = fn () -> unit do\n  return ()\nend\n", s)
+}
+
 fn run(src: &str) -> Result<Value, String> {
-    let p = parser().parse(src).map_err(|e| format!("{:?}", e))?;
+    let src = prepare_test_source(src);
+    let p = parser().parse(src.as_str()).map_err(|e| format!("{:?}", e))?;
     let mut checker = TypeChecker::new();
     checker.check_program(&p).map_err(|e| e.message)?;
     let mut interpreter = Interpreter::new(p);
-    interpreter.run_function("main", vec![])
+    interpreter.run_function("__test", vec![])
 }
 
 #[test]
 fn test_conc_parallel_execution() {
     let src = r#"
-    import { i64_to_string } from nxlib/stdlib/string.nx
-    import { print } from nxlib/stdlib/stdio.nx
-    let main = fn () -> unit effect { Console } do
+    let main = fn () -> unit do
         let %arr = [| 0, 0 |]
         conc do
-            task t1 effect { Console } do
+            task t1 do
                 let lock = &%arr
                 lock[0] <- 1
-            endtask
-            task t2 effect { Console } do
+            end
+            task t2 do
                 let lock = &%arr
                 lock[1] <- 2
-            endtask
-        endconc
+            end
+        end
 
         let lock = &%arr
         let v1 = lock[0]
         let v2 = lock[1]
-        let s1 = i64_to_string(val: v1)
-        let s2 = i64_to_string(val: v2)
-        print(val: s1)
-        print(val: s2)
-        match %arr do case _ -> () endmatch
+        match %arr do case _ -> () end
         return ()
-    endfn
+    end
     "#;
 
     let res = run(src);
@@ -49,10 +48,11 @@ fn test_conc_parallel_execution() {
 #[test]
 fn test_net_effect_enforcement() {
     let src = r#"
-    let main = fn () -> unit effect { Console } do
+    type IO = {}
+    let main = fn () -> unit effect { IO } do
         let res = get(url: [=[https://example.com]=])
         return ()
-    endfn
+    end
     "#;
 
     let program = parser().parse(src).unwrap();
@@ -67,15 +67,15 @@ fn test_net_effect_enforcement() {
 #[test]
 fn test_net_request_method_and_headers_runtime() {
     let src = r#"
-    import { default_net, Net, header } from nxlib/stdlib/net.nx
+    import { Net, header }, * as net_mod from nxlib/stdlib/net.nx
 
-    let main = fn () -> string effect { Console } do
-      inject default_net do
+    let main = fn () -> string require { PermNet } do
+      inject net_mod.system_handler do
         let h = header(name: [=[X-Test]=], value: [=[abc]=])
         let hs = Cons(v: h, rest: Nil())
         return Net.request(method: [=[POST]=], url: [=[http://127.0.0.1:1/ping]=], headers: hs)
-      endinject
-    endfn
+      end
+    end
     "#;
 
     let res = run(src).expect("request should run");
@@ -93,14 +93,14 @@ fn test_net_request_method_and_headers_runtime() {
 #[test]
 fn test_net_request_https_url_is_accepted() {
     let src = r#"
-    import { default_net, Net } from nxlib/stdlib/net.nx
+    import { Net }, * as net_mod from nxlib/stdlib/net.nx
 
-    let main = fn () -> string effect { Console } do
-      inject default_net do
+    let main = fn () -> string require { PermNet } do
+      inject net_mod.system_handler do
         let hs = Nil()
         return Net.request(method: [=[GET]=], url: [=[https://127.0.0.1:1/]=], headers: hs)
-      endinject
-    endfn
+      end
+    end
     "#;
 
     let res = run(src).expect("https request should return a string value");
@@ -113,19 +113,19 @@ fn test_net_request_https_url_is_accepted() {
 #[test]
 fn test_net_request_response_status_and_body_with_request_body() {
     let src = r#"
-    import { default_net, Net, header, response_status, response_body } from nxlib/stdlib/net.nx
-    import { i64_to_string } from nxlib/stdlib/string.nx
+    import { Net, header, response_status, response_body }, * as net_mod from nxlib/stdlib/net.nx
+    import { from_i64 } from nxlib/stdlib/string.nx
 
-    let main = fn () -> string effect { Console } do
-      inject default_net do
+    let main = fn () -> string require { PermNet } do
+      inject net_mod.system_handler do
         let hs = Cons(v: header(name: [=[Content-Type]=], value: [=[application/x-www-form-urlencoded]=]), rest: Nil())
         let res = Net.request_response(method: [=[POST]=], url: [=[http://127.0.0.1:1/submit]=], headers: hs, body: [=[hello=nx]=])
         let status = response_status(res: res)
         let body = response_body(res: res)
-        let status_s = i64_to_string(val: status)
+        let status_s = from_i64(val: status)
         return status_s ++ [=[:]=] ++ body
-      endinject
-    endfn
+      end
+    end
     "#;
 
     let res = run(src).expect("request_response should run");
@@ -153,10 +153,10 @@ proptest! {
         for i in 0..n {
             tasks.push_str(&format!(
                 r#"
-                task t{i} effect {{ Console }} do
+                task t{i} do
                     let lock = &%arr
                     lock[{i}] <- 1
-                endtask
+                end
                 "#
             ));
         }
@@ -164,23 +164,23 @@ proptest! {
         let initial_array = vec!["0"; n].join(", ");
         let src = format!(
             r#"
-            let main = fn () -> unit effect {{ Console }} do
+            let main = fn () -> unit do
                 let %arr = [| {initial_array} |]
                 conc do
                     {tasks}
-                endconc
+                end
 
                 let lock = &%arr
                 let ok = check_all(arr: lock, len: {n}, i: 0)
-                match %arr do case _ -> () endmatch
+                match %arr do case _ -> () end
                 if (ok) then
                     return ()
                 else
                     return ()
-                endif
-            endfn
+                end
+            end
 
-            let check_all = fn (arr: &[| i64 |], len: i64, i: i64) -> bool effect {{ Console }} do
+            let check_all = fn (arr: &[| i64 |], len: i64, i: i64) -> bool do
                 if (i < len) then
                     let val = arr[i]
                     if (val != 1) then
@@ -189,11 +189,11 @@ proptest! {
                         let next_i = i + 1
                         let res = check_all(arr: arr, len: len, i: next_i)
                         return res
-                    endif
+                    end
                 else
                     return true
-                endif
-            endfn
+                end
+            end
             "#
         );
 
@@ -205,23 +205,23 @@ proptest! {
     fn prop_conc_task_capture_linearity(_n in 1usize..5) {
         let src = format!(
             r#"
-            let main = fn () -> unit effect {{ Console }} do
+            let main = fn () -> unit do
                 let %l = [| 42 |]
                 conc do
-                    task t1 effect {{ Console }} do
+                    task t1 do
                         let b = &%l
                         let v = b[0]
-                    endtask
-                    task t2 effect {{ Console }} do
+                    end
+                    task t2 do
                         let b = &%l
                         let v = b[0]
-                    endtask
-                endconc
+                    end
+                end
                 let b = &%l
                 let v = b[0]
-                match %l do case _ -> () endmatch
+                match %l do case _ -> () end
                 return ()
-            endfn
+            end
             "#
         );
         let res = run(&src);

@@ -3,9 +3,7 @@ use crate::lang::ast::Type;
 use std::path::PathBuf;
 use wasmtime_wasi::{DirPerms, FilePerms, WasiCtxBuilder};
 
-#[allow(dead_code)]
 pub mod string_heap;
-#[allow(dead_code)]
 pub mod wasm_exec;
 
 /// Runtime capability policy used by interpreter and wasm execution paths.
@@ -38,7 +36,6 @@ impl ExecutionCapabilities {
     }
 
     /// Returns a permissive capability set used by legacy in-process interpreter APIs.
-    #[allow(dead_code)] // used by interpreter (lib crate)
     pub fn permissive_legacy() -> Self {
         Self {
             allow_net: true,
@@ -74,7 +71,6 @@ impl ExecutionCapabilities {
     }
 
     /// Validates and enforces URL policy for outbound network calls.
-    #[allow(dead_code)] // used by interpreter and tests
     pub fn ensure_url_allowed(&self, _url: &str) -> Result<(), String> {
         if !self.allow_net {
             return Err("Network access denied: --allow-net not specified".into());
@@ -119,7 +115,6 @@ impl ExecutionCapabilities {
 
     /// Validates that the WASM module's declared capabilities are satisfied by this policy.
     /// Returns a list of missing capability names if validation fails.
-    #[allow(dead_code)]
     pub fn validate_wasm_capabilities(&self, wasm_bytes: &[u8]) -> Result<(), String> {
         let required = parse_nexus_capabilities(wasm_bytes);
         let mut missing: Vec<Permission> = Vec::new();
@@ -186,7 +181,6 @@ impl ExecutionCapabilities {
 
 /// Parses the `nexus:capabilities` custom section from WASM bytes.
 /// Returns a list of port names (e.g., ["Fs", "Net"]).
-#[allow(dead_code)]
 pub fn parse_nexus_capabilities(wasm_bytes: &[u8]) -> Vec<String> {
     // Custom section format: newline-separated port names
     // We scan for the custom section by parsing WASM sections

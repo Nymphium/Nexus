@@ -1,21 +1,23 @@
-import { print } from nxlib/stdlib/stdio.nx
-import { i64_to_string } from nxlib/stdlib/string.nx
+import { Console }, * as stdio from nxlib/stdlib/stdio.nx
+import { from_i64 } from nxlib/stdlib/string.nx
 
 let fib = fn (n: i64) -> i64 do
   if n == 0 then
     return 0
-  endif
+  end
   if n == 1 then
     return 1
-  endif
+  end
   let a = fib(n: n - 1)
   let b = fib(n: n - 2)
   return a + b
-endfn
+end
 
-let main = fn () ->  unit effect { Console } do
-  let v = fib(n: 30)
-  let val = i64_to_string(val: v)
-  print(val: val)
+let main = fn () -> unit require { PermConsole } do
+  inject stdio.system_handler do
+    let v = fib(n: 30)
+    let val = from_i64(val: v)
+    Console.print(val: val)
+  end
   return ()
-endfn
+end

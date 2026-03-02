@@ -1,27 +1,29 @@
-import { default_fs, Fs, Handle } from nxlib/stdlib/fs.nx
-import as stdio from nxlib/stdlib/stdio.nx
+import { Fs }, * as fs from nxlib/stdlib/fs.nx
+import { Console }, * as stdio from nxlib/stdlib/stdio.nx
 
-let main = fn () -> unit effect { Console } do
-  inject default_fs do
+let main = fn () -> unit require { PermFs, PermConsole } do
+  inject fs.system_handler, stdio.system_handler do
     let path = [=[hello_nexus.txt]=]
     let content = [=[Hello from Nexus!\nThis is a multi-line string\nstored in a file.]=]
 
-    stdio.println(val: [=[Writing to ]=] ++ path ++ [=[...]=])
+    Console.println(val: [=[Writing to ]=] ++ path ++ [=[...]=])
     try
       Fs.write_string(path: path, content: content)
       let %h = Fs.open_read(path: path)
       let %r = Fs.read(handle: %h)
-      match %r do case { content: read_content, handle: %h2 } ->
-        let %pr = Fs.fd_path(handle: %h2)
-        match %pr do case { path: file_path, handle: %h3 } ->
-          Fs.close(handle: %h3)
-          stdio.println(val: [=[Read from ]=] ++ file_path ++ [=[:\n]=] ++ read_content)
-        endmatch
-      endmatch
+      match %r do
+        case { content: read_content, handle: %h2 } ->
+          let %pr = Fs.fd_path(handle: %h2)
+          match %pr do
+            case { path: file_path, handle: %h3 } ->
+              Fs.close(handle: %h3)
+              Console.println(val: [=[Read from ]=] ++ file_path ++ [=[:\n]=] ++ read_content)
+          end
+      end
     catch e ->
-      stdio.println(val: [=[File operation failed]=])
-    endtry
-  endinject
+      Console.println(val: [=[File operation failed]=])
+    end
+  end
 
   return ()
-endfn
+end

@@ -1,26 +1,19 @@
 use super::ast::*;
-use chumsky::prelude::*;
-
-type P<T> = BoxedParser<'static, char, T, Simple<char>>;
+use super::lexer::{self, Token, TokenKind};
 
 const KEYWORDS: &[&str] = &[
     "let",
     "fn",
     "do",
-    "endfn",
+    "end",
     "return",
     "if",
     "else",
-    "endif",
     "match",
-    "endmatch",
     "case",
     "task",
-    "endtask",
     "conc",
-    "endconc",
     "port",
-    "endport",
     "type",
     "import",
     "from",
@@ -30,264 +23,761 @@ const KEYWORDS: &[&str] = &[
     "raise",
     "try",
     "catch",
-    "endtry",
     "handler",
-    "endhandler",
     "inject",
-    "endinject",
     "exception",
     "external",
 ];
 
-fn ident() -> impl Parser<char, String, Error = Simple<char>> + Clone {
-    text::ident().padded().try_map(|s: String, span| {
-        if KEYWORDS.contains(&s.as_str()) {
-            Err(Simple::custom(span, format!("Keyword '{}' is reserved", s)))
-        } else {
-            Ok(s)
+fn is_keyword(s: &str) -> bool {
+    KEYWORDS.contains(&s)
+}
+
+#[derive(Debug, Clone)]
+pub struct ParseError {
+    pub message: String,
+    pub span: Span,
+}
+
+impl std::fmt::Display for ParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Parse error at {:?}: {}", self.span, self.message)
+    }
+}
+
+struct Parser {
+    tokens: Vec<Token>,
+    pos: usize,
+}
+
+impl Parser {
+    fn new(tokens: Vec<Token>) -> Self {
+        Parser { tokens, pos: 0 }
+    }
+
+    fn peek(&self) -> &TokenKind {
+        &self.tokens[self.pos].kind
+    }
+
+    fn peek_span(&self) -> Span {
+        self.tokens[self.pos].span.clone()
+    }
+
+    fn at_end(&self) -> bool {
+        matches!(self.peek(), TokenKind::Eof)
+    }
+
+    fn advance(&mut self) -> &Token {
+        let tok = &self.tokens[self.pos];
+        if !self.at_end() {
+            self.pos += 1;
         }
-    })
-}
+        tok
+    }
 
-fn sigil() -> impl Parser<char, Sigil, Error = Simple<char>> + Clone {
-    choice((
-        just('~').to(Sigil::Mutable),
-        just('%').to(Sigil::Linear),
-        just('&').to(Sigil::Borrow),
-    ))
-    .or(empty().to(Sigil::Immutable))
-}
+    fn expect(&mut self, kind: &TokenKind) -> Result<&Token, ParseError> {
+        if std::mem::discriminant(self.peek()) == std::mem::discriminant(kind) {
+            Ok(self.advance())
+        } else {
+            Err(ParseError {
+                message: format!("expected {:?}, got {:?}", kind, self.peek()),
+                span: self.peek_span(),
+            })
+        }
+    }
 
-fn line_comment_parser() -> impl Parser<char, (), Error = Simple<char>> + Clone {
-    just("//")
-        .then(take_until(choice((just('\n'), end().to('\n')))))
-        .ignored()
-}
-
-fn block_comment_parser() -> impl Parser<char, (), Error = Simple<char>> + Clone {
-    just("/*").then(take_until(just("*/"))).ignored()
-}
-
-fn comment_parser() -> impl Parser<char, (), Error = Simple<char>> + Clone {
-    choice((line_comment_parser(), block_comment_parser())).padded()
-}
-
-fn type_parser() -> P<Type> {
-    recursive(|t: Recursive<'_, char, Type, Simple<char>>| {
-        let base = choice((
-            text::keyword("i32").to(Type::I32),
-            text::keyword("i64").to(Type::I64),
-            text::keyword("f32").to(Type::F32),
-            text::keyword("f64").to(Type::F64),
-            text::keyword("float").to(Type::F64), // backward-compatible alias
-            text::keyword("bool").to(Type::Bool),
-            text::keyword("string").to(Type::String),
-            text::keyword("unit").to(Type::Unit),
-            text::keyword("handler")
-                .padded()
-                .ignore_then(ident())
-                .map(Type::Handler),
-            text::keyword("ref")
-                .padded()
-                .ignore_then(t.clone().delimited_by(just('('), just(')')))
-                .map(|inner| Type::Ref(Box::new(inner))),
-            just('&')
-                .padded()
-                .ignore_then(t.clone())
-                .map(|inner| Type::Borrow(Box::new(inner))),
-            just('%')
-                .padded()
-                .ignore_then(t.clone())
-                .map(|inner| Type::Linear(Box::new(inner))),
-            ident()
-                .then_ignore(just(':').padded())
-                .then(t.clone())
-                .separated_by(just(',').padded())
-                .delimited_by(just('{'), just('}'))
-                .map(Type::Record),
-            t.clone()
-                .delimited_by(just('['), just(']'))
-                .map(|inner| Type::UserDefined("List".to_string(), vec![inner])),
-            t.clone()
-                .delimited_by(just("[|"), just("|]"))
-                .map(|inner| Type::Array(Box::new(inner))),
-            ident().map(|n| Type::UserDefined(n, vec![])),
-        ));
-
-        let generic = ident()
-            .then(
-                t.clone()
-                    .separated_by(just(',').padded())
-                    .delimited_by(just('<'), just('>')),
-            )
-            .map(|(base, args)| Type::UserDefined(base, args));
-
-        let arrow = ident()
-            .then_ignore(just(':').padded())
-            .then(t.clone())
-            .map(|(n, t)| (n, t))
-            .or(t.clone().map(|t| ("_".to_string(), t)))
-            .separated_by(just(',').padded())
-            .delimited_by(just('('), just(')'))
-            .then_ignore(just("->").padded())
-            .then(t.clone())
-            .then(
-                text::keyword("require")
-                    .padded()
-                    .ignore_then(choice((
-                        t.clone()
-                            .separated_by(just(',').padded())
-                            .then(just('|').padded().ignore_then(t.clone()).or_not())
-                            .delimited_by(just('{'), just('}'))
-                            .map(|(reqs, tail)| Type::Row(reqs, tail.map(Box::new))),
-                        t.clone(),
-                    )))
-                    .or_not(),
-            )
-            .then(
-                text::keyword("effect")
-                    .padded()
-                    .ignore_then(choice((
-                        t.clone()
-                            .separated_by(just(',').padded())
-                            .then(just('|').padded().ignore_then(t.clone()).or_not())
-                            .delimited_by(just('{'), just('}'))
-                            .map(|(effs, tail)| Type::Row(effs, tail.map(Box::new))),
-                        t.clone(),
-                    )))
-                    .or_not(),
-            )
-            .map(|(((params, ret), requires), effects)| {
-                Type::Arrow(
-                    params,
-                    Box::new(ret),
-                    Box::new(requires.unwrap_or(Type::Row(vec![], None))),
-                    Box::new(effects.unwrap_or(Type::Row(vec![], None))),
-                )
-            });
-
-        arrow.or(generic).or(base).padded()
-    })
-    .boxed()
-}
-
-fn bracket_string_parser() -> impl Parser<char, String, Error = Simple<char>> + Clone {
-    let equals = just('=').repeated().collect::<String>();
-    just('[')
-        .ignore_then(equals)
-        .then_ignore(just('['))
-        .then_with(|eqs| {
-            let terminator = format!("]{}]", eqs);
-            let terminator_c = terminator.chars().collect::<Vec<_>>();
-
-            let newline_err = |span| Simple::custom(span, "unclosed string literal");
-
-            if eqs.len() >= 2 {
-                // Raw mode: no escapes, and newline is rejected immediately.
-                just(terminator_c.clone())
-                    .not()
-                    .try_map(move |c: char, span| {
-                        if c == '\n' || c == '\r' {
-                            Err(newline_err(span))
-                        } else {
-                            Ok(c)
-                        }
+    fn expect_ident(&mut self) -> Result<String, ParseError> {
+        match self.peek().clone() {
+            TokenKind::Ident(s) => {
+                self.advance();
+                if is_keyword(&s) {
+                    Err(ParseError {
+                        message: format!("Keyword '{}' is reserved", s),
+                        span: self.tokens[self.pos - 1].span.clone(),
                     })
-                    .repeated()
-                    .collect::<String>()
-                    .then_ignore(just(terminator_c))
-                    .boxed()
-            } else {
-                // Interpreted mode: process escape sequences
-                let escape = just('\\').ignore_then(choice((
-                    just('n').to('\n'),
-                    just('r').to('\r'),
-                    just('t').to('\t'),
-                    just('\\').to('\\'),
-                    any(), // \X → X for any other X (including \] to break terminator)
-                )));
-                // Any single char that is neither \ nor the start of the terminator
-                let normal_char = just(terminator_c.clone()).not().try_map(|c: char, span| {
-                    if c == '\\' {
-                        Err(Simple::custom(span, "backslash starts escape"))
-                    } else if c == '\n' || c == '\r' {
-                        Err(Simple::custom(span, "unclosed string literal"))
-                    } else {
-                        Ok(c)
+                } else {
+                    Ok(s)
+                }
+            }
+            _ => Err(ParseError {
+                message: format!("expected identifier, got {:?}", self.peek()),
+                span: self.peek_span(),
+            }),
+        }
+    }
+
+    fn match_token(&mut self, kind: &TokenKind) -> bool {
+        if std::mem::discriminant(self.peek()) == std::mem::discriminant(kind) {
+            self.advance();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn match_keyword(&mut self, kw: &TokenKind) -> bool {
+        if self.peek() == kw {
+            self.advance();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Check for contextual keyword (token is Ident with specific text)
+    fn is_contextual(&self, kw: &str) -> bool {
+        matches!(self.peek(), TokenKind::Ident(ref s) if s == kw)
+    }
+
+    /// Match and consume a contextual keyword
+    fn match_contextual(&mut self, kw: &str) -> bool {
+        if self.is_contextual(kw) {
+            self.advance();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Expect a contextual keyword
+    fn expect_contextual(&mut self, kw: &str) -> Result<(), ParseError> {
+        if self.match_contextual(kw) {
+            Ok(())
+        } else {
+            Err(ParseError {
+                message: format!("expected '{}', got {:?}", kw, self.peek()),
+                span: self.peek_span(),
+            })
+        }
+    }
+
+    // ---- Type Parsing ----
+
+    fn parse_type(&mut self) -> Result<Type, ParseError> {
+        // Try arrow type first: (params) -> ret [require ...] [effect ...]
+        if matches!(self.peek(), TokenKind::LParen) {
+            let saved = self.pos;
+            if let Ok(t) = self.try_parse_arrow_type() {
+                return Ok(t);
+            }
+            self.pos = saved;
+        }
+        self.parse_type_atom()
+    }
+
+    fn try_parse_arrow_type(&mut self) -> Result<Type, ParseError> {
+        self.expect(&TokenKind::LParen)?;
+        let params = self.parse_arrow_params()?;
+        self.expect(&TokenKind::RParen)?;
+        self.expect(&TokenKind::Arrow)?;
+        let ret = self.parse_type()?;
+        let requires = if self.match_keyword(&TokenKind::Require) {
+            self.parse_row_or_type()?
+        } else {
+            Type::Row(vec![], None)
+        };
+        let effects = if self.match_keyword(&TokenKind::Effect) {
+            self.parse_row_or_type()?
+        } else {
+            Type::Row(vec![], None)
+        };
+        Ok(Type::Arrow(
+            params,
+            Box::new(ret),
+            Box::new(requires),
+            Box::new(effects),
+        ))
+    }
+
+    fn parse_arrow_params(&mut self) -> Result<Vec<(String, Type)>, ParseError> {
+        let mut params = Vec::new();
+        if matches!(self.peek(), TokenKind::RParen) {
+            return Ok(params);
+        }
+        params.push(self.parse_arrow_param()?);
+        while self.match_token(&TokenKind::Comma) {
+            params.push(self.parse_arrow_param()?);
+        }
+        Ok(params)
+    }
+
+    fn parse_arrow_param(&mut self) -> Result<(String, Type), ParseError> {
+        // Try named: ident : type
+        let saved = self.pos;
+        if let Ok(name) = self.expect_ident() {
+            if self.match_token(&TokenKind::Colon) {
+                let typ = self.parse_type()?;
+                return Ok((name, typ));
+            }
+        }
+        // Fallback: just a type, use "_" as name
+        self.pos = saved;
+        let typ = self.parse_type()?;
+        Ok(("_".to_string(), typ))
+    }
+
+    fn parse_row_or_type(&mut self) -> Result<Type, ParseError> {
+        if matches!(self.peek(), TokenKind::LBrace) {
+            self.parse_row_type()
+        } else {
+            self.parse_type()
+        }
+    }
+
+    fn parse_row_type(&mut self) -> Result<Type, ParseError> {
+        self.expect(&TokenKind::LBrace)?;
+        let mut items = Vec::new();
+        if !matches!(self.peek(), TokenKind::RBrace) {
+            items.push(self.parse_type()?);
+            while self.match_token(&TokenKind::Comma) {
+                if matches!(self.peek(), TokenKind::RBrace) {
+                    break;
+                }
+                items.push(self.parse_type()?);
+            }
+        }
+        let tail = if self.match_token(&TokenKind::Pipe) {
+            Some(Box::new(self.parse_type()?))
+        } else {
+            None
+        };
+        self.expect(&TokenKind::RBrace)?;
+        Ok(Type::Row(items, tail))
+    }
+
+    fn parse_type_atom(&mut self) -> Result<Type, ParseError> {
+        match self.peek().clone() {
+            TokenKind::Ident(ref s) => {
+                let s = s.clone();
+                match s.as_str() {
+                    "i32" => {
+                        self.advance();
+                        Ok(Type::I32)
                     }
-                });
-
-                choice((escape, normal_char))
-                    .repeated()
-                    .collect::<String>()
-                    .then_ignore(just(terminator_c))
-                    .boxed()
+                    "i64" => {
+                        self.advance();
+                        Ok(Type::I64)
+                    }
+                    "f32" => {
+                        self.advance();
+                        Ok(Type::F32)
+                    }
+                    "f64" => {
+                        self.advance();
+                        Ok(Type::F64)
+                    }
+                    "float" => {
+                        self.advance();
+                        Ok(Type::F64)
+                    }
+                    "bool" => {
+                        self.advance();
+                        Ok(Type::Bool)
+                    }
+                    "string" => {
+                        self.advance();
+                        Ok(Type::String)
+                    }
+                    "unit" => {
+                        self.advance();
+                        Ok(Type::Unit)
+                    }
+                    "ref" => {
+                        self.advance();
+                        self.expect(&TokenKind::LParen)?;
+                        let inner = self.parse_type()?;
+                        self.expect(&TokenKind::RParen)?;
+                        Ok(Type::Ref(Box::new(inner)))
+                    }
+                    _ => {
+                        // UserDefined name, possibly with generic args
+                        let name = self.expect_ident()?;
+                        if matches!(self.peek(), TokenKind::Lt) {
+                            let args = self.parse_generic_args()?;
+                            Ok(Type::UserDefined(name, args))
+                        } else {
+                            Ok(Type::UserDefined(name, vec![]))
+                        }
+                    }
+                }
             }
-        })
-}
-
-fn literal() -> impl Parser<char, Literal, Error = Simple<char>> + Clone {
-    let digits = filter(|c: &char| c.is_ascii_digit())
-        .repeated()
-        .at_least(1)
-        .collect::<String>();
-
-    let number = just('-')
-        .or_not()
-        .then(digits.clone())
-        .then(just('.').ignore_then(digits.clone()).or_not())
-        .map(|((sign, int_part), frac_part)| {
-            let sign_str = if sign.is_some() { "-" } else { "" };
-            if let Some(frac) = frac_part {
-                let s = format!("{}{}.{}", sign_str, int_part, frac);
-                Literal::Float(s.parse::<f64>().unwrap())
-            } else {
-                let s = format!("{}{}", sign_str, int_part);
-                Literal::Int(s.parse::<i64>().unwrap())
+            TokenKind::Handler => {
+                self.advance();
+                let name = self.expect_ident()?;
+                Ok(Type::Handler(name, Box::new(Type::Row(vec![], None))))
             }
-        });
+            TokenKind::Ampersand => {
+                self.advance();
+                let inner = self.parse_type()?;
+                Ok(Type::Borrow(Box::new(inner)))
+            }
+            TokenKind::Percent => {
+                self.advance();
+                let inner = self.parse_type()?;
+                Ok(Type::Linear(Box::new(inner)))
+            }
+            TokenKind::LBrace => {
+                // Record type or row type
+                // Try record: { name: type, ... }
+                let saved = self.pos;
+                if let Ok(record) = self.try_parse_record_type() {
+                    return Ok(record);
+                }
+                self.pos = saved;
+                // row type
+                self.parse_row_type()
+            }
+            TokenKind::LBracket => {
+                // List type: [T]
+                self.advance();
+                let inner = self.parse_type()?;
+                self.expect(&TokenKind::RBracket)?;
+                Ok(Type::UserDefined("List".to_string(), vec![inner]))
+            }
+            TokenKind::LBracketPipe => {
+                // Array type: [| T |]
+                self.advance();
+                let inner = self.parse_type()?;
+                self.expect(&TokenKind::RBracketPipe)?;
+                Ok(Type::Array(Box::new(inner)))
+            }
+            _ => Err(ParseError {
+                message: format!("expected type, got {:?}", self.peek()),
+                span: self.peek_span(),
+            }),
+        }
+    }
 
-    let bool_lit = choice((
-        text::keyword("true").to(true),
-        text::keyword("false").to(false),
-    ))
-    .map(Literal::Bool);
+    fn try_parse_record_type(&mut self) -> Result<Type, ParseError> {
+        self.expect(&TokenKind::LBrace)?;
+        let mut fields = Vec::new();
+        if matches!(self.peek(), TokenKind::RBrace) {
+            self.advance();
+            return Ok(Type::Record(fields));
+        }
+        // First field: ident : type
+        let name = self.expect_ident()?;
+        self.expect(&TokenKind::Colon)?;
+        let typ = self.parse_type()?;
+        fields.push((name, typ));
+        while self.match_token(&TokenKind::Comma) {
+            if matches!(self.peek(), TokenKind::RBrace) {
+                break;
+            }
+            let name = self.expect_ident()?;
+            self.expect(&TokenKind::Colon)?;
+            let typ = self.parse_type()?;
+            fields.push((name, typ));
+        }
+        self.expect(&TokenKind::RBrace)?;
+        Ok(Type::Record(fields))
+    }
 
-    let unit_lit = just("()").to(Literal::Unit);
-    let str_lit = bracket_string_parser().map(Literal::String);
+    fn parse_generic_args(&mut self) -> Result<Vec<Type>, ParseError> {
+        self.expect(&TokenKind::Lt)?;
+        let mut args = Vec::new();
+        args.push(self.parse_type()?);
+        while self.match_token(&TokenKind::Comma) {
+            args.push(self.parse_type()?);
+        }
+        self.expect(&TokenKind::Gt)?;
+        Ok(args)
+    }
 
-    choice((number, bool_lit, unit_lit, str_lit)).padded()
-}
+    // ---- Sigil parsing ----
 
-fn expr_parser() -> P<Spanned<Expr>> {
-    recursive(|expr| {
-        let path = ident()
-            .separated_by(just('.'))
-            .at_least(1)
-            .map(|v| v.join("."));
+    fn parse_sigil(&mut self) -> Sigil {
+        match self.peek() {
+            TokenKind::Tilde => {
+                self.advance();
+                Sigil::Mutable
+            }
+            TokenKind::Percent => {
+                self.advance();
+                Sigil::Linear
+            }
+            TokenKind::Ampersand => {
+                self.advance();
+                Sigil::Borrow
+            }
+            _ => Sigil::Immutable,
+        }
+    }
 
-        let call_arg = ident().then_ignore(just(':').padded()).then(expr.clone());
-        let call_args = call_arg
-            .separated_by(just(','))
-            .delimited_by(just('('), just(')'));
+    // ---- Literal parsing ----
 
-        let simple_call = path
-            .clone()
-            .then(call_args)
-            .map(|(func, args)| Expr::Call { func, args });
+    fn parse_literal(&mut self) -> Result<Literal, ParseError> {
+        match self.peek().clone() {
+            TokenKind::Int(n) => {
+                self.advance();
+                Ok(Literal::Int(n))
+            }
+            TokenKind::Float(n) => {
+                self.advance();
+                Ok(Literal::Float(n))
+            }
+            TokenKind::True => {
+                self.advance();
+                Ok(Literal::Bool(true))
+            }
+            TokenKind::False => {
+                self.advance();
+                Ok(Literal::Bool(false))
+            }
+            TokenKind::StringLit(ref s) => {
+                let s = s.clone();
+                self.advance();
+                Ok(Literal::String(s))
+            }
+            _ => Err(ParseError {
+                message: format!("expected literal, got {:?}", self.peek()),
+                span: self.peek_span(),
+            }),
+        }
+    }
 
-        let record_field = ident().then_ignore(just(':').padded()).then(expr.clone());
-        let record = record_field
-            .separated_by(just(','))
-            .delimited_by(just('{'), just('}'))
-            .map(Expr::Record);
+    // ---- Pattern parsing ----
 
-        let list = expr
-            .clone()
-            .separated_by(just(',').padded())
-            .allow_trailing()
-            .delimited_by(just('['), just(']'))
-            .map_with_span(|items, span| {
+    fn parse_pattern(&mut self) -> Result<Spanned<Pattern>, ParseError> {
+        let start = self.peek_span().start;
+
+        match self.peek().clone() {
+            TokenKind::LBrace => {
+                // Record pattern
+                self.advance();
+                let mut fields = Vec::new();
+                let mut open = false;
+                if !matches!(self.peek(), TokenKind::RBrace) {
+                    loop {
+                        if matches!(self.peek(), TokenKind::Ident(ref s) if s == "_") {
+                            self.advance();
+                            if open {
+                                return Err(ParseError {
+                                    message: "duplicate _".to_string(),
+                                    span: start..self.peek_span().end,
+                                });
+                            }
+                            open = true;
+                        } else {
+                            if open {
+                                return Err(ParseError {
+                                    message: "_ must be the last element".to_string(),
+                                    span: start..self.peek_span().end,
+                                });
+                            }
+                            let name = self.expect_ident()?;
+                            self.expect(&TokenKind::Colon)?;
+                            let pat = self.parse_pattern()?;
+                            fields.push((name, pat));
+                        }
+                        if !self.match_token(&TokenKind::Comma) {
+                            break;
+                        }
+                        if matches!(self.peek(), TokenKind::RBrace) {
+                            break;
+                        }
+                    }
+                }
+                let end = self.peek_span().end;
+                self.expect(&TokenKind::RBrace)?;
+                Ok(Spanned {
+                    node: Pattern::Record(fields, open),
+                    span: start..end,
+                })
+            }
+            TokenKind::Ident(ref s) if s == "_" => {
+                self.advance();
+                let end = self.tokens[self.pos - 1].span.end;
+                Ok(Spanned {
+                    node: Pattern::Wildcard,
+                    span: start..end,
+                })
+            }
+            TokenKind::Ident(ref s) if s.chars().next().map_or(false, |c| c.is_ascii_uppercase()) => {
+                // Constructor pattern
+                let name = s.clone();
+                self.advance();
+                if matches!(self.peek(), TokenKind::LParen) {
+                    self.advance();
+                    let mut args = Vec::new();
+                    if !matches!(self.peek(), TokenKind::RParen) {
+                        args.push(self.parse_ctor_pat_arg()?);
+                        while self.match_token(&TokenKind::Comma) {
+                            args.push(self.parse_ctor_pat_arg()?);
+                        }
+                    }
+                    let end = self.peek_span().end;
+                    self.expect(&TokenKind::RParen)?;
+                    Ok(Spanned {
+                        node: Pattern::Constructor(name, args),
+                        span: start..end,
+                    })
+                } else {
+                    let end = self.tokens[self.pos - 1].span.end;
+                    Ok(Spanned {
+                        node: Pattern::Constructor(name, vec![]),
+                        span: start..end,
+                    })
+                }
+            }
+            _ => {
+                // Try literal
+                let saved = self.pos;
+                if let Ok(lit) = self.parse_literal() {
+                    let end = self.tokens[self.pos - 1].span.end;
+                    return Ok(Spanned {
+                        node: Pattern::Literal(lit),
+                        span: start..end,
+                    });
+                }
+                self.pos = saved;
+
+                // Variable pattern (with sigil)
+                let sigil = self.parse_sigil();
+                let name = self.expect_ident()?;
+                let end = self.tokens[self.pos - 1].span.end;
+                Ok(Spanned {
+                    node: Pattern::Variable(name, sigil),
+                    span: start..end,
+                })
+            }
+        }
+    }
+
+    fn parse_ctor_pat_arg(&mut self) -> Result<(Option<String>, Spanned<Pattern>), ParseError> {
+        // Try labeled: ident : pattern
+        let saved = self.pos;
+        if let Ok(name) = self.expect_ident() {
+            if self.match_token(&TokenKind::Colon) {
+                let pat = self.parse_pattern()?;
+                return Ok((Some(name), pat));
+            }
+        }
+        self.pos = saved;
+        let pat = self.parse_pattern()?;
+        Ok((None, pat))
+    }
+
+    // ---- Param parsing ----
+
+    fn parse_param(&mut self) -> Result<Param, ParseError> {
+        let sigil = self.parse_sigil();
+        let name = self.expect_ident()?;
+        self.expect(&TokenKind::Colon)?;
+        let typ = self.parse_type()?;
+        Ok(Param { name, sigil, typ })
+    }
+
+    fn parse_params(&mut self) -> Result<Vec<Param>, ParseError> {
+        self.expect(&TokenKind::LParen)?;
+        let mut params = Vec::new();
+        if !matches!(self.peek(), TokenKind::RParen) {
+            params.push(self.parse_param()?);
+            while self.match_token(&TokenKind::Comma) {
+                params.push(self.parse_param()?);
+            }
+        }
+        self.expect(&TokenKind::RParen)?;
+        Ok(params)
+    }
+
+    // ---- Require/Effect parsing (shared helper) ----
+
+    fn parse_require_clause(&mut self) -> Result<Type, ParseError> {
+        if self.match_keyword(&TokenKind::Require) {
+            self.parse_row_or_type()
+        } else {
+            Ok(Type::Row(vec![], None))
+        }
+    }
+
+    fn parse_effect_clause(&mut self) -> Result<Type, ParseError> {
+        if self.match_keyword(&TokenKind::Effect) {
+            self.parse_row_or_type()
+        } else {
+            Ok(Type::Row(vec![], None))
+        }
+    }
+
+    // ---- Expression parsing ----
+
+    fn parse_expr(&mut self) -> Result<Spanned<Expr>, ParseError> {
+        self.parse_binary_expr()
+    }
+
+    fn parse_binary_expr(&mut self) -> Result<Spanned<Expr>, ParseError> {
+        let mut lhs = self.parse_postfix_expr()?;
+
+        loop {
+            let op = match self.peek() {
+                // Float operators (must check before int)
+                TokenKind::EqDot => BinaryOp::FEq,
+                TokenKind::NeDot => BinaryOp::FNe,
+                TokenKind::LeDot => BinaryOp::FLe,
+                TokenKind::GeDot => BinaryOp::FGe,
+                TokenKind::LtDot => BinaryOp::FLt,
+                TokenKind::GtDot => BinaryOp::FGt,
+                TokenKind::PlusDot => BinaryOp::FAdd,
+                TokenKind::MinusDot => BinaryOp::FSub,
+                TokenKind::StarDot => BinaryOp::FMul,
+                TokenKind::SlashDot => BinaryOp::FDiv,
+                // Int operators
+                TokenKind::EqEq => BinaryOp::Eq,
+                TokenKind::Ne => BinaryOp::Ne,
+                TokenKind::Le => BinaryOp::Le,
+                TokenKind::Ge => BinaryOp::Ge,
+                TokenKind::Lt => BinaryOp::Lt,
+                TokenKind::Gt => BinaryOp::Gt,
+                TokenKind::PlusPlus => BinaryOp::Concat,
+                TokenKind::Plus => BinaryOp::Add,
+                TokenKind::Minus => BinaryOp::Sub,
+                TokenKind::Star => BinaryOp::Mul,
+                TokenKind::Slash => BinaryOp::Div,
+                TokenKind::AndAnd => BinaryOp::And,
+                TokenKind::OrOr => BinaryOp::Or,
+                _ => break,
+            };
+            self.advance();
+            let rhs = self.parse_postfix_expr()?;
+            let span = lhs.span.start..rhs.span.end;
+            lhs = Spanned {
+                node: Expr::BinaryOp(Box::new(lhs), op, Box::new(rhs)),
+                span,
+            };
+        }
+
+        Ok(lhs)
+    }
+
+    fn parse_postfix_expr(&mut self) -> Result<Spanned<Expr>, ParseError> {
+        let mut expr = self.parse_atom()?;
+
+        loop {
+            match self.peek() {
+                TokenKind::Dot => {
+                    self.advance();
+                    let name = self.expect_ident()?;
+                    let end = self.tokens[self.pos - 1].span.end;
+                    let span = expr.span.start..end;
+                    expr = Spanned {
+                        node: Expr::FieldAccess(Box::new(expr), name),
+                        span,
+                    };
+                }
+                TokenKind::LBracket => {
+                    self.advance();
+                    let index = self.parse_expr()?;
+                    let end = self.peek_span().end;
+                    self.expect(&TokenKind::RBracket)?;
+                    let span = expr.span.start..end;
+                    expr = Spanned {
+                        node: Expr::Index(Box::new(expr), Box::new(index)),
+                        span,
+                    };
+                }
+                _ => break,
+            }
+        }
+
+        Ok(expr)
+    }
+
+    fn parse_atom(&mut self) -> Result<Spanned<Expr>, ParseError> {
+        let start = self.peek_span().start;
+
+        match self.peek().clone() {
+            // Parenthesized expression or unit literal ()
+            TokenKind::LParen => {
+                self.advance();
+                // Check for unit literal ()
+                if matches!(self.peek(), TokenKind::RParen) {
+                    self.advance();
+                    let end = self.tokens[self.pos - 1].span.end;
+                    return Ok(Spanned {
+                        node: Expr::Literal(Literal::Unit),
+                        span: start..end,
+                    });
+                }
+                let inner = self.parse_expr()?;
+                self.expect(&TokenKind::RParen)?;
+                let end = self.tokens[self.pos - 1].span.end;
+                Ok(Spanned {
+                    node: inner.node,
+                    span: start..end,
+                })
+            }
+
+            // raise expr
+            TokenKind::Raise => {
+                self.advance();
+                let expr = self.parse_expr()?;
+                let end = expr.span.end;
+                Ok(Spanned {
+                    node: Expr::Raise(Box::new(expr)),
+                    span: start..end,
+                })
+            }
+
+            // &sigil ident (borrow expression)
+            TokenKind::Ampersand => {
+                self.advance();
+                let sigil = self.parse_sigil();
+                let name = self.expect_ident()?;
+                let end = self.tokens[self.pos - 1].span.end;
+                Ok(Spanned {
+                    node: Expr::Borrow(name, sigil),
+                    span: start..end,
+                })
+            }
+
+            // fn ... (lambda)
+            TokenKind::Fn => {
+                self.parse_lambda(start)
+            }
+
+            // handler Port do ... end
+            TokenKind::Handler => {
+                self.parse_handler_expr(start)
+            }
+
+            // Array literal [| ... |]
+            TokenKind::LBracketPipe => {
+                self.advance();
+                let mut items = Vec::new();
+                if !matches!(self.peek(), TokenKind::RBracketPipe) {
+                    items.push(self.parse_expr()?);
+                    while self.match_token(&TokenKind::Comma) {
+                        if matches!(self.peek(), TokenKind::RBracketPipe) {
+                            break;
+                        }
+                        items.push(self.parse_expr()?);
+                    }
+                }
+                let end = self.peek_span().end;
+                self.expect(&TokenKind::RBracketPipe)?;
+                Ok(Spanned {
+                    node: Expr::Array(items),
+                    span: start..end,
+                })
+            }
+
+            // List literal [...]
+            TokenKind::LBracket => {
+                self.advance();
+                let mut items = Vec::new();
+                if !matches!(self.peek(), TokenKind::RBracket) {
+                    items.push(self.parse_expr()?);
+                    while self.match_token(&TokenKind::Comma) {
+                        if matches!(self.peek(), TokenKind::RBracket) {
+                            break;
+                        }
+                        items.push(self.parse_expr()?);
+                    }
+                }
+                let end_span = self.peek_span();
+                self.expect(&TokenKind::RBracket)?;
+                // Desugar to Cons/Nil
+                let list_span = start..end_span.end;
                 let mut acc = Expr::Constructor("Nil".to_string(), vec![]);
                 for item in items.into_iter().rev() {
                     acc = Expr::Constructor(
@@ -298,1109 +788,1094 @@ fn expr_parser() -> P<Spanned<Expr>> {
                                 Some("rest".to_string()),
                                 Spanned {
                                     node: acc,
-                                    span: span.clone(),
+                                    span: list_span.clone(),
                                 },
                             ),
                         ],
                     );
                 }
-                acc
-            });
+                Ok(Spanned {
+                    node: acc,
+                    span: list_span,
+                })
+            }
 
-        let array = expr
-            .clone()
-            .separated_by(just(',').padded())
-            .allow_trailing()
-            .delimited_by(just("[|"), just("|]"))
-            .map(Expr::Array);
-
-        // Prevent `f(10)` from being silently parsed as two statements (`f` and `(10)`).
-        // If `(` follows an identifier, it must be parsed as a call form.
-        let var = sigil()
-            .then(ident())
-            .then_ignore(just('(').not().rewind())
-            .map(|(s, n)| Expr::Variable(n, s));
-
-        let lambda_param = sigil()
-            .then(ident())
-            .then_ignore(just(':').padded())
-            .then(type_parser())
-            .map(|((sigil, name), typ)| Param { name, sigil, typ });
-
-        let lambda_stmt = recursive(|stmt| {
-            let let_stmt = text::keyword("let")
-                .padded()
-                .ignore_then(sigil())
-                .then(ident())
-                .then(just(':').padded().ignore_then(type_parser()).or_not())
-                .then(just('=').padded().ignore_then(expr.clone()))
-                .map_with_span(|(((s, n), t), v), span| Spanned {
-                    node: Stmt::Let {
-                        name: n,
-                        sigil: s,
-                        typ: t,
-                        value: v,
-                    },
-                    span,
-                });
-
-            let return_stmt = text::keyword("return")
-                .padded()
-                .ignore_then(expr.clone())
-                .map_with_span(|v, span| Spanned {
-                    node: Stmt::Return(v),
-                    span,
-                });
-
-            let assign_stmt = expr
-                .clone()
-                .then_ignore(just("<-").padded())
-                .then(expr.clone())
-                .map_with_span(|(target, value), span| Spanned {
-                    node: Stmt::Assign { target, value },
-                    span,
-                });
-
-            let if_stmt = text::keyword("if")
-                .padded()
-                .ignore_then(expr.clone())
-                .then_ignore(text::keyword("then").padded())
-                .then(stmt.clone().repeated())
-                .then(
-                    text::keyword("else")
-                        .padded()
-                        .ignore_then(stmt.clone().repeated())
-                        .or_not(),
-                )
-                .then_ignore(text::keyword("endif").padded())
-                .map_with_span(|((cond, then_branch), else_branch), span| Spanned {
-                    node: Stmt::Expr(Spanned {
-                        node: Expr::If {
-                            cond: Box::new(cond),
-                            then_branch,
-                            else_branch,
-                        },
-                        span: span.clone(),
-                    }),
-                    span,
-                });
-
-            let pattern = recursive(|p: Recursive<'_, char, Spanned<Pattern>, Simple<char>>| {
-                let variable = sigil().then(ident()).map_with_span(|(s, n), span| Spanned {
-                    node: Pattern::Variable(n, s),
-                    span,
-                });
-                let lit = literal().map_with_span(|l, span| Spanned {
-                    node: Pattern::Literal(l),
-                    span,
-                });
-                let wildcard = just('_').padded().map_with_span(|_, span| Spanned {
-                    node: Pattern::Wildcard,
-                    span,
-                });
-
-                let ctor_pat_arg = ident()
-                    .then_ignore(just(':').padded())
-                    .then(p.clone())
-                    .map(|(label, pat)| (Some(label), pat))
-                    .or(p.clone().map(|pat| (None, pat)));
-
-                let constructor = ident()
-                    .then(
-                        ctor_pat_arg
-                            .separated_by(just(',').padded())
-                            .delimited_by(just('('), just(')')),
-                    )
-                    .map_with_span(|(c, args), span| Spanned {
-                        node: Pattern::Constructor(c, args),
-                        span,
-                    });
-
-                let record_pat = choice((
-                    just('_').padded().to(None),
-                    ident()
-                        .then_ignore(just(':').padded())
-                        .then(p.clone())
-                        .map(Some),
-                ))
-                .separated_by(just(',').padded())
-                .allow_trailing()
-                .delimited_by(just('{'), just('}'))
-                .try_map(|entries, span| {
-                    let mut fields = Vec::new();
-                    let mut open = false;
-                    for e in entries {
-                        match e {
-                            Some(f) => {
-                                if open {
-                                    return Err(Simple::custom(span, "_ must be the last element"));
-                                }
-                                fields.push(f);
-                            }
-                            None => {
-                                if open {
-                                    return Err(Simple::custom(span, "duplicate _"));
-                                }
-                                open = true;
-                            }
+            // Record literal { name: expr, ... }
+            TokenKind::LBrace => {
+                self.advance();
+                let mut fields = Vec::new();
+                if !matches!(self.peek(), TokenKind::RBrace) {
+                    let name = self.expect_ident()?;
+                    self.expect(&TokenKind::Colon)?;
+                    let val = self.parse_expr()?;
+                    fields.push((name, val));
+                    while self.match_token(&TokenKind::Comma) {
+                        if matches!(self.peek(), TokenKind::RBrace) {
+                            break;
                         }
+                        let name = self.expect_ident()?;
+                        self.expect(&TokenKind::Colon)?;
+                        let val = self.parse_expr()?;
+                        fields.push((name, val));
                     }
-                    Ok(Spanned {
-                        node: Pattern::Record(fields, open),
-                        span,
-                    })
-                });
-
-                choice((constructor, record_pat, lit, wildcard, variable))
-            });
-
-            let match_case = text::keyword("case")
-                .padded()
-                .ignore_then(pattern)
-                .then_ignore(just("->").padded())
-                .then(stmt.clone().repeated())
-                .map(|(pattern, body)| MatchCase { pattern, body });
-
-            let match_stmt = text::keyword("match")
-                .padded()
-                .ignore_then(expr.clone())
-                .then_ignore(text::keyword("do").padded())
-                .then(match_case.repeated())
-                .then_ignore(text::keyword("endmatch").padded())
-                .map_with_span(|(target, cases), span| Spanned {
-                    node: Stmt::Expr(Spanned {
-                        node: Expr::Match {
-                            target: Box::new(target),
-                            cases,
-                        },
-                        span: span.clone(),
-                    }),
-                    span,
-                });
-
-            let effects_rule = text::keyword("effect")
-                .padded()
-                .ignore_then(
-                    ident()
-                        .separated_by(just(',').padded())
-                        .delimited_by(just('{').padded(), just('}').padded()),
-                )
-                .map(|effs| {
-                    Type::Row(
-                        effs.into_iter()
-                            .map(|e| Type::UserDefined(e, vec![]))
-                            .collect(),
-                        None,
-                    )
-                });
-
-            let conc_block = text::keyword("conc")
-                .padded()
-                .ignore_then(text::keyword("do").padded())
-                .then(
-                    text::keyword("task")
-                        .padded()
-                        .ignore_then(ident().padded())
-                        .then(effects_rule.or_not())
-                        .then_ignore(text::keyword("do").padded())
-                        .then(stmt.clone().repeated())
-                        .then_ignore(text::keyword("endtask").padded())
-                        .map(|((name, effects), body)| Function {
-                            name,
-                            is_public: false,
-                            params: vec![],
-                            ret_type: Type::Unit,
-                            requires: Type::Row(vec![], None),
-                            effects: effects.unwrap_or(Type::Row(vec![], None)),
-                            body,
-                            type_params: vec![],
-                        })
-                        .repeated(),
-                )
-                .then_ignore(text::keyword("endconc").padded())
-                .map_with_span(|(_, tasks), span| Spanned {
-                    node: Stmt::Conc(tasks),
-                    span,
-                });
-
-            let try_stmt = text::keyword("try")
-                .padded()
-                .ignore_then(stmt.clone().repeated())
-                .then(
-                    text::keyword("catch")
-                        .padded()
-                        .ignore_then(ident())
-                        .then_ignore(just("->").padded())
-                        .then(stmt.clone().repeated()),
-                )
-                .then_ignore(text::keyword("endtry").padded())
-                .map_with_span(|(body, (catch_param, catch_body)), span| Spanned {
-                    node: Stmt::Try {
-                        body,
-                        catch_param,
-                        catch_body,
-                    },
-                    span,
-                });
-
-            let comment = comment_parser().map_with_span(|_, span| Spanned {
-                node: Stmt::Comment,
-                span,
-            });
-
-            let basic_stmt = choice((
-                comment.boxed(),
-                let_stmt.boxed(),
-                return_stmt.boxed(),
-                assign_stmt.boxed(),
-            ));
-
-            let inject_stmt = text::keyword("inject")
-                .padded()
-                .ignore_then(ident().separated_by(just(',').padded()).at_least(1))
-                .then_ignore(text::keyword("do").padded())
-                .then(stmt.clone().repeated())
-                .then_ignore(text::keyword("endinject").padded())
-                .map_with_span(|(handlers, body), span| Spanned {
-                    node: Stmt::Inject { handlers, body },
-                    span,
-                });
-
-            let complex_stmt = choice((
-                if_stmt.boxed(),
-                match_stmt.boxed(),
-                try_stmt.boxed(),
-                conc_block.boxed(),
-                inject_stmt.boxed(),
-            ));
-
-            basic_stmt
-                .or(complex_stmt)
-                .or(expr
-                    .clone()
-                    .map(|v| {
-                        let span = v.span.clone();
-                        Spanned {
-                            node: Stmt::Expr(v),
-                            span,
-                        }
-                    })
-                    .boxed())
-                .padded()
-        });
-
-        let lambda = text::keyword("fn")
-            .padded()
-            .ignore_then(
-                just('<')
-                    .ignore_then(ident().separated_by(just(',').padded()))
-                    .then_ignore(just('>'))
-                    .or_not(),
-            )
-            .then(
-                lambda_param
-                    .clone()
-                    .separated_by(just(','))
-                    .delimited_by(just('('), just(')')),
-            )
-            .then_ignore(just("->").padded())
-            .then(type_parser())
-            .then(
-                text::keyword("require")
-                    .padded()
-                    .ignore_then(choice((
-                        type_parser()
-                            .separated_by(just(',').padded())
-                            .then(just('|').padded().ignore_then(type_parser()).or_not())
-                            .delimited_by(just('{'), just('}'))
-                            .map(|(reqs, tail)| Type::Row(reqs, tail.map(Box::new))),
-                        type_parser(),
-                    )))
-                    .or_not(),
-            )
-            .then(
-                text::keyword("effect")
-                    .padded()
-                    .ignore_then(choice((
-                        type_parser()
-                            .separated_by(just(',').padded())
-                            .then(just('|').padded().ignore_then(type_parser()).or_not())
-                            .delimited_by(just('{'), just('}'))
-                            .map(|(effs, tail)| Type::Row(effs, tail.map(Box::new))),
-                        type_parser(),
-                    )))
-                    .or_not(),
-            )
-            .then_ignore(text::keyword("do").padded())
-            .then(lambda_stmt.clone().repeated())
-            .then_ignore(text::keyword("endfn").padded())
-            .map(
-                |(((((type_params, params), ret_type), requires), effects), body)| Expr::Lambda {
-                    type_params: type_params.unwrap_or_default(),
-                    params,
-                    ret_type,
-                    requires: requires.unwrap_or(Type::Row(vec![], None)),
-                    effects: effects.unwrap_or(Type::Row(vec![], None)),
-                    body,
-                },
-            );
-
-        // handler Port do fn ... endfn endhandler — coeffect handler as expression
-        let handler_fn_in_expr = text::keyword("fn")
-            .padded()
-            .ignore_then(ident())
-            .then(
-                just('<')
-                    .ignore_then(ident().separated_by(just(',').padded()))
-                    .then_ignore(just('>'))
-                    .or_not(),
-            )
-            .then(
-                lambda_param
-                    .clone()
-                    .separated_by(just(','))
-                    .delimited_by(just('('), just(')')),
-            )
-            .then_ignore(just("->").padded())
-            .then(type_parser())
-            .then(
-                text::keyword("require")
-                    .padded()
-                    .ignore_then(choice((
-                        type_parser()
-                            .separated_by(just(',').padded())
-                            .then(just('|').padded().ignore_then(type_parser()).or_not())
-                            .delimited_by(just('{'), just('}'))
-                            .map(|(reqs, tail)| Type::Row(reqs, tail.map(Box::new))),
-                        type_parser(),
-                    )))
-                    .or_not(),
-            )
-            .then(
-                text::keyword("effect")
-                    .padded()
-                    .ignore_then(choice((
-                        type_parser()
-                            .separated_by(just(',').padded())
-                            .then(just('|').padded().ignore_then(type_parser()).or_not())
-                            .delimited_by(just('{'), just('}'))
-                            .map(|(effs, tail)| Type::Row(effs, tail.map(Box::new))),
-                        type_parser(),
-                    )))
-                    .or_not(),
-            )
-            .then_ignore(text::keyword("do").padded())
-            .then(lambda_stmt.clone().repeated())
-            .then_ignore(text::keyword("endfn").padded())
-            .map(
-                |((((((name, type_params), params), ret_type), requires), effects), body)| {
-                    Function {
-                        name,
-                        is_public: false,
-                        type_params: type_params.unwrap_or_default(),
-                        params,
-                        ret_type,
-                        requires: requires.unwrap_or(Type::Row(vec![], None)),
-                        effects: effects.unwrap_or(Type::Row(vec![], None)),
-                        body,
-                    }
-                },
-            );
-
-        let handler_expr = text::keyword("handler")
-            .padded()
-            .ignore_then(ident())
-            .then_ignore(text::keyword("do").padded())
-            .then(handler_fn_in_expr.repeated())
-            .then_ignore(text::keyword("endhandler").padded())
-            .map(|(coeffect_name, functions)| Expr::Handler {
-                coeffect_name,
-                functions,
-            });
-
-        let ctor_arg = ident()
-            .then_ignore(just(':').padded())
-            .then(expr.clone())
-            .map(|(label, e)| (Some(label), e))
-            .or(expr.clone().map(|e| (None, e)));
-
-        let constructor = ident()
-            .try_map(|name, span| {
-                if name
-                    .chars()
-                    .next()
-                    .map(|c| c.is_ascii_uppercase())
-                    .unwrap_or(false)
-                {
-                    Ok(name)
-                } else {
-                    Err(Simple::custom(
-                        span,
-                        "constructor must start with uppercase letter",
-                    ))
                 }
-            })
-            .then(
-                ctor_arg
-                    .separated_by(just(',').padded())
-                    .delimited_by(just('('), just(')')),
-            )
-            .map(|(name, args)| Expr::Constructor(name, args));
+                let end = self.peek_span().end;
+                self.expect(&TokenKind::RBrace)?;
+                Ok(Spanned {
+                    node: Expr::Record(fields),
+                    span: start..end,
+                })
+            }
 
-        let raise = text::keyword("raise")
-            .padded()
-            .ignore_then(expr.clone())
-            .map(|e| Expr::Raise(Box::new(e)));
+            // Literals
+            TokenKind::Int(_) | TokenKind::Float(_) | TokenKind::True | TokenKind::False
+            | TokenKind::StringLit(_) => {
+                let lit = self.parse_literal()?;
+                let end = self.tokens[self.pos - 1].span.end;
+                Ok(Spanned {
+                    node: Expr::Literal(lit),
+                    span: start..end,
+                })
+            }
 
-        let borrow_expr = just('&')
-            .padded()
-            .ignore_then(sigil())
-            .then(ident())
-            .map(|(s, n)| Expr::Borrow(n, s));
+            // Sigil + ident (variable with sigil)
+            TokenKind::Tilde | TokenKind::Percent => {
+                let sigil = self.parse_sigil();
+                let name = self.expect_ident()?;
+                let end = self.tokens[self.pos - 1].span.end;
+                Ok(Spanned {
+                    node: Expr::Variable(name, sigil),
+                    span: start..end,
+                })
+            }
 
-        let atom: P<Spanned<Expr>> = choice((
-            expr.clone()
-                .delimited_by(just('('), just(')'))
-                .map(|s| s.node),
-            raise,
-            borrow_expr,
-            lambda,
-            handler_expr,
-            constructor,
-            simple_call,
-            record,
-            array,
-            list,
-            literal().map(Expr::Literal),
-            var,
-        ))
-        .padded()
-        .map_with_span(|node, span| Spanned { node, span })
-        .boxed();
+            // Identifier — could be variable, function call, constructor, or path call
+            TokenKind::Ident(ref s) => {
+                let s = s.clone();
+                let is_upper = s.chars().next().map_or(false, |c| c.is_ascii_uppercase());
 
-        enum Postfix {
-            Field(String, Span),
-            Index(Spanned<Expr>),
+                // First, try to read a dotted path: a.b.c
+                // This handles both Console.println(...) calls and module.fn(...) calls
+                let first = self.expect_ident()?;
+                let mut path = first.clone();
+                let mut segments = vec![first];
+
+                while matches!(self.peek(), TokenKind::Dot) {
+                    let saved = self.pos;
+                    self.advance(); // consume dot
+                    match self.peek() {
+                        TokenKind::Ident(_) => {
+                            let next = self.expect_ident()?;
+                            path = format!("{}.{}", path, next);
+                            segments.push(next);
+                        }
+                        _ => {
+                            // Not a dotted path, put back the dot
+                            self.pos = saved;
+                            break;
+                        }
+                    }
+                }
+
+                if matches!(self.peek(), TokenKind::LParen) {
+                    if segments.len() > 1 || !is_upper {
+                        // Multi-segment path call or lowercase function call
+                        self.advance();
+                        let args = self.parse_call_args()?;
+                        let end = self.tokens[self.pos - 1].span.end;
+                        return Ok(Spanned {
+                            node: Expr::Call { func: path, args },
+                            span: start..end,
+                        });
+                    } else {
+                        // Single uppercase name with () — Constructor call
+                        self.advance();
+                        let args = self.parse_ctor_args()?;
+                        let end = self.tokens[self.pos - 1].span.end;
+                        return Ok(Spanned {
+                            node: Expr::Constructor(path, args),
+                            span: start..end,
+                        });
+                    }
+                }
+
+                // No parens following
+                if is_upper && segments.len() == 1 {
+                    // Single uppercase: Constructor with no args
+                    let end = self.tokens[self.pos - 1].span.end;
+                    Ok(Spanned {
+                        node: Expr::Constructor(path, vec![]),
+                        span: start..end,
+                    })
+                } else if segments.len() == 1 {
+                    // Single lowercase: Variable
+                    let end = self.tokens[self.pos - 1].span.end;
+                    Ok(Spanned {
+                        node: Expr::Variable(path, Sigil::Immutable),
+                        span: start..end,
+                    })
+                } else {
+                    // Multi-segment without parens: parse as first segment variable,
+                    // then let postfix handle the rest via FieldAccess
+                    // We need to rewind back to after the first segment
+                    let first_name = segments[0].clone();
+                    // Find the position right after the first ident
+                    // We need to go back. The first ident was consumed at start.
+                    // After that, each .ident consumed 2 tokens (dot + ident)
+                    let extra_tokens = (segments.len() - 1) * 2;
+                    self.pos -= extra_tokens;
+                    let end = self.tokens[self.pos - 1].span.end;
+                    Ok(Spanned {
+                        node: Expr::Variable(first_name, Sigil::Immutable),
+                        span: start..end,
+                    })
+                }
+            }
+
+            // Negative number as atom (when preceded by minus as prefix, not binary)
+            TokenKind::Minus => {
+                // Check if next is a number literal
+                if matches!(self.peek_at_offset(1), Some(TokenKind::Int(_) | TokenKind::Float(_))) {
+                    self.advance(); // consume minus
+                    match self.peek().clone() {
+                        TokenKind::Int(n) => {
+                            self.advance();
+                            let end = self.tokens[self.pos - 1].span.end;
+                            Ok(Spanned {
+                                node: Expr::Literal(Literal::Int(-n)),
+                                span: start..end,
+                            })
+                        }
+                        TokenKind::Float(n) => {
+                            self.advance();
+                            let end = self.tokens[self.pos - 1].span.end;
+                            Ok(Spanned {
+                                node: Expr::Literal(Literal::Float(-n)),
+                                span: start..end,
+                            })
+                        }
+                        _ => unreachable!()
+                    }
+                } else {
+                    Err(ParseError {
+                        message: format!("unexpected token {:?}", self.peek()),
+                        span: self.peek_span(),
+                    })
+                }
+            }
+
+            _ => Err(ParseError {
+                message: format!("expected expression, got {:?}", self.peek()),
+                span: self.peek_span(),
+            }),
+        }
+    }
+
+    fn peek_at_offset(&self, offset: usize) -> Option<&TokenKind> {
+        self.tokens.get(self.pos + offset).map(|t| &t.kind)
+    }
+
+    fn parse_call_args(&mut self) -> Result<Vec<(String, Spanned<Expr>)>, ParseError> {
+        let mut args = Vec::new();
+        if !matches!(self.peek(), TokenKind::RParen) {
+            args.push(self.parse_call_arg()?);
+            while self.match_token(&TokenKind::Comma) {
+                args.push(self.parse_call_arg()?);
+            }
+        }
+        self.expect(&TokenKind::RParen)?;
+        Ok(args)
+    }
+
+    fn parse_call_arg(&mut self) -> Result<(String, Spanned<Expr>), ParseError> {
+        // label : expr
+        let name = self.expect_ident()?;
+        self.expect(&TokenKind::Colon)?;
+        let val = self.parse_expr()?;
+        Ok((name, val))
+    }
+
+    fn parse_ctor_args(&mut self) -> Result<Vec<(Option<String>, Spanned<Expr>)>, ParseError> {
+        let mut args = Vec::new();
+        if !matches!(self.peek(), TokenKind::RParen) {
+            args.push(self.parse_ctor_arg()?);
+            while self.match_token(&TokenKind::Comma) {
+                args.push(self.parse_ctor_arg()?);
+            }
+        }
+        self.expect(&TokenKind::RParen)?;
+        Ok(args)
+    }
+
+    fn parse_ctor_arg(&mut self) -> Result<(Option<String>, Spanned<Expr>), ParseError> {
+        // Try labeled: ident : expr
+        let saved = self.pos;
+        if let Ok(name) = self.expect_ident() {
+            if self.match_token(&TokenKind::Colon) {
+                let val = self.parse_expr()?;
+                return Ok((Some(name), val));
+            }
+        }
+        self.pos = saved;
+        let val = self.parse_expr()?;
+        Ok((None, val))
+    }
+
+    fn parse_lambda(&mut self, start: usize) -> Result<Spanned<Expr>, ParseError> {
+        self.advance(); // consume 'fn'
+
+        // Optional type params: <T, U>
+        let type_params = if matches!(self.peek(), TokenKind::Lt) {
+            self.advance();
+            let mut params = Vec::new();
+            params.push(self.expect_ident()?);
+            while self.match_token(&TokenKind::Comma) {
+                params.push(self.expect_ident()?);
+            }
+            self.expect(&TokenKind::Gt)?;
+            params
+        } else {
+            vec![]
+        };
+
+        let params = self.parse_params()?;
+        self.expect(&TokenKind::Arrow)?;
+        let ret_type = self.parse_type()?;
+        let requires = self.parse_require_clause()?;
+        let effects = self.parse_effect_clause()?;
+        self.expect(&TokenKind::Do)?;
+        let body = self.parse_stmt_list()?;
+        self.expect(&TokenKind::End)?;
+        let end = self.tokens[self.pos - 1].span.end;
+
+        Ok(Spanned {
+            node: Expr::Lambda {
+                type_params,
+                params,
+                ret_type,
+                requires,
+                effects,
+                body,
+            },
+            span: start..end,
+        })
+    }
+
+    fn parse_handler_expr(&mut self, start: usize) -> Result<Spanned<Expr>, ParseError> {
+        self.advance(); // consume 'handler'
+        let coeffect_name = self.expect_ident()?;
+
+        let requires = if self.match_keyword(&TokenKind::Require) {
+            self.parse_row_or_type()?
+        } else {
+            Type::Row(vec![], None)
+        };
+
+        self.expect(&TokenKind::Do)?;
+
+        let mut functions = Vec::new();
+        while matches!(self.peek(), TokenKind::Fn) {
+            functions.push(self.parse_handler_function()?);
         }
 
-        // Postfix ops: .ident and [expr]
-        let atom_with_postfix = atom
-            .clone()
-            .then(
-                choice((
-                    just('.')
-                        .ignore_then(ident())
-                        .map_with_span(|n, s| Postfix::Field(n, s)),
-                    expr.clone()
-                        .delimited_by(just('['), just(']'))
-                        .map(Postfix::Index),
-                ))
-                .repeated(),
-            )
-            .foldl(|lhs, post| match post {
-                Postfix::Field(name, name_span) => {
-                    let span = lhs.span.start..name_span.end;
-                    let node = Expr::FieldAccess(Box::new(lhs), name);
-                    Spanned { node, span }
-                }
-                Postfix::Index(index) => {
-                    let span = lhs.span.start..index.span.end;
-                    let node = Expr::Index(Box::new(lhs), Box::new(index));
-                    Spanned { node, span }
-                }
-            });
+        self.expect(&TokenKind::End)?;
+        let end = self.tokens[self.pos - 1].span.end;
 
-        let op = choice((
-            // Float operators (must come before int operators to handle overlap)
-            just("==.").to("==.".to_string()),
-            just("!=.").to("!=.".to_string()),
-            just("<=.").to("<=.".to_string()),
-            just(">=.").to(">=.".to_string()),
-            just("<.").to("<.".to_string()),
-            just(">.").to(">.".to_string()),
-            just("+.").to("+.".to_string()),
-            just("-.").to("-.".to_string()),
-            just("*.").to("*.".to_string()),
-            just("/.").to("/.".to_string()),
-            // Int/Generic operators
-            just("==").to("==".to_string()),
-            just("!=").to("!=".to_string()),
-            just("<=").to("<=".to_string()),
-            just(">=").to(">=".to_string()),
-            just("<").to("<".to_string()),
-            just(">").to(">".to_string()),
-            just("++").to("++".to_string()),
-            just("+").to("+".to_string()),
-            just("-").to("-".to_string()),
-            just("*").to("*".to_string()),
-            just("/").to("/".to_string()),
-        ))
-        .padded();
+        Ok(Spanned {
+            node: Expr::Handler {
+                coeffect_name,
+                requires,
+                functions,
+            },
+            span: start..end,
+        })
+    }
 
-        atom_with_postfix
-            .clone()
-            .then(op.then(atom_with_postfix).repeated())
-            .foldl(|lhs, (op, rhs)| {
-                let span = lhs.span.start..rhs.span.end;
-                let node = Expr::BinaryOp(Box::new(lhs), op, Box::new(rhs));
-                Spanned { node, span }
-            })
-    })
-    .boxed()
-}
+    fn parse_handler_function(&mut self) -> Result<Function, ParseError> {
+        self.expect(&TokenKind::Fn)?;
+        let name = self.expect_ident()?;
 
-/// Returns the statement parser used by the REPL and top-level program parser.
-pub fn stmt_parser() -> impl Parser<char, Spanned<Stmt>, Error = Simple<char>> {
-    recursive(|stmt| {
-        let expr = expr_parser();
+        let type_params = if matches!(self.peek(), TokenKind::Lt) {
+            self.advance();
+            let mut params = Vec::new();
+            params.push(self.expect_ident()?);
+            while self.match_token(&TokenKind::Comma) {
+                params.push(self.expect_ident()?);
+            }
+            self.expect(&TokenKind::Gt)?;
+            params
+        } else {
+            vec![]
+        };
 
-        let let_stmt = text::keyword("let")
-            .padded()
-            .ignore_then(sigil())
-            .then(ident())
-            .then(just(':').padded().ignore_then(type_parser()).or_not())
-            .then(just('=').padded().ignore_then(expr.clone()))
-            .map_with_span(|(((s, n), t), v), span| Spanned {
-                node: Stmt::Let {
-                    name: n,
-                    sigil: s,
-                    typ: t,
-                    value: v,
-                },
-                span,
-            });
+        let params = self.parse_params()?;
+        self.expect(&TokenKind::Arrow)?;
+        let ret_type = self.parse_type()?;
+        let requires = self.parse_require_clause()?;
+        let effects = self.parse_effect_clause()?;
+        self.expect(&TokenKind::Do)?;
+        let body = self.parse_stmt_list()?;
+        self.expect(&TokenKind::End)?;
 
-        let return_stmt = text::keyword("return")
-            .padded()
-            .ignore_then(expr.clone())
-            .map_with_span(|v, span| Spanned {
-                node: Stmt::Return(v),
-                span,
-            });
+        Ok(Function {
+            name,
+            is_public: false,
+            type_params,
+            params,
+            ret_type,
+            requires,
+            effects,
+            body,
+        })
+    }
 
-        let assign_stmt = expr
-            .clone()
-            .then_ignore(just("<-").padded())
-            .then(expr.clone())
-            .map_with_span(|(target, value), span| Spanned {
-                node: Stmt::Assign { target, value },
-                span,
-            });
+    // ---- Statement parsing ----
 
-        let if_stmt = text::keyword("if")
-            .padded()
-            .ignore_then(expr.clone())
-            .then_ignore(text::keyword("then").padded())
-            .then(stmt.clone().repeated())
-            .then(
-                text::keyword("else")
-                    .padded()
-                    .ignore_then(stmt.clone().repeated())
-                    .or_not(),
-            )
-            .then_ignore(text::keyword("endif").padded())
-            .map_with_span(|((cond, then_branch), else_branch), span| Spanned {
-                node: Stmt::Expr(Spanned {
-                    node: Expr::If {
-                        cond: Box::new(cond),
-                        then_branch,
-                        else_branch,
-                    },
-                    span: span.clone(),
-                }),
-                span,
-            });
+    fn parse_stmt_list(&mut self) -> Result<Vec<Spanned<Stmt>>, ParseError> {
+        let mut stmts = Vec::new();
+        loop {
+            // Check for terminators
+            match self.peek() {
+                TokenKind::End | TokenKind::Else | TokenKind::Catch | TokenKind::Case
+                | TokenKind::Eof => break,
+                _ => {}
+            }
+            stmts.push(self.parse_stmt()?);
+        }
+        Ok(stmts)
+    }
 
-        let pattern = recursive(|p: Recursive<'_, char, Spanned<Pattern>, Simple<char>>| {
-            let variable = sigil().then(ident()).map_with_span(|(s, n), span| Spanned {
-                node: Pattern::Variable(n, s),
-                span,
-            });
-            let lit = literal().map_with_span(|l, span| Spanned {
-                node: Pattern::Literal(l),
-                span,
-            });
-            let wildcard = just('_').padded().map_with_span(|_, span| Spanned {
-                node: Pattern::Wildcard,
-                span,
-            });
+    fn parse_stmt(&mut self) -> Result<Spanned<Stmt>, ParseError> {
+        let start = self.peek_span().start;
 
-            let ctor_pat_arg = ident()
-                .then_ignore(just(':').padded())
-                .then(p.clone())
-                .map(|(label, pat)| (Some(label), pat))
-                .or(p.clone().map(|pat| (None, pat)));
-
-            let constructor = ident()
-                .then(
-                    ctor_pat_arg
-                        .separated_by(just(',').padded())
-                        .delimited_by(just('('), just(')')),
-                )
-                .map_with_span(|(c, args), span| Spanned {
-                    node: Pattern::Constructor(c, args),
-                    span,
-                });
-
-            let record_pat = choice((
-                just('_').padded().to(None),
-                ident()
-                    .then_ignore(just(':').padded())
-                    .then(p.clone())
-                    .map(Some),
-            ))
-            .separated_by(just(',').padded())
-            .allow_trailing()
-            .delimited_by(just('{'), just('}'))
-            .try_map(|entries, span| {
-                let mut fields = Vec::new();
-                let mut open = false;
-                for e in entries {
-                    match e {
-                        Some(f) => {
-                            if open {
-                                return Err(Simple::custom(span, "_ must be the last element"));
-                            }
-                            fields.push(f);
-                        }
-                        None => {
-                            if open {
-                                return Err(Simple::custom(span, "duplicate _"));
-                            }
-                            open = true;
-                        }
-                    }
-                }
+        match self.peek().clone() {
+            TokenKind::Let => {
+                self.advance();
+                let sigil = self.parse_sigil();
+                let name = self.expect_ident()?;
+                let typ = if self.match_token(&TokenKind::Colon) {
+                    Some(self.parse_type()?)
+                } else {
+                    None
+                };
+                self.expect(&TokenKind::Eq)?;
+                let value = self.parse_expr()?;
+                let end = value.span.end;
                 Ok(Spanned {
-                    node: Pattern::Record(fields, open),
-                    span,
-                })
-            });
-
-            choice((constructor, record_pat, lit, wildcard, variable))
-        });
-
-        let match_case = text::keyword("case")
-            .padded()
-            .ignore_then(pattern)
-            .then_ignore(just("->").padded())
-            .then(stmt.clone().repeated())
-            .map(|(pattern, body)| MatchCase { pattern, body });
-
-        let match_stmt = text::keyword("match")
-            .padded()
-            .ignore_then(expr.clone())
-            .then_ignore(text::keyword("do").padded())
-            .then(match_case.repeated())
-            .then_ignore(text::keyword("endmatch").padded())
-            .map_with_span(|(target, cases), span| Spanned {
-                node: Stmt::Expr(Spanned {
-                    node: Expr::Match {
-                        target: Box::new(target),
-                        cases,
+                    node: Stmt::Let {
+                        name,
+                        sigil,
+                        typ,
+                        value,
                     },
-                    span: span.clone(),
-                }),
-                span,
-            });
+                    span: start..end,
+                })
+            }
 
-        let effects_rule = text::keyword("effect")
-            .padded()
-            .ignore_then(
-                ident()
-                    .separated_by(just(',').padded())
-                    .delimited_by(just('{').padded(), just('}').padded()),
-            )
-            .map(|effs| {
+            TokenKind::Return => {
+                self.advance();
+                let value = self.parse_expr()?;
+                let end = value.span.end;
+                Ok(Spanned {
+                    node: Stmt::Return(value),
+                    span: start..end,
+                })
+            }
+
+            TokenKind::If => {
+                self.parse_if_stmt(start)
+            }
+
+            TokenKind::Match => {
+                self.parse_match_stmt(start)
+            }
+
+            TokenKind::Try => {
+                self.parse_try_stmt(start)
+            }
+
+            TokenKind::Conc => {
+                self.parse_conc_block(start)
+            }
+
+            TokenKind::Inject => {
+                self.parse_inject_stmt(start)
+            }
+
+            _ => {
+                // Could be: assign or expression statement
+                let expr = self.parse_expr()?;
+
+                // Check for assignment: expr <- value
+                if matches!(self.peek(), TokenKind::Assign) {
+                    self.advance();
+                    let value = self.parse_expr()?;
+                    let end = value.span.end;
+                    Ok(Spanned {
+                        node: Stmt::Assign {
+                            target: expr,
+                            value,
+                        },
+                        span: start..end,
+                    })
+                } else {
+                    let end = expr.span.end;
+                    Ok(Spanned {
+                        node: Stmt::Expr(expr),
+                        span: start..end,
+                    })
+                }
+            }
+        }
+    }
+
+    fn parse_if_stmt(&mut self, start: usize) -> Result<Spanned<Stmt>, ParseError> {
+        self.advance(); // consume 'if'
+        let cond = self.parse_expr()?;
+        self.expect_contextual("then")?;
+        let then_branch = self.parse_stmt_list()?;
+        let else_branch = if self.match_keyword(&TokenKind::Else) {
+            Some(self.parse_stmt_list()?)
+        } else {
+            None
+        };
+        self.expect(&TokenKind::End)?;
+        let end = self.tokens[self.pos - 1].span.end;
+
+        Ok(Spanned {
+            node: Stmt::Expr(Spanned {
+                node: Expr::If {
+                    cond: Box::new(cond),
+                    then_branch,
+                    else_branch,
+                },
+                span: start..end,
+            }),
+            span: start..end,
+        })
+    }
+
+    fn parse_match_stmt(&mut self, start: usize) -> Result<Spanned<Stmt>, ParseError> {
+        self.advance(); // consume 'match'
+        let target = self.parse_expr()?;
+        self.expect(&TokenKind::Do)?;
+
+        let mut cases = Vec::new();
+        while matches!(self.peek(), TokenKind::Case) {
+            self.advance();
+            let pattern = self.parse_pattern()?;
+            self.expect(&TokenKind::Arrow)?;
+            let body = self.parse_stmt_list()?;
+            cases.push(MatchCase { pattern, body });
+        }
+
+        self.expect(&TokenKind::End)?;
+        let end = self.tokens[self.pos - 1].span.end;
+
+        Ok(Spanned {
+            node: Stmt::Expr(Spanned {
+                node: Expr::Match {
+                    target: Box::new(target),
+                    cases,
+                },
+                span: start..end,
+            }),
+            span: start..end,
+        })
+    }
+
+    fn parse_try_stmt(&mut self, start: usize) -> Result<Spanned<Stmt>, ParseError> {
+        self.advance(); // consume 'try'
+        let body = self.parse_stmt_list()?;
+        self.expect(&TokenKind::Catch)?;
+        let catch_param = self.expect_ident()?;
+        self.expect(&TokenKind::Arrow)?;
+        let catch_body = self.parse_stmt_list()?;
+        self.expect(&TokenKind::End)?;
+        let end = self.tokens[self.pos - 1].span.end;
+
+        Ok(Spanned {
+            node: Stmt::Try {
+                body,
+                catch_param,
+                catch_body,
+            },
+            span: start..end,
+        })
+    }
+
+    fn parse_conc_block(&mut self, start: usize) -> Result<Spanned<Stmt>, ParseError> {
+        self.advance(); // consume 'conc'
+        self.expect(&TokenKind::Do)?;
+
+        let mut tasks = Vec::new();
+        while matches!(self.peek(), TokenKind::Task) {
+            self.advance();
+            let name = self.expect_ident()?;
+
+            let effects = if self.match_keyword(&TokenKind::Effect) {
+                let effs = self.parse_effect_ident_list()?;
                 Type::Row(
                     effs.into_iter()
                         .map(|e| Type::UserDefined(e, vec![]))
                         .collect(),
                     None,
                 )
+            } else {
+                Type::Row(vec![], None)
+            };
+
+            self.expect(&TokenKind::Do)?;
+            let body = self.parse_stmt_list()?;
+            self.expect(&TokenKind::End)?;
+
+            tasks.push(Function {
+                name,
+                is_public: false,
+                params: vec![],
+                ret_type: Type::Unit,
+                requires: Type::Row(vec![], None),
+                effects,
+                body,
+                type_params: vec![],
             });
+        }
 
-        let conc_block = text::keyword("conc")
-            .padded()
-            .ignore_then(text::keyword("do").padded())
-            .then(
-                text::keyword("task")
-                    .padded()
-                    .ignore_then(ident().padded())
-                    .then(effects_rule.or_not())
-                    .then_ignore(text::keyword("do").padded())
-                    .then(stmt.clone().repeated())
-                    .then_ignore(text::keyword("endtask").padded())
-                    .map(|((name, effects), body)| Function {
-                        name,
-                        is_public: false,
-                        params: vec![],
-                        ret_type: Type::Unit,
-                        requires: Type::Row(vec![], None),
-                        effects: effects.unwrap_or(Type::Row(vec![], None)),
-                        body,
-                        type_params: vec![],
-                    })
-                    .repeated(),
-            )
-            .then_ignore(text::keyword("endconc").padded())
-            .map_with_span(|(_, tasks), span| Spanned {
-                node: Stmt::Conc(tasks),
-                span,
-            });
+        self.expect(&TokenKind::End)?;
+        let end = self.tokens[self.pos - 1].span.end;
 
-        let try_stmt = text::keyword("try")
-            .padded()
-            .ignore_then(stmt.clone().repeated())
-            .then(
-                text::keyword("catch")
-                    .padded()
-                    .ignore_then(ident())
-                    .then_ignore(just("->").padded())
-                    .then(stmt.clone().repeated()),
-            )
-            .then_ignore(text::keyword("endtry").padded())
-            .map_with_span(|(body, (catch_param, catch_body)), span| Spanned {
-                node: Stmt::Try {
-                    body,
-                    catch_param,
-                    catch_body,
-                },
-                span,
-            });
-
-        let inject_stmt = text::keyword("inject")
-            .padded()
-            .ignore_then(ident().separated_by(just(',').padded()).at_least(1))
-            .then_ignore(text::keyword("do").padded())
-            .then(stmt.clone().repeated())
-            .then_ignore(text::keyword("endinject").padded())
-            .map_with_span(|(handlers, body), span| Spanned {
-                node: Stmt::Inject { handlers, body },
-                span,
-            });
-
-        let comment = comment_parser().map_with_span(|_, span| Spanned {
-            node: Stmt::Comment,
-            span,
-        });
-
-        let basic_stmt = choice((
-            comment.boxed(),
-            let_stmt.boxed(),
-            return_stmt.boxed(),
-            assign_stmt.boxed(),
-        ));
-
-        let complex_stmt = choice((
-            if_stmt.boxed(),
-            match_stmt.boxed(),
-            try_stmt.boxed(),
-            conc_block.boxed(),
-            inject_stmt.boxed(),
-        ));
-
-        basic_stmt
-            .or(complex_stmt)
-            .or(expr
-                .map(|v| {
-                    let span = v.span.clone();
-                    Spanned {
-                        node: Stmt::Expr(v),
-                        span,
-                    }
-                })
-                .boxed())
-            .padded()
-    })
-    .boxed()
-}
-
-/// Returns the full Nexus program parser.
-pub fn parser() -> impl Parser<char, Program, Error = Simple<char>> {
-    let param = sigil()
-        .then(ident())
-        .then_ignore(just(':').padded())
-        .then(type_parser())
-        .map(|((sigil, name), typ)| Param { name, sigil, typ });
-
-    let vis = text::keyword("pub")
-        .padded()
-        .map(|_| true)
-        .or(empty().to(false));
-
-    let variant_field = ident()
-        .then_ignore(just(':').padded())
-        .then(type_parser())
-        .map(|(label, typ)| (Some(label), typ))
-        .or(type_parser().map(|typ| (None, typ)))
-        .boxed();
-
-    let variant_def = ident()
-        .then(
-            variant_field
-                .clone()
-                .separated_by(just(',').padded())
-                .delimited_by(just('('), just(')'))
-                .or_not(),
-        )
-        .map(|(name, fields)| VariantDef {
-            name,
-            fields: fields.unwrap_or_default(),
+        Ok(Spanned {
+            node: Stmt::Conc(tasks),
+            span: start..end,
         })
-        .boxed();
-
-    enum TypeBody {
-        Record(Vec<(String, Type)>),
-        Sum(Vec<VariantDef>),
     }
 
-    let type_def = vis
-        .clone()
-        .then(text::keyword("opaque").padded().or_not().map(|o| o.is_some()))
-        .then_ignore(text::keyword("type").padded())
-        .then(ident())
-        .then(
-            just('<')
-                .ignore_then(ident().separated_by(just(',').padded()))
-                .then_ignore(just('>'))
-                .or_not(),
-        )
-        .then_ignore(just('=').padded())
-        .then(choice((
-            ident()
-                .then_ignore(just(':').padded())
-                .then(type_parser())
-                .separated_by(just(','))
-                .delimited_by(just('{'), just('}'))
-                .map(TypeBody::Record),
-            variant_def
-                .clone()
-                .separated_by(just('|').padded())
-                .at_least(1)
-                .map(TypeBody::Sum),
-        )))
-        .map(|((((is_public, is_opaque), name), type_params), body)| {
-            let type_params = type_params.unwrap_or_default();
-            match body {
-                TypeBody::Record(fields) => TopLevel::TypeDef(TypeDef {
+    fn parse_effect_ident_list(&mut self) -> Result<Vec<String>, ParseError> {
+        self.expect(&TokenKind::LBrace)?;
+        let mut idents = Vec::new();
+        if !matches!(self.peek(), TokenKind::RBrace) {
+            idents.push(self.expect_ident()?);
+            while self.match_token(&TokenKind::Comma) {
+                idents.push(self.expect_ident()?);
+            }
+        }
+        self.expect(&TokenKind::RBrace)?;
+        Ok(idents)
+    }
+
+    fn parse_inject_stmt(&mut self, start: usize) -> Result<Spanned<Stmt>, ParseError> {
+        self.advance(); // consume 'inject'
+
+        let mut handlers = Vec::new();
+        handlers.push(self.parse_dotted_ident()?);
+        while self.match_token(&TokenKind::Comma) {
+            handlers.push(self.parse_dotted_ident()?);
+        }
+
+        self.expect(&TokenKind::Do)?;
+        let body = self.parse_stmt_list()?;
+        self.expect(&TokenKind::End)?;
+        let end = self.tokens[self.pos - 1].span.end;
+
+        Ok(Spanned {
+            node: Stmt::Inject { handlers, body },
+            span: start..end,
+        })
+    }
+
+    fn parse_dotted_ident(&mut self) -> Result<String, ParseError> {
+        let mut path = self.expect_ident()?;
+        while matches!(self.peek(), TokenKind::Dot) {
+            self.advance();
+            let next = self.expect_ident()?;
+            path = format!("{}.{}", path, next);
+        }
+        Ok(path)
+    }
+
+    // ---- Top-level parsing ----
+
+    fn parse_program(&mut self) -> Result<Program, ParseError> {
+        let mut definitions = Vec::new();
+        while !self.at_end() {
+            let start = self.peek_span().start;
+            let def = self.parse_top_level()?;
+            let end = self.tokens[self.pos - 1].span.end;
+            definitions.push(Spanned {
+                node: def,
+                span: start..end,
+            });
+        }
+        Ok(Program { definitions })
+    }
+
+    fn parse_top_level(&mut self) -> Result<TopLevel, ParseError> {
+        match self.peek().clone() {
+            TokenKind::Pub => {
+                self.advance();
+                self.parse_top_level_pub(true)
+            }
+            TokenKind::Ident(ref s) if s == "opaque" => {
+                // opaque type ...
+                self.advance();
+                self.parse_type_def(false, true)
+            }
+            TokenKind::Type => {
+                self.parse_type_def(false, false)
+            }
+            TokenKind::Exception => {
+                self.parse_exception_def(false)
+            }
+            TokenKind::Import => {
+                self.parse_import_def()
+            }
+            TokenKind::Port => {
+                self.parse_port_def(false)
+            }
+            TokenKind::External => {
+                self.parse_external_def(false)
+            }
+            TokenKind::Let => {
+                self.parse_global_let(false)
+            }
+            _ => Err(ParseError {
+                message: format!("expected top-level definition, got {:?}", self.peek()),
+                span: self.peek_span(),
+            }),
+        }
+    }
+
+    fn parse_top_level_pub(&mut self, is_public: bool) -> Result<TopLevel, ParseError> {
+        match self.peek().clone() {
+            TokenKind::Ident(ref s) if s == "opaque" => {
+                self.advance();
+                self.parse_type_def(is_public, true)
+            }
+            TokenKind::Type => {
+                self.parse_type_def(is_public, false)
+            }
+            TokenKind::Exception => {
+                self.parse_exception_def(is_public)
+            }
+            TokenKind::Port => {
+                self.parse_port_def(is_public)
+            }
+            TokenKind::External => {
+                self.parse_external_def(is_public)
+            }
+            TokenKind::Let => {
+                self.parse_global_let(is_public)
+            }
+            _ => Err(ParseError {
+                message: format!("expected definition after 'pub', got {:?}", self.peek()),
+                span: self.peek_span(),
+            }),
+        }
+    }
+
+    fn parse_type_def(&mut self, is_public: bool, is_opaque: bool) -> Result<TopLevel, ParseError> {
+        self.expect(&TokenKind::Type)?;
+        let name = self.expect_ident()?;
+
+        let type_params = if matches!(self.peek(), TokenKind::Lt) {
+            self.advance();
+            let mut params = Vec::new();
+            params.push(self.expect_ident()?);
+            while self.match_token(&TokenKind::Comma) {
+                params.push(self.expect_ident()?);
+            }
+            self.expect(&TokenKind::Gt)?;
+            params
+        } else {
+            vec![]
+        };
+
+        self.expect(&TokenKind::Eq)?;
+
+        // Try record body { ... }
+        if matches!(self.peek(), TokenKind::LBrace) {
+            let saved = self.pos;
+            if let Ok(fields) = self.try_parse_record_body() {
+                return Ok(TopLevel::TypeDef(TypeDef {
                     name,
                     is_public,
                     type_params,
                     fields,
-                }),
-                TypeBody::Sum(variants) => TopLevel::Enum(EnumDef {
-                    name,
-                    is_public,
-                    is_opaque,
-                    type_params,
-                    variants,
-                }),
+                }));
             }
-        });
+            self.pos = saved;
+        }
 
-    let exception_def = vis
-        .clone()
-        .then_ignore(text::keyword("exception").padded())
-        .then(ident().try_map(|name, span| {
-            if name
-                .chars()
-                .next()
-                .map(|c| c.is_ascii_uppercase())
-                .unwrap_or(false)
-            {
-                Ok(name)
-            } else {
-                Err(Simple::custom(
-                    span,
-                    "exception constructor must start with uppercase letter",
-                ))
-            }
+        // Sum type: Variant1(args) | Variant2(args) | ...
+        let mut variants = Vec::new();
+        variants.push(self.parse_variant_def()?);
+        while self.match_token(&TokenKind::Pipe) {
+            variants.push(self.parse_variant_def()?);
+        }
+
+        Ok(TopLevel::Enum(EnumDef {
+            name,
+            is_public,
+            is_opaque,
+            type_params,
+            variants,
         }))
-        .then(
-            variant_field
-                .clone()
-                .separated_by(just(',').padded())
-                .delimited_by(just('('), just(')'))
-                .or_not(),
-        )
-        .map(|((is_public, name), fields)| {
-            TopLevel::Exception(ExceptionDef {
-                name,
-                is_public,
-                fields: fields.unwrap_or_default(),
+    }
+
+    fn try_parse_record_body(&mut self) -> Result<Vec<(String, Type)>, ParseError> {
+        self.expect(&TokenKind::LBrace)?;
+        let mut fields = Vec::new();
+        if !matches!(self.peek(), TokenKind::RBrace) {
+            let name = self.expect_ident()?;
+            self.expect(&TokenKind::Colon)?;
+            let typ = self.parse_type()?;
+            fields.push((name, typ));
+            while self.match_token(&TokenKind::Comma) {
+                if matches!(self.peek(), TokenKind::RBrace) {
+                    break;
+                }
+                let name = self.expect_ident()?;
+                self.expect(&TokenKind::Colon)?;
+                let typ = self.parse_type()?;
+                fields.push((name, typ));
+            }
+        }
+        self.expect(&TokenKind::RBrace)?;
+        Ok(fields)
+    }
+
+    fn parse_variant_def(&mut self) -> Result<VariantDef, ParseError> {
+        let name = self.expect_ident()?;
+        let fields = if matches!(self.peek(), TokenKind::LParen) {
+            self.advance();
+            let mut fields = Vec::new();
+            if !matches!(self.peek(), TokenKind::RParen) {
+                fields.push(self.parse_variant_field()?);
+                while self.match_token(&TokenKind::Comma) {
+                    fields.push(self.parse_variant_field()?);
+                }
+            }
+            self.expect(&TokenKind::RParen)?;
+            fields
+        } else {
+            vec![]
+        };
+        Ok(VariantDef { name, fields })
+    }
+
+    fn parse_variant_field(&mut self) -> Result<(Option<String>, Type), ParseError> {
+        // Try labeled: ident : type
+        let saved = self.pos;
+        if let Ok(name) = self.expect_ident() {
+            if self.match_token(&TokenKind::Colon) {
+                let typ = self.parse_type()?;
+                return Ok((Some(name), typ));
+            }
+        }
+        self.pos = saved;
+        let typ = self.parse_type()?;
+        Ok((None, typ))
+    }
+
+    fn parse_exception_def(&mut self, is_public: bool) -> Result<TopLevel, ParseError> {
+        self.expect(&TokenKind::Exception)?;
+        let name = self.expect_ident()?;
+        if !name.chars().next().map_or(false, |c| c.is_ascii_uppercase()) {
+            return Err(ParseError {
+                message: "exception constructor must start with uppercase letter".to_string(),
+                span: self.tokens[self.pos - 1].span.clone(),
+            });
+        }
+        let fields = if matches!(self.peek(), TokenKind::LParen) {
+            self.advance();
+            let mut fields = Vec::new();
+            if !matches!(self.peek(), TokenKind::RParen) {
+                fields.push(self.parse_variant_field()?);
+                while self.match_token(&TokenKind::Comma) {
+                    fields.push(self.parse_variant_field()?);
+                }
+            }
+            self.expect(&TokenKind::RParen)?;
+            fields
+        } else {
+            vec![]
+        };
+        Ok(TopLevel::Exception(ExceptionDef {
+            name,
+            is_public,
+            fields,
+        }))
+    }
+
+    fn parse_import_def(&mut self) -> Result<TopLevel, ParseError> {
+        self.expect(&TokenKind::Import)?;
+
+        match self.peek().clone() {
+            // import external path
+            TokenKind::External => {
+                self.advance();
+                let path = self.parse_import_path()?;
+                Ok(TopLevel::Import(Import {
+                    path,
+                    alias: None,
+                    items: vec![],
+                    is_external: true,
+                }))
+            }
+            // import { items } from path
+            // import { items }, * as alias from path
+            TokenKind::LBrace => {
+                self.advance();
+                let mut items = Vec::new();
+                if !matches!(self.peek(), TokenKind::RBrace) {
+                    items.push(self.expect_ident()?);
+                    while self.match_token(&TokenKind::Comma) {
+                        if matches!(self.peek(), TokenKind::RBrace) {
+                            break;
+                        }
+                        items.push(self.expect_ident()?);
+                    }
+                }
+                self.expect(&TokenKind::RBrace)?;
+
+                // Optional: , * as alias
+                let alias = if self.match_token(&TokenKind::Comma) {
+                    self.expect(&TokenKind::Star)?;
+                    self.expect_contextual("as")?;
+                    Some(self.expect_ident()?)
+                } else {
+                    None
+                };
+
+                self.expect(&TokenKind::From)?;
+                let path = self.parse_import_path()?;
+                Ok(TopLevel::Import(Import {
+                    path,
+                    alias,
+                    items,
+                    is_external: false,
+                }))
+            }
+            // import as alias from path
+            TokenKind::Ident(ref s) if s == "as" => {
+                self.advance();
+                let alias = self.expect_ident()?;
+                self.expect(&TokenKind::From)?;
+                let path = self.parse_import_path()?;
+                Ok(TopLevel::Import(Import {
+                    path,
+                    alias: Some(alias),
+                    items: vec![],
+                    is_external: false,
+                }))
+            }
+            // import from path
+            TokenKind::From => {
+                self.advance();
+                let path = self.parse_import_path()?;
+                Ok(TopLevel::Import(Import {
+                    path,
+                    alias: None,
+                    items: vec![],
+                    is_external: false,
+                }))
+            }
+            _ => Err(ParseError {
+                message: format!("expected import form, got {:?}", self.peek()),
+                span: self.peek_span(),
+            }),
+        }
+    }
+
+    fn parse_import_path(&mut self) -> Result<String, ParseError> {
+        // Import path is a sequence of idents, /, and . characters
+        // e.g. nxlib/stdlib/stdio.nx, math.wasm
+        // We collect from the token stream — paths consist of Ident, Slash, Dot tokens
+        let mut path = String::new();
+        loop {
+            match self.peek().clone() {
+                TokenKind::Ident(ref s) => {
+                    path.push_str(s);
+                    self.advance();
+                }
+                TokenKind::Slash => {
+                    path.push('/');
+                    self.advance();
+                }
+                TokenKind::Dot => {
+                    path.push('.');
+                    self.advance();
+                }
+                TokenKind::Minus => {
+                    path.push('-');
+                    self.advance();
+                }
+                _ => break,
+            }
+        }
+        if path.is_empty() {
+            return Err(ParseError {
+                message: "expected import path".to_string(),
+                span: self.peek_span(),
+            });
+        }
+        Ok(path)
+    }
+
+    fn parse_port_def(&mut self, is_public: bool) -> Result<TopLevel, ParseError> {
+        self.expect(&TokenKind::Port)?;
+        let name = self.expect_ident()?;
+        self.expect(&TokenKind::Do)?;
+
+        let mut functions = Vec::new();
+        while matches!(self.peek(), TokenKind::Fn) {
+            self.advance();
+            let fn_name = self.expect_ident()?;
+            let params = self.parse_params()?;
+            self.expect(&TokenKind::Arrow)?;
+            let ret_type = self.parse_type()?;
+            let requires = self.parse_require_clause()?;
+            let effects = self.parse_effect_clause()?;
+
+            functions.push(FunctionSignature {
+                name: fn_name,
+                params,
+                ret_type,
+                requires,
+                effects,
+            });
+        }
+
+        self.expect(&TokenKind::End)?;
+
+        Ok(TopLevel::Port(Port {
+            name,
+            is_public,
+            functions,
+        }))
+    }
+
+    fn parse_external_def(&mut self, is_public: bool) -> Result<TopLevel, ParseError> {
+        let start = self.peek_span().start;
+        self.expect(&TokenKind::External)?;
+        let name = self.expect_ident()?;
+        self.expect(&TokenKind::Eq)?;
+
+        // Bracket string for wasm symbol
+        let wasm_name = match self.peek().clone() {
+            TokenKind::StringLit(s) => {
+                self.advance();
+                s
+            }
+            _ => return Err(ParseError {
+                message: "expected bracket string for external symbol".to_string(),
+                span: self.peek_span(),
+            }),
+        };
+
+        self.expect(&TokenKind::Colon)?;
+
+        // Optional type params: <T, U>
+        let type_params = if matches!(self.peek(), TokenKind::Lt) {
+            self.advance();
+            let mut params = Vec::new();
+            params.push(self.expect_ident()?);
+            while self.match_token(&TokenKind::Comma) {
+                params.push(self.expect_ident()?);
+            }
+            self.expect(&TokenKind::Gt)?;
+            params
+        } else {
+            vec![]
+        };
+
+        let typ = self.parse_type()?;
+        let end = self.tokens[self.pos - 1].span.end;
+        let ext_span = start..end;
+
+        Ok(TopLevel::Let(GlobalLet {
+            name,
+            is_public,
+            typ: Some(typ.clone()),
+            value: Spanned {
+                node: Expr::External(wasm_name, type_params, typ),
+                span: ext_span,
+            },
+        }))
+    }
+
+    fn parse_global_let(&mut self, is_public: bool) -> Result<TopLevel, ParseError> {
+        self.expect(&TokenKind::Let)?;
+        let name = self.expect_ident()?;
+        let typ = if self.match_token(&TokenKind::Colon) {
+            Some(self.parse_type()?)
+        } else {
+            None
+        };
+        self.expect(&TokenKind::Eq)?;
+        let value = self.parse_expr()?;
+
+        Ok(TopLevel::Let(GlobalLet {
+            name,
+            is_public,
+            typ,
+            value,
+        }))
+    }
+}
+
+// ---- Public API ----
+
+/// Parses a Nexus source string into a Program AST.
+pub fn parse(source: &str) -> Result<Program, Vec<ParseError>> {
+    let tokens = lexer::tokenize(source).map_err(|errs| {
+        errs.into_iter()
+            .map(|e| ParseError {
+                message: e.message,
+                span: e.span,
             })
-        });
+            .collect::<Vec<_>>()
+    })?;
 
-    // Bare import path: segments separated by / with optional .ext
-    // e.g. nxlib/stdlib/fs.nx, examples/math.nx, math.wasm
-    let import_path = filter(|c: &char| {
-        c.is_alphanumeric() || *c == '_' || *c == '-' || *c == '/' || *c == '.'
-    })
-    .repeated()
-    .at_least(1)
-    .collect::<String>()
-    .padded();
+    let mut parser = Parser::new(tokens);
+    match parser.parse_program() {
+        Ok(prog) => Ok(prog),
+        Err(e) => Err(vec![e]),
+    }
+}
 
-    let import_def = text::keyword("import")
-        .padded()
-        .then(choice((
-            // import external "math.wasm"
-            text::keyword("external")
-                .padded()
-                .ignore_then(import_path.clone())
-                .map(|path| (path, None, vec![], true)),
-            // import { a, b } from "math.nx"
-            ident()
-                .separated_by(just(',').padded())
-                .delimited_by(just('{'), just('}'))
-                .then_ignore(text::keyword("from").padded())
-                .then(import_path.clone())
-                .map(|(items, path)| (path, None, items, false)),
-            // import as math from "math.nx" / import from "math.nx"
-            choice((
-                text::keyword("as")
-                    .padded()
-                    .ignore_then(ident())
-                    .then_ignore(text::keyword("from").padded())
-                    .then(import_path.clone())
-                    .map(|(alias, path)| (path, Some(alias), vec![], false)),
-                text::keyword("from")
-                    .padded()
-                    .ignore_then(import_path.clone())
-                    .map(|path| (path, None, vec![], false)),
-            )),
-        )))
-        .map(|(_, (path, alias, items, is_external))| {
-            TopLevel::Import(Import {
-                path,
-                alias,
-                items,
-                is_external,
-            })
-        });
+/// Returns the full Nexus program parser (chumsky-compatible API for backward compat).
+/// This function returns a closure that parses the source string.
+pub fn parser() -> ParserWrapper {
+    ParserWrapper
+}
 
-    let port_def = vis
-        .clone()
-        .then_ignore(text::keyword("port").padded())
-        .then(ident())
-        .then_ignore(text::keyword("do").padded())
-        .then(
-            text::keyword("fn")
-                .padded()
-                .ignore_then(ident())
-                .then(
-                    param
-                        .clone()
-                        .separated_by(just(','))
-                        .delimited_by(just('('), just(')')),
-                )
-                .then_ignore(just("->").padded())
-                .then(type_parser())
-                .then(
-                    text::keyword("require")
-                        .padded()
-                        .ignore_then(choice((
-                            type_parser()
-                                .separated_by(just(',').padded())
-                                .then(just('|').padded().ignore_then(type_parser()).or_not())
-                                .delimited_by(just('{'), just('}'))
-                                .map(|(reqs, tail)| Type::Row(reqs, tail.map(Box::new))),
-                            type_parser(),
-                        )))
-                        .or_not(),
-                )
-                .then(
-                    text::keyword("effect")
-                        .padded()
-                        .ignore_then(choice((
-                            type_parser()
-                                .separated_by(just(',').padded())
-                                .then(just('|').padded().ignore_then(type_parser()).or_not())
-                                .delimited_by(just('{'), just('}'))
-                                .map(|(effs, tail)| Type::Row(effs, tail.map(Box::new))),
-                            type_parser(),
-                        )))
-                        .or_not(),
-                )
-                .map(
-                    |((((name, params), ret_type), requires), effects)| FunctionSignature {
-                        name,
-                        params,
-                        ret_type,
-                        requires: requires.unwrap_or(Type::Row(vec![], None)),
-                        effects: effects.unwrap_or(Type::Row(vec![], None)),
-                    },
-                )
-                .repeated(),
-        )
-        .then_ignore(text::keyword("endport").padded())
-        .map(|((is_public, name), functions)| {
-            TopLevel::Port(Port {
-                name,
-                is_public,
-                functions,
-            })
-        });
+pub struct ParserWrapper;
 
-    let global_let = vis
-        .clone()
-        .then_ignore(text::keyword("let").padded())
-        .then(ident())
-        .then(just(':').padded().ignore_then(type_parser()).or_not())
-        .then_ignore(just('=').padded())
-        .then(expr_parser())
-        .map(|(((is_public, name), typ), value)| {
-            TopLevel::Let(GlobalLet {
-                name,
-                is_public,
-                typ,
-                value,
-            })
-        });
+impl ParserWrapper {
+    pub fn parse(&self, source: &str) -> Result<Program, Vec<ParseError>> {
+        parse(source)
+    }
+}
 
-    // (pub) external foo = [=[wasm_symbol]=] : <T, U>(a: i64) -> i64
-    let external_def = vis
-        .clone()
-        .then_ignore(text::keyword("external").padded())
-        .then(ident())
-        .then_ignore(just('=').padded())
-        .then(bracket_string_parser())
-        .then_ignore(just(':').padded())
-        .then(
-            just('<')
-                .ignore_then(ident().separated_by(just(',').padded()))
-                .then_ignore(just('>'))
-                .or_not(),
-        )
-        .then(type_parser())
-        .map_with_span(|((((is_public, name), wasm_name), type_params), typ), span| {
-            let type_params = type_params.unwrap_or_default();
-            TopLevel::Let(GlobalLet {
-                name,
-                is_public,
-                typ: Some(typ.clone()),
-                value: Spanned {
-                    node: Expr::External(wasm_name, type_params, typ),
-                    span: span.clone(),
-                },
-            })
-        });
+/// Returns a statement parser for REPL usage.
+pub fn stmt_parser() -> StmtParserWrapper {
+    StmtParserWrapper
+}
 
-    let comment = comment_parser().map(|_| TopLevel::Comment);
+pub struct StmtParserWrapper;
 
-    choice((
-        type_def,
-        exception_def,
-        import_def,
-        port_def,
-        external_def,
-        global_let,
-        comment,
-    ))
-    .padded()
-    .map_with_span(|node, span| Spanned { node, span })
-    .repeated()
-    .map(|definitions| Program { definitions })
-    .then_ignore(end())
+impl StmtParserWrapper {
+    pub fn parse(&self, source: &str) -> Result<Spanned<Stmt>, Vec<ParseError>> {
+        let tokens = lexer::tokenize(source).map_err(|errs| {
+            errs.into_iter()
+                .map(|e| ParseError {
+                    message: e.message,
+                    span: e.span,
+                })
+                .collect::<Vec<_>>()
+        })?;
+        let mut parser = Parser::new(tokens);
+        parser.parse_stmt().map_err(|e| vec![e])
+    }
 }

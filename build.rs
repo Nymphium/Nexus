@@ -14,46 +14,10 @@ struct WasmModule {
 
 const MODULES: &[WasmModule] = &[
     WasmModule {
-        manifest_rel: "src/lib/stdio/Cargo.toml",
-        src_rel: "src/lib/stdio/src",
-        artifact_name: "nexus_stdio_wasm.wasm",
-        output_name: "stdio.wasm",
-    },
-    WasmModule {
-        manifest_rel: "src/lib/core/Cargo.toml",
-        src_rel: "src/lib/core/src",
-        artifact_name: "nexus_core_wasm.wasm",
-        output_name: "core.wasm",
-    },
-    WasmModule {
-        manifest_rel: "src/lib/string/Cargo.toml",
-        src_rel: "src/lib/string/src",
-        artifact_name: "nexus_string_wasm.wasm",
-        output_name: "string.wasm",
-    },
-    WasmModule {
-        manifest_rel: "src/lib/math/Cargo.toml",
-        src_rel: "src/lib/math/src",
-        artifact_name: "nexus_math_wasm.wasm",
-        output_name: "math.wasm",
-    },
-    WasmModule {
-        manifest_rel: "src/lib/fs/Cargo.toml",
-        src_rel: "src/lib/fs/src",
-        artifact_name: "nexus_fs_wasm.wasm",
-        output_name: "fs.wasm",
-    },
-    WasmModule {
-        manifest_rel: "src/lib/random/Cargo.toml",
-        src_rel: "src/lib/random/src",
-        artifact_name: "nexus_random_wasm.wasm",
-        output_name: "random.wasm",
-    },
-    WasmModule {
-        manifest_rel: "src/lib/net/Cargo.toml",
-        src_rel: "src/lib/net/src",
-        artifact_name: "nexus_net_wasm.wasm",
-        output_name: "net.wasm",
+        manifest_rel: "src/lib/stdlib_bundle/Cargo.toml",
+        src_rel: "src/lib/stdlib_bundle/src",
+        artifact_name: "nexus_stdlib_bundle.wasm",
+        output_name: "stdlib.wasm",
     },
     WasmModule {
         manifest_rel: "src/lib/net_host_adapter/Cargo.toml",
@@ -68,6 +32,21 @@ fn main() {
     for module in MODULES {
         println!("cargo:rerun-if-changed={}", module.manifest_rel);
         println!("cargo:rerun-if-changed={}", module.src_rel);
+    }
+    // Sub-crate sources feed into the stdlib bundle; track them for rebuilds.
+    for sub in &[
+        "src/lib/stdio/src",
+        "src/lib/string/src",
+        "src/lib/net/src",
+        "src/lib/core/src",
+        "src/lib/math/src",
+        "src/lib/fs/src",
+        "src/lib/random/src",
+        "src/lib/clock/src",
+        "src/lib/proc/src",
+        "src/lib/wasm_alloc/src",
+    ] {
+        println!("cargo:rerun-if-changed={}", sub);
     }
 
     if env::var_os("NEXUS_SKIP_WASM_BUILD").is_some() {

@@ -3,21 +3,21 @@
 
 pub mod repl;
 
+use crate::constants::{NEXUS_HOST_HTTP_FUNC, NEXUS_HOST_HTTP_MODULE};
 use crate::lang::ast::*;
 use crate::lang::stdlib::load_stdlib_nx_programs;
 use crate::runtime::ExecutionCapabilities;
-use chumsky::Parser;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read as IoRead, Write as IoWrite};
 use std::net::TcpListener;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 use ureq::RequestExt;
 use wasmtime::*;
 use wasmtime_wasi::WasiCtxBuilder;
 
-const NEXUS_HOST_HTTP_MODULE: &str = "nexus:cli/nexus-host";
-const NEXUS_HOST_HTTP_FUNC: &str = "host-http-request";
+/// Shared wasmtime engine. `Engine` is internally `Arc`-wrapped, so `.clone()` is cheap.
+static SHARED_ENGINE: LazyLock<Engine> = LazyLock::new(Engine::default);
 const MAX_HTTP_URL_BYTES: usize = 8 * 1024;
 const MAX_HTTP_HEADERS_BYTES: usize = 64 * 1024;
 const MAX_HTTP_BODY_BYTES: usize = 1024 * 1024;
@@ -139,13 +139,13 @@ pub enum ExprResult {
 
 #[derive(Debug, Clone)]
 pub enum EvalError {
-    Exception(Value),
+    Exception(Value, Vec<String>),
 }
 
 impl std::fmt::Display for EvalError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            EvalError::Exception(v) => write!(f, "Unhandled exception: {}", v),
+            EvalError::Exception(v, _) => write!(f, "Unhandled exception: {}", v),
         }
     }
 }
@@ -369,6 +369,7 @@ fn add_nexus_host_to_linker(
     linker: &mut Linker<wasmtime_wasi::p1::WasiP1Ctx>,
     capabilities: ExecutionCapabilities,
 ) -> Result<(), String> {
+    let allow_net = capabilities.allow_net;
     let server_table: ServerTable = Arc::new(Mutex::new(Vec::new()));
     let conn_table: ConnectionTable = Arc::new(Mutex::new(Vec::new()));
 
@@ -461,6 +462,9 @@ fn add_nexus_host_to_linker(
                       addr_ptr: i32,
                       addr_len: i32|
                       -> i64 {
+                    if !allow_net {
+                        return -1;
+                    }
                     let Some(memory) =
                         caller.get_export("memory").and_then(|e| e.into_memory())
                     else {
@@ -509,6 +513,9 @@ fn add_nexus_host_to_linker(
                 move |mut caller: Caller<'_, wasmtime_wasi::p1::WasiP1Ctx>,
                       server_id: i64,
                       ret_ptr: i32| {
+                    if !allow_net {
+                        return;
+                    }
                     let Some(memory) =
                         caller.get_export("memory").and_then(|e| e.into_memory())
                     else {
@@ -615,6 +622,9 @@ fn add_nexus_host_to_linker(
                       body_ptr: i32,
                       body_len: i32|
                       -> i32 {
+                    if !allow_net {
+                        return 0;
+                    }
                     let Some(memory) =
                         caller.get_export("memory").and_then(|e| e.into_memory())
                     else {
@@ -691,6 +701,9 @@ fn add_nexus_host_to_linker(
                 move |_caller: Caller<'_, wasmtime_wasi::p1::WasiP1Ctx>,
                       server_id: i64|
                       -> i32 {
+                    if !allow_net {
+                        return 0;
+                    }
                     let mut table = match st.lock() {
                         Ok(t) => t,
                         Err(_) => return 0,
@@ -711,17 +724,17 @@ fn add_nexus_host_to_linker(
 }
 
 fn runtime_error(msg: impl Into<String>) -> EvalError {
-    EvalError::Exception(Value::Variant(
-        "RuntimeError".to_string(),
-        vec![Value::String(msg.into())],
-    ))
+    EvalError::Exception(
+        Value::Variant("RuntimeError".to_string(), vec![Value::String(msg.into())]),
+        vec![],
+    )
 }
 
 fn invalid_index_error(index: i64) -> EvalError {
-    EvalError::Exception(Value::Variant(
-        "InvalidIndex".to_string(),
-        vec![Value::Int(index)],
-    ))
+    EvalError::Exception(
+        Value::Variant("InvalidIndex".to_string(), vec![Value::Int(index)]),
+        vec![],
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -778,6 +791,8 @@ pub struct Interpreter {
     pub modules: HashMap<String, Interpreter>,
     pub lambda_counter: usize,
     pub init_error: Option<EvalError>,
+    pub call_stack: Vec<String>,
+    pub last_backtrace: Arc<Mutex<Vec<String>>>,
 }
 
 impl Interpreter {
@@ -803,7 +818,7 @@ impl Interpreter {
     }
 
     fn with_init_error(init_error: EvalError) -> Self {
-        let engine = Engine::default();
+        let engine = SHARED_ENGINE.clone();
         let wasi = WasiCtxBuilder::new().build_p1();
         let store = Store::new(&engine, wasi);
         Interpreter {
@@ -822,6 +837,8 @@ impl Interpreter {
             modules: HashMap::new(),
             lambda_counter: 0,
             init_error: Some(init_error),
+            call_stack: Vec::new(),
+            last_backtrace: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -844,10 +861,10 @@ impl Interpreter {
         let handlers = HashMap::new();
         let mut external_functions = HashMap::new();
         let mut modules = HashMap::new();
-        let native_functions: HashMap<String, Arc<dyn Fn(&[Value]) -> EvalResult + Send + Sync>> =
+        let mut native_functions: HashMap<String, Arc<dyn Fn(&[Value]) -> EvalResult + Send + Sync>> =
             HashMap::new();
 
-        let engine = Engine::default();
+        let engine = SHARED_ENGINE.clone();
         let mut wasm_modules = HashMap::new();
 
         let mut builder = WasiCtxBuilder::new();
@@ -907,6 +924,7 @@ impl Interpreter {
                     Expr::Handler {
                         coeffect_name,
                         functions,
+                        ..
                     } => {
                         top_level_values.insert(
                             gl.name.clone(),
@@ -943,7 +961,7 @@ impl Interpreter {
                         let src = std::fs::read_to_string(&import.path).map_err(|e| {
                             runtime_error(format!("Failed to read module '{}': {}", import.path, e))
                         })?;
-                        let p = crate::lang::parser::parser().parse(src).map_err(|errs| {
+                        let p = crate::lang::parser::parser().parse(&src).map_err(|errs| {
                             runtime_error(format!(
                                 "Failed to parse module '{}': {:?}",
                                 import.path, errs
@@ -981,7 +999,8 @@ impl Interpreter {
                                     top_level_values.insert(item.clone(), v.clone());
                                 }
                             }
-                        } else {
+                        }
+                        if import.alias.is_some() || import.items.is_empty() {
                             let alias = import.alias.clone().unwrap_or_else(|| {
                                 std::path::Path::new(&import.path)
                                     .file_stem()
@@ -996,6 +1015,36 @@ impl Interpreter {
                 _ => {}
             }
         }
+
+        let last_backtrace = Arc::new(Mutex::new(Vec::new()));
+
+        // Register native `backtrace` function that reads the last captured call stack.
+        {
+            let bt_ref = Arc::clone(&last_backtrace);
+            native_functions.insert(
+                "backtrace".to_string(),
+                Arc::new(move |_args: &[Value]| {
+                    let stack = bt_ref.lock().unwrap().clone();
+                    let mut list = Value::Variant("Nil".to_string(), vec![]);
+                    for frame in stack.into_iter().rev() {
+                        list = Value::Variant("Cons".to_string(), vec![Value::String(frame), list]);
+                    }
+                    Ok(ExprResult::Normal(list))
+                }),
+            );
+        }
+
+        // Register native `from_i64` so stdlib modules work without Wasm FFI.
+        native_functions.insert(
+            "from_i64".to_string(),
+            Arc::new(|args: &[Value]| {
+                if let Some(Value::Int(n)) = args.first() {
+                    Ok(ExprResult::Normal(Value::String(n.to_string())))
+                } else {
+                    Err(runtime_error("from_i64: expected i64 argument"))
+                }
+            }),
+        );
 
         Ok(Interpreter {
             functions,
@@ -1013,6 +1062,8 @@ impl Interpreter {
             modules,
             lambda_counter: 0,
             init_error: None,
+            call_stack: Vec::new(),
+            last_backtrace,
         })
     }
 
@@ -1033,6 +1084,8 @@ impl Interpreter {
             modules: self.modules.clone(),
             lambda_counter: self.lambda_counter,
             init_error: self.init_error.clone(),
+            call_stack: Vec::new(),
+            last_backtrace: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -1142,21 +1195,21 @@ impl Interpreter {
         labeled_args.iter().map(|(_, v)| v.clone()).collect()
     }
 
-    /// Executes a named Nexus function with already-evaluated arguments.
-    pub fn run_function(&mut self, name: &str, args: Vec<Value>) -> Result<Value, String> {
-        self.ensure_ready().map_err(|e| e.to_string())?;
+    /// Internal: executes a named function, preserving EvalResult for exception propagation.
+    fn call_function(&mut self, name: &str, args: Vec<Value>) -> EvalResult {
+        self.ensure_ready()?;
         let func = self
             .functions
             .get(name)
-            .ok_or_else(|| format!("Function '{}' not found", name))?
+            .ok_or_else(|| runtime_error(format!("Function '{}' not found", name)))?
             .clone();
 
         if func.params.len() != args.len() {
-            return Err(format!(
+            return Err(runtime_error(format!(
                 "Arity mismatch: expected {}, got {}",
                 func.params.len(),
                 args.len()
-            ));
+            )));
         }
 
         let mut env = if let Some(captured_env) = self.closures.get(name).cloned() {
@@ -1173,9 +1226,19 @@ impl Interpreter {
             env.define(param.name.clone(), arg.clone());
         }
 
-        let result = self
-            .eval_body(&func.body, &mut env)
-            .map_err(|e| e.to_string())?;
+        self.call_stack.push(name.to_string());
+        let result = self.eval_body(&func.body, &mut env);
+        self.call_stack.pop();
+        // Normalize EarlyReturn to Normal at function boundary.
+        match result {
+            Ok(ExprResult::EarlyReturn(v)) => Ok(ExprResult::Normal(v)),
+            other => other,
+        }
+    }
+
+    /// Executes a named Nexus function with already-evaluated arguments.
+    pub fn run_function(&mut self, name: &str, args: Vec<Value>) -> Result<Value, String> {
+        let result = self.call_function(name, args).map_err(|e| e.to_string())?;
         match result {
             ExprResult::Normal(v) => Ok(v),
             ExprResult::EarlyReturn(v) => Ok(v),
@@ -1567,7 +1630,8 @@ impl Interpreter {
                             return Ok(ExprResult::EarlyReturn(val))
                         }
                         Ok(ExprResult::Normal(_)) => {}
-                        Err(EvalError::Exception(exn)) => {
+                        Err(EvalError::Exception(exn, bt)) => {
+                            *self.last_backtrace.lock().unwrap() = bt;
                             let mut catch_env = Env::extend(env.clone());
                             catch_env.define(catch_param.clone(), exn);
                             let catch_res = self.eval_body(catch_body, &mut catch_env)?;
@@ -1641,11 +1705,18 @@ impl Interpreter {
                     // Save current handlers, push injected ones, evaluate body, restore
                     let saved = self.handlers.clone();
                     for handler_name in handlers {
-                        let key = handler_name.clone();
-                        if let Some(val) = env.get(&key) {
-                            if let Value::Handler(coeffect_name, fns) = val {
-                                self.handlers.insert(coeffect_name.clone(), fns.clone());
-                            }
+                        let val = if let Some((mod_name, item_name)) =
+                            handler_name.split_once('.')
+                        {
+                            self.modules
+                                .get(mod_name)
+                                .and_then(|m| m.top_level_values.get(item_name))
+                                .cloned()
+                        } else {
+                            env.get(handler_name)
+                        };
+                        if let Some(Value::Handler(coeffect_name, fns)) = val {
+                            self.handlers.insert(coeffect_name.clone(), fns.clone());
                         }
                     }
                     let res = self.eval_body(body, env);
@@ -1655,7 +1726,6 @@ impl Interpreter {
                         ExprResult::Normal(_) => {}
                     }
                 }
-                Stmt::Comment => continue,
             }
         }
         Ok(ExprResult::Normal(Value::Unit))
@@ -1720,75 +1790,75 @@ impl Interpreter {
                 let r = self.eval_expr(rhs, env)?;
                 match (l, r) {
                     (ExprResult::Normal(l_val), ExprResult::Normal(r_val)) => {
-                        match (l_val, op.as_str(), r_val) {
-                            (Value::Int(a), "+", Value::Int(b)) => {
+                        match (l_val, op, r_val) {
+                            (Value::Int(a), BinaryOp::Add, Value::Int(b)) => {
                                 Ok(ExprResult::Normal(Value::Int(a + b)))
                             }
-                            (Value::String(a), "++", Value::String(b)) => {
+                            (Value::String(a), BinaryOp::Concat, Value::String(b)) => {
                                 Ok(ExprResult::Normal(Value::String(a + &b)))
                             }
-                            (Value::Int(a), "-", Value::Int(b)) => {
+                            (Value::Int(a), BinaryOp::Sub, Value::Int(b)) => {
                                 Ok(ExprResult::Normal(Value::Int(a - b)))
                             }
-                            (Value::Int(a), "*", Value::Int(b)) => {
+                            (Value::Int(a), BinaryOp::Mul, Value::Int(b)) => {
                                 Ok(ExprResult::Normal(Value::Int(a * b)))
                             }
-                            (Value::Int(a), "/", Value::Int(b)) => {
+                            (Value::Int(a), BinaryOp::Div, Value::Int(b)) => {
                                 if b == 0 {
                                     Err(runtime_error("division by zero"))
                                 } else {
                                     Ok(ExprResult::Normal(Value::Int(a / b)))
                                 }
                             }
-                            (Value::Int(a), "==", Value::Int(b)) => {
+                            (Value::Int(a), BinaryOp::Eq, Value::Int(b)) => {
                                 Ok(ExprResult::Normal(Value::Bool(a == b)))
                             }
-                            (Value::Int(a), "!=", Value::Int(b)) => {
+                            (Value::Int(a), BinaryOp::Ne, Value::Int(b)) => {
                                 Ok(ExprResult::Normal(Value::Bool(a != b)))
                             }
-                            (Value::Int(a), "<", Value::Int(b)) => {
+                            (Value::Int(a), BinaryOp::Lt, Value::Int(b)) => {
                                 Ok(ExprResult::Normal(Value::Bool(a < b)))
                             }
-                            (Value::Int(a), ">", Value::Int(b)) => {
+                            (Value::Int(a), BinaryOp::Gt, Value::Int(b)) => {
                                 Ok(ExprResult::Normal(Value::Bool(a > b)))
                             }
-                            (Value::Int(a), "<=", Value::Int(b)) => {
+                            (Value::Int(a), BinaryOp::Le, Value::Int(b)) => {
                                 Ok(ExprResult::Normal(Value::Bool(a <= b)))
                             }
-                            (Value::Int(a), ">=", Value::Int(b)) => {
+                            (Value::Int(a), BinaryOp::Ge, Value::Int(b)) => {
                                 Ok(ExprResult::Normal(Value::Bool(a >= b)))
                             }
-                            (Value::Float(a), "+.", Value::Float(b)) => {
+                            (Value::Float(a), BinaryOp::FAdd, Value::Float(b)) => {
                                 Ok(ExprResult::Normal(Value::Float(a + b)))
                             }
-                            (Value::Float(a), "-.", Value::Float(b)) => {
+                            (Value::Float(a), BinaryOp::FSub, Value::Float(b)) => {
                                 Ok(ExprResult::Normal(Value::Float(a - b)))
                             }
-                            (Value::Float(a), "*.", Value::Float(b)) => {
+                            (Value::Float(a), BinaryOp::FMul, Value::Float(b)) => {
                                 Ok(ExprResult::Normal(Value::Float(a * b)))
                             }
-                            (Value::Float(a), "/.", Value::Float(b)) => {
+                            (Value::Float(a), BinaryOp::FDiv, Value::Float(b)) => {
                                 Ok(ExprResult::Normal(Value::Float(a / b)))
                             }
-                            (Value::Float(a), "==.", Value::Float(b)) => {
+                            (Value::Float(a), BinaryOp::FEq, Value::Float(b)) => {
                                 Ok(ExprResult::Normal(Value::Bool(a == b)))
                             }
-                            (Value::Float(a), "!=.", Value::Float(b)) => {
+                            (Value::Float(a), BinaryOp::FNe, Value::Float(b)) => {
                                 Ok(ExprResult::Normal(Value::Bool(a != b)))
                             }
-                            (Value::Float(a), "<.", Value::Float(b)) => {
+                            (Value::Float(a), BinaryOp::FLt, Value::Float(b)) => {
                                 Ok(ExprResult::Normal(Value::Bool(a < b)))
                             }
-                            (Value::Float(a), ">.", Value::Float(b)) => {
+                            (Value::Float(a), BinaryOp::FGt, Value::Float(b)) => {
                                 Ok(ExprResult::Normal(Value::Bool(a > b)))
                             }
-                            (Value::Float(a), "<=.", Value::Float(b)) => {
+                            (Value::Float(a), BinaryOp::FLe, Value::Float(b)) => {
                                 Ok(ExprResult::Normal(Value::Bool(a <= b)))
                             }
-                            (Value::Float(a), ">=.", Value::Float(b)) => {
+                            (Value::Float(a), BinaryOp::FGe, Value::Float(b)) => {
                                 Ok(ExprResult::Normal(Value::Bool(a >= b)))
                             }
-                            (Value::String(a), "+", Value::String(b)) => {
+                            (Value::String(a), BinaryOp::Add, Value::String(b)) => {
                                 Ok(ExprResult::Normal(Value::String(a + &b)))
                             }
                             (l, op, r) => Err(runtime_error(format!(
@@ -1846,10 +1916,7 @@ impl Interpreter {
                                 &evaluated_args,
                                 &name,
                             )?;
-                            let res = self
-                                .run_function(&name, positional)
-                                .map_err(runtime_error)?;
-                            return Ok(ExprResult::Normal(res));
+                            return self.call_function(&name, positional);
                         }
                         _ => {}
                     }
@@ -1898,10 +1965,7 @@ impl Interpreter {
                                 &evaluated_args,
                                 &format!("{}.{}", mod_name, item_name),
                             )?;
-                            let res = sub_interp
-                                .run_function(item_name, positional)
-                                .map_err(runtime_error)?;
-                            return Ok(ExprResult::Normal(res));
+                            return sub_interp.call_function(item_name, positional);
                         }
                         if let Some((wasm_name, typ)) =
                             sub_interp.external_functions.get(item_name).cloned()
@@ -1957,15 +2021,17 @@ impl Interpreter {
                     &evaluated_args,
                     func,
                 )?;
-                let res = self.run_function(func, positional).map_err(runtime_error)?;
-                Ok(ExprResult::Normal(res))
+                self.call_function(func, positional)
             }
             Expr::Constructor(name, args) => {
                 let fields = self.get_variant_fields(name).ok_or_else(|| {
-                    EvalError::Exception(Value::Variant(
-                        "RuntimeError".to_string(),
-                        vec![Value::String(format!("Unknown constructor {}", name))],
-                    ))
+                    EvalError::Exception(
+                        Value::Variant(
+                            "RuntimeError".to_string(),
+                            vec![Value::String(format!("Unknown constructor {}", name))],
+                        ),
+                        self.call_stack.clone(),
+                    )
                 })?;
 
                 let mut evaluated_args = Vec::new();
@@ -2133,6 +2199,7 @@ impl Interpreter {
             Expr::Handler {
                 coeffect_name,
                 functions,
+                ..
             } => Ok(ExprResult::Normal(Value::Handler(
                 coeffect_name.clone(),
                 functions.clone(),
@@ -2143,7 +2210,7 @@ impl Interpreter {
                     ExprResult::Normal(v) => v,
                     ExprResult::EarlyReturn(v) => return Ok(ExprResult::EarlyReturn(v)),
                 };
-                Err(EvalError::Exception(val))
+                Err(EvalError::Exception(val, self.call_stack.clone()))
             }
         }
     }
@@ -2226,6 +2293,7 @@ impl Interpreter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::constants::ENTRYPOINT;
 
     #[test]
     fn interpreter_init_error_is_reported_not_panic() {
@@ -2234,14 +2302,14 @@ import external /definitely/missing_module_for_test.wasm
 
 let main = fn () -> i64 do
   return 0
-endfn
+end
 "#;
         let program = crate::lang::parser::parser()
             .parse(src)
             .expect("test source should parse");
         let mut interpreter = Interpreter::new(program);
         let err = interpreter
-            .run_function("main", vec![])
+            .run_function(ENTRYPOINT, vec![])
             .expect_err("init error should surface through run_function");
         assert!(err.contains("missing_module_for_test.wasm"));
     }
@@ -2286,14 +2354,14 @@ endfn
     }
 
     #[test]
-    fn http_bridge_ignores_network_policy_in_allow_all_mode() {
+    fn http_bridge_deny_all_blocks_request() {
         let capabilities = ExecutionCapabilities {
             net_block_hosts: vec!["example.com".to_string()],
             ..ExecutionCapabilities::deny_all()
         };
         let raw = run_nexus_host_http_request(&capabilities, "GET", "", "", "");
         assert!(
-            raw.starts_with("0\nhttp request failed: empty URL"),
+            raw.starts_with("0\nNetwork access denied"),
             "unexpected bridge response: {}",
             raw
         );
@@ -2304,14 +2372,14 @@ endfn
         let src = r#"
 let main = fn () -> i64 do
   return 1 / 0
-endfn
+end
 "#;
         let program = crate::lang::parser::parser()
             .parse(src)
             .expect("test source should parse");
         let mut interpreter = Interpreter::new(program);
         let err = interpreter
-            .run_function("main", vec![])
+            .run_function(ENTRYPOINT, vec![])
             .expect_err("division by zero should return runtime error");
         assert!(
             err.contains("division by zero"),

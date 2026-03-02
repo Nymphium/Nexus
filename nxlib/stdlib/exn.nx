@@ -1,0 +1,20 @@
+/**
+ * exn: Exception utilities.
+ */
+import { from_i64 } from nxlib/stdlib/string.nx
+
+pub let to_string = fn (exn: Exn) -> string do
+  match exn do
+    case RuntimeError(val: msg) -> return [=[RuntimeError: ]=] ++ msg
+    case InvalidIndex(val: i) ->
+      let s = from_i64(val: i)
+      return [=[InvalidIndex: ]=] ++ s
+    case _ -> return [=[<exception>]=]
+  end
+end
+
+// Interpreter overrides this with native implementation that reads call stack.
+// In wasm build, returns empty list (no backtrace available).
+pub let backtrace = fn (exn: Exn) -> [string] do
+  return []
+end

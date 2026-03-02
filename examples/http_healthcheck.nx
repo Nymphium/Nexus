@@ -1,15 +1,14 @@
-import { default_net, Net } from nxlib/stdlib/net.nx
-import { print } from nxlib/stdlib/stdio.nx
+import { Net }, * as net_mod from nxlib/stdlib/net.nx
+import { Console }, * as stdio from nxlib/stdlib/stdio.nx
 
-let main = fn () -> unit effect { Console } do
-  inject default_net do
-    let url = [=[https://httpbin.org/get]=]
-    let body = Net.get(url: url)
-    print(val: [=[GET ]=])
-    print(val: url)
-    print(val: [=[\n]=])
-    print(val: body)
-  endinject
+let main = fn () -> unit require { PermNet, PermConsole } do
+  inject net_mod.system_handler, stdio.system_handler do
+      let url = [=[https://httpbin.org/get]=]
+      let body = Net.get(url: url)
+      Console.print(val: [=[GET ]=])
+      Console.println(val: url)
+      Console.print(val: body)
+  end
 
   return ()
-endfn
+end

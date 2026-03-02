@@ -1,14 +1,19 @@
-use chumsky::Parser;
 use nexus::interpreter::{Interpreter, Value};
 use nexus::lang::parser::parser;
 use nexus::lang::typecheck::TypeChecker;
 
+fn prepare_test_source(src: &str) -> String {
+    let s = src.replace("let main = fn ()", "pub let __test = fn ()");
+    format!("{}\nlet main = fn () -> unit do\n  return ()\nend\n", s)
+}
+
 fn run(src: &str) -> Result<Value, String> {
-    let p = parser().parse(src).map_err(|e| format!("{:?}", e))?;
+    let src = prepare_test_source(src);
+    let p = parser().parse(src.as_str()).map_err(|e| format!("{:?}", e))?;
     let mut checker = TypeChecker::new();
     checker.check_program(&p).map_err(|e| e.message)?;
     let mut interpreter = Interpreter::new(p);
-    interpreter.run_function("main", vec![])
+    interpreter.run_function("__test", vec![])
 }
 
 #[test]
@@ -27,8 +32,8 @@ let main = fn () -> i64 do
     return set.size(set: s3)
   else
     return -1
-  endif
-endfn
+  end
+end
 "#;
     assert_eq!(run(src).unwrap(), Value::Int(2));
 }
@@ -51,7 +56,7 @@ let main = fn () -> i64 do
   let i_part = set.size(set: i) * 10
   let d_part = set.size(set: d)
   return u_part + i_part + d_part
-endfn
+end
 "#;
     assert_eq!(run(src).unwrap(), Value::Int(412));
 }
@@ -63,18 +68,18 @@ import as set from nxlib/stdlib/set.nx
 
 let eq_half = fn (left: i64, right: i64) -> bool do
   return (left / 2) == (right / 2)
-endfn
+end
 
 let hash_half = fn (key: i64) -> i64 do
   return key / 2
-endfn
+end
 
 let main = fn () -> bool do
   let ops = set.make_key_ops(eq: eq_half, hash: hash_half)
   let s0 = set.empty(key_ops: ops)
   let s1 = set.insert(set: s0, val: 4)
   return set.contains(set: s1, val: 5)
-endfn
+end
 "#;
     assert_eq!(run(src).unwrap(), Value::Bool(true));
 }

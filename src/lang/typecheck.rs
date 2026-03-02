@@ -1028,7 +1028,6 @@ impl TypeChecker {
                         _ => {}
                     }
                 }
-                _ => {}
             }
         }
 
@@ -1326,7 +1325,6 @@ impl TypeChecker {
                         );
                     }
                 }
-                Stmt::Comment => {}
             }
         }
     }
@@ -1787,7 +1785,6 @@ impl TypeChecker {
                     };
                     self.infer_body(body, env, er, &injected_eq, ee)?;
                 }
-                Stmt::Comment => {}
             }
         }
         Ok(())
@@ -1833,7 +1830,6 @@ impl TypeChecker {
     }
 
     /// Type-checks a single REPL statement against the current checker state.
-    #[allow(dead_code)] // used by interpreter REPL (lib crate)
     pub fn check_repl_stmt(&mut self, s: &Spanned<Stmt>) -> Result<Type, TypeError> {
         let mut env = std::mem::replace(&mut self.env, TypeEnv::new());
         let res = (|| {
@@ -3627,7 +3623,6 @@ fn collect_signature_needs_from_stmts(
                 effs.extend(body_effs);
                 unknown |= body_unknown;
             }
-            Stmt::Comment => {}
         }
     }
 
@@ -3829,7 +3824,6 @@ fn stmt_mentions_name(stmt: &Spanned<Stmt>, target: &str) -> bool {
                 h == target || h.starts_with(&format!("{}.", target))
             }) || body.iter().any(|stmt| stmt_mentions_name(stmt, target))
         }
-        Stmt::Comment => false,
     }
 }
 
@@ -3866,7 +3860,6 @@ fn collect_used_variable_keys_in_stmts(stmts: &[Spanned<Stmt>], out: &mut HashSe
                 }
                 collect_used_variable_keys_in_stmts(body, out);
             }
-            Stmt::Comment => {}
         }
     }
 }
@@ -3961,7 +3954,6 @@ fn collect_local_let_bindings(stmts: &[Spanned<Stmt>], out: &mut Vec<(String, Si
                     collect_local_let_bindings(&task.body, out);
                 }
             }
-            Stmt::Comment => {}
         }
     }
 }
@@ -4191,7 +4183,6 @@ fn collect_stmt_captures(
                     captures,
                 );
             }
-            Stmt::Comment => {}
         }
     }
 }

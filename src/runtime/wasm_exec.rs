@@ -1,5 +1,5 @@
+use crate::constants::*;
 use crate::runtime::ExecutionCapabilities;
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use wasmtime::{
@@ -8,13 +8,6 @@ use wasmtime::{
 };
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 use wasmtime_wasi_http::{WasiHttpCtx, WasiHttpView};
-
-const WASI_SNAPSHOT_MODULE: &str = "wasi_snapshot_preview1";
-const NEXUS_HOST_HTTP_MODULE: &str = "nexus:cli/nexus-host";
-
-fn is_preview2_wasi_module(module_name: &str) -> bool {
-    module_name.starts_with("wasi:")
-}
 
 fn is_component_wasm(wasm: &[u8]) -> bool {
     wasmparser::Parser::is_component(wasm)
@@ -51,20 +44,15 @@ pub fn run_wasm_bytes(
     module_dir: Option<&Path>,
     capabilities: &ExecutionCapabilities,
 ) -> ExitCode {
+    // Validate declared capabilities before running
+    if let Err(msg) = capabilities.validate_wasm_capabilities(wasm) {
+        eprintln!("Capability error: {}", msg);
+        return ExitCode::from(1);
+    }
     if is_component_wasm(wasm) {
         return run_component_wasm_bytes(wasm, capabilities);
     }
-    run_core_wasm_bytes(wasm, module_dir, None, capabilities)
-}
-
-/// Executes a core wasm module while resolving non-WASI imports from an embedded module map.
-pub fn run_core_wasm_with_embedded_modules(
-    wasm: &[u8],
-    embedded_modules: &HashMap<String, Vec<u8>>,
-    module_dir: Option<&Path>,
-    capabilities: &ExecutionCapabilities,
-) -> ExitCode {
-    run_core_wasm_bytes(wasm, module_dir, Some(embedded_modules), capabilities)
+    run_core_wasm_bytes(wasm, module_dir, capabilities)
 }
 
 fn run_component_wasm_bytes(wasm: &[u8], capabilities: &ExecutionCapabilities) -> ExitCode {
@@ -119,62 +107,25 @@ fn run_component_wasm_bytes(wasm: &[u8], capabilities: &ExecutionCapabilities) -
         }
     };
 
-    if let Ok(main) = instance.get_typed_func::<(), ()>(&mut store, "main") {
-        match main.call(&mut store, ()) {
-            Ok(()) => return ExitCode::SUCCESS,
-            Err(e) => {
-                eprintln!("Runtime Error: {}", e);
-                return ExitCode::from(1);
-            }
+    let main = match instance.get_typed_func::<(), ()>(&mut store, ENTRYPOINT) {
+        Ok(main) => main,
+        Err(e) => {
+            eprintln!("Runtime Error: could not find exported '{}' with signature () -> (): {}", ENTRYPOINT, e);
+            return ExitCode::from(1);
+        }
+    };
+    match main.call(&mut store, ()) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("Runtime Error: {}", e);
+            ExitCode::from(1)
         }
     }
-    if let Ok(main) = instance.get_typed_func::<(), (i32,)>(&mut store, "main") {
-        match main.call(&mut store, ()) {
-            Ok((value,)) => {
-                println!("Result: {}", value);
-                return ExitCode::SUCCESS;
-            }
-            Err(e) => {
-                eprintln!("Runtime Error: {}", e);
-                return ExitCode::from(1);
-            }
-        }
-    }
-    if let Ok(main) = instance.get_typed_func::<(), (i64,)>(&mut store, "main") {
-        match main.call(&mut store, ()) {
-            Ok((value,)) => {
-                println!("Result: {}", value);
-                return ExitCode::SUCCESS;
-            }
-            Err(e) => {
-                eprintln!("Runtime Error: {}", e);
-                return ExitCode::from(1);
-            }
-        }
-    }
-    if let Ok(main) = instance.get_typed_func::<(), (f64,)>(&mut store, "main") {
-        match main.call(&mut store, ()) {
-            Ok((value,)) => {
-                println!("Result: {}", value);
-                return ExitCode::SUCCESS;
-            }
-            Err(e) => {
-                eprintln!("Runtime Error: {}", e);
-                return ExitCode::from(1);
-            }
-        }
-    }
-
-    eprintln!(
-        "Runtime Error: could not call exported component function 'main' with supported signatures (() -> unit|i32|i64|f64)"
-    );
-    ExitCode::from(1)
 }
 
 fn run_core_wasm_bytes(
     wasm: &[u8],
     module_dir: Option<&Path>,
-    embedded_modules: Option<&HashMap<String, Vec<u8>>>,
     capabilities: &ExecutionCapabilities,
 ) -> ExitCode {
     let engine = Engine::default();
@@ -215,7 +166,7 @@ fn run_core_wasm_bytes(
                 NEXUS_HOST_HTTP_MODULE
             );
             eprintln!(
-                "Hint: build as component (`nexus build --wasm`) and run with `wasmtime run` to use WASI HTTP."
+                "Hint: build as component (`nexus build`) and run with `wasmtime run` to use WASI HTTP."
             );
             return ExitCode::from(1);
         }
@@ -224,50 +175,35 @@ fn run_core_wasm_bytes(
                 "Runtime Error: preview2/WASI import '{}' cannot run in core-wasm mode",
                 module_name
             );
-            eprintln!("Hint: use `nexus build --wasm` and run the output with `wasmtime run`.");
+            eprintln!("Hint: use `nexus build` and run the output with `wasmtime run`.");
             return ExitCode::from(1);
         }
 
-        let dep = if let Some(dep_wasm) =
-            embedded_modules.and_then(|map| map.get(module_name.as_str()))
-        {
-            match Module::from_binary(&engine, dep_wasm) {
-                Ok(dep) => dep,
-                Err(e) => {
-                    eprintln!(
-                        "Failed to load embedded dependency module '{}': {}",
-                        module_name, e
-                    );
-                    return ExitCode::from(1);
-                }
+        let Some(module_dir) = module_dir else {
+            eprintln!(
+                "Runtime Error: unresolved import module '{}' (no module dir available)",
+                module_name
+            );
+            return ExitCode::from(1);
+        };
+        let dep_path = {
+            let raw = PathBuf::from(&module_name);
+            if raw.is_absolute() {
+                raw
+            } else {
+                module_dir.join(raw)
             }
-        } else {
-            let Some(module_dir) = module_dir else {
+        };
+        let dep = match Module::from_file(&engine, &dep_path) {
+            Ok(dep) => dep,
+            Err(e) => {
                 eprintln!(
-                    "Runtime Error: unresolved import module '{}' (not bundled and no module dir available)",
-                    module_name
+                    "Failed to load dependency module '{}' (resolved as '{}'): {}",
+                    module_name,
+                    dep_path.display(),
+                    e
                 );
                 return ExitCode::from(1);
-            };
-            let dep_path = {
-                let raw = PathBuf::from(&module_name);
-                if raw.is_absolute() {
-                    raw
-                } else {
-                    module_dir.join(raw)
-                }
-            };
-            match Module::from_file(&engine, &dep_path) {
-                Ok(dep) => dep,
-                Err(e) => {
-                    eprintln!(
-                        "Failed to load dependency module '{}' (resolved as '{}'): {}",
-                        module_name,
-                        dep_path.display(),
-                        e
-                    );
-                    return ExitCode::from(1);
-                }
             }
         };
         if let Err(e) = linker.module(&mut store, &module_name, &dep) {
@@ -284,54 +220,18 @@ fn run_core_wasm_bytes(
         }
     };
 
-    if let Ok(main) = instance.get_typed_func::<(), ()>(&mut store, "main") {
-        match main.call(&mut store, ()) {
-            Ok(()) => return ExitCode::SUCCESS,
-            Err(e) => {
-                eprintln!("Runtime Error: {}", e);
-                return ExitCode::from(1);
-            }
+    let main = match instance.get_typed_func::<(), ()>(&mut store, ENTRYPOINT) {
+        Ok(main) => main,
+        Err(e) => {
+            eprintln!("Runtime Error: could not find exported '{}' with signature () -> (): {}", ENTRYPOINT, e);
+            return ExitCode::from(1);
+        }
+    };
+    match main.call(&mut store, ()) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("Runtime Error: {}", e);
+            ExitCode::from(1)
         }
     }
-    if let Ok(main) = instance.get_typed_func::<(), i32>(&mut store, "main") {
-        match main.call(&mut store, ()) {
-            Ok(value) => {
-                println!("Result: {}", value);
-                return ExitCode::SUCCESS;
-            }
-            Err(e) => {
-                eprintln!("Runtime Error: {}", e);
-                return ExitCode::from(1);
-            }
-        }
-    }
-    if let Ok(main) = instance.get_typed_func::<(), i64>(&mut store, "main") {
-        match main.call(&mut store, ()) {
-            Ok(value) => {
-                println!("Result: {}", value);
-                return ExitCode::SUCCESS;
-            }
-            Err(e) => {
-                eprintln!("Runtime Error: {}", e);
-                return ExitCode::from(1);
-            }
-        }
-    }
-    if let Ok(main) = instance.get_typed_func::<(), f64>(&mut store, "main") {
-        match main.call(&mut store, ()) {
-            Ok(value) => {
-                println!("Result: {}", value);
-                return ExitCode::SUCCESS;
-            }
-            Err(e) => {
-                eprintln!("Runtime Error: {}", e);
-                return ExitCode::from(1);
-            }
-        }
-    }
-
-    eprintln!(
-        "Runtime Error: could not call exported 'main' with supported signatures (() -> unit|i32|i64|f64)"
-    );
-    ExitCode::from(1)
 }

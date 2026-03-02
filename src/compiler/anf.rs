@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use crate::lang::ast::{BinaryOp, Type};
 
 #[derive(Debug, Clone, PartialEq)]

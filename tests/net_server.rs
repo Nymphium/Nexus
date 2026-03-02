@@ -1,38 +1,44 @@
-use chumsky::Parser;
 use nexus::interpreter::{Interpreter, Value};
 use nexus::lang::parser::parser;
 use nexus::lang::typecheck::TypeChecker;
 
+fn prepare_test_source(src: &str) -> String {
+    let s = src.replace("let main = fn ()", "pub let __test = fn ()");
+    format!("{}\nlet main = fn () -> unit do\n  return ()\nend\n", s)
+}
+
 fn check(src: &str) -> Result<(), String> {
-    let p = parser().parse(src).map_err(|e| format!("{:?}", e))?;
+    let src = prepare_test_source(src);
+    let p = parser().parse(src.as_str()).map_err(|e| format!("{:?}", e))?;
     let mut checker = TypeChecker::new();
     checker.check_program(&p).map_err(|e| e.message)
 }
 
 fn run(src: &str) -> Result<Value, String> {
-    let p = parser().parse(src).map_err(|e| format!("{:?}", e))?;
+    let src = prepare_test_source(src);
+    let p = parser().parse(src.as_str()).map_err(|e| format!("{:?}", e))?;
     let mut checker = TypeChecker::new();
     checker.check_program(&p).map_err(|e| e.message)?;
     let mut interpreter = Interpreter::new(p);
-    interpreter.run_function("main", vec![])
+    interpreter.run_function("__test", vec![])
 }
 
 #[test]
 fn net_server_types_check() {
     let src = r#"
-    import { default_net, Net } from nxlib/stdlib/net.nx
+    import { Net }, * as net_mod from nxlib/stdlib/net.nx
 
-    let main = fn () -> unit effect { Console } do
-      inject default_net do
+    let main = fn () -> unit require { PermNet } do
+      inject net_mod.system_handler do
         try
           let server = Net.listen(addr: [=[127.0.0.1:0]=])
           Net.stop(server: server)
         catch e ->
           return ()
-        endtry
-      endinject
+        end
+      end
       return ()
-    endfn
+    end
     "#;
     assert!(check(src).is_ok(), "Server API should typecheck");
 }
@@ -40,15 +46,15 @@ fn net_server_types_check() {
 #[test]
 fn net_server_opaque_server_cannot_construct_externally() {
     let src = r#"
-    import { default_net, Net } from nxlib/stdlib/net.nx
+    import { Net }, * as net_mod from nxlib/stdlib/net.nx
 
-    let main = fn () -> unit do
-      inject default_net do
+    let main = fn () -> unit require { PermNet } do
+      inject net_mod.system_handler do
         let s = Server(id: 0)
         Net.stop(server: s)
-      endinject
+      end
       return ()
-    endfn
+    end
     "#;
     assert!(
         check(src).is_err(),
@@ -59,23 +65,23 @@ fn net_server_opaque_server_cannot_construct_externally() {
 #[test]
 fn net_server_linear_leak_is_rejected() {
     let src = r#"
-    import { default_net, Net } from nxlib/stdlib/net.nx
+    import { Net }, * as net_mod from nxlib/stdlib/net.nx
 
     let leak = fn () -> unit require { Net } effect { Exn } do
       let server = Net.listen(addr: [=[127.0.0.1:0]=])
       return ()
-    endfn
+    end
 
-    let main = fn () -> unit effect { Console } do
-      inject default_net do
+    let main = fn () -> unit require { PermNet } do
+      inject net_mod.system_handler do
         try
           leak()
         catch e ->
           return ()
-        endtry
-      endinject
+        end
+      end
       return ()
-    endfn
+    end
     "#;
     let err = check(src).expect_err("leaking linear Server should be a type error");
     assert!(
@@ -88,19 +94,19 @@ fn net_server_linear_leak_is_rejected() {
 #[test]
 fn net_server_listen_and_stop() {
     let src = r#"
-    import { default_net, Net } from nxlib/stdlib/net.nx
+    import { Net }, * as net_mod from nxlib/stdlib/net.nx
 
-    let main = fn () -> bool effect { Console } do
-      inject default_net do
+    let main = fn () -> bool require { PermNet } do
+      inject net_mod.system_handler do
         try
           let server = Net.listen(addr: [=[127.0.0.1:0]=])
           Net.stop(server: server)
           return true
         catch e ->
           return false
-        endtry
-      endinject
-    endfn
+        end
+      end
+    end
     "#;
     assert_eq!(run(src).unwrap(), Value::Bool(true));
 }
@@ -119,10 +125,10 @@ fn net_server_accept_and_respond() {
 
     let src = format!(
         r#"
-    import {{ default_net, Net, request_method, request_path }} from nxlib/stdlib/net.nx
+    import {{ Net, request_method, request_path }}, * as net_mod from nxlib/stdlib/net.nx
 
-    let main = fn () -> bool effect {{ Console }} do
-      inject default_net do
+    let main = fn () -> bool require {{ PermNet }} effect {{ Console }} do
+      inject net_mod.system_handler do
         try
           let server = Net.listen(addr: [=[{addr}]=])
           let req = Net.accept(server: &server)
@@ -133,9 +139,9 @@ fn net_server_accept_and_respond() {
           return true
         catch e ->
           return false
-        endtry
-      endinject
-    endfn
+        end
+      end
+    end
     "#
     );
 
@@ -189,7 +195,7 @@ fn net_requires_inject() {
     let main = fn () -> string do
       let body = Net.get(url: [=[https://example.com]=])
       return body
-    endfn
+    end
     "#;
     let err = check(src).expect_err("Net.get without inject Net should be a type error");
     assert!(

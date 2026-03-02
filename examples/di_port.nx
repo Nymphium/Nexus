@@ -1,29 +1,30 @@
-import as fs from nxlib/stdlib/fs.nx
-import as stdio from nxlib/stdlib/stdio.nx
+import { Console }, * as stdio from nxlib/stdlib/stdio.nx
 
 // --- Port Definition (Interface) ---
 port Logger do
-    fn info(msg: string) -> unit effect { Console }
-endport
+    fn info(msg: string) -> unit
+end
 
 // --- Business Logic ---
-let greet = fn (name: string) -> unit require { Logger } effect { Console } do
+let greet = fn (name: string) -> unit require { Logger, Console } do
     Logger.info(msg: [=[Greeting ]=] ++ name)
-    stdio.println(val: [=[Hello, ]=] ++ name ++ [=[!]=])
+    Console.println(val: [=[Hello, ]=] ++ name ++ [=[!]=])
     return ()
-endfn
+end
 
-let console_logger = handler Logger do
-    fn info(msg: string) -> unit effect { Console } do
-        stdio.println(val: [=[[INFO] ]=] ++ msg)
+let console_logger = handler Logger require { Console } do
+    fn info(msg: string) -> unit do
+        Console.println(val: [=[[INFO] ]=] ++ msg)
         return ()
-    endfn
-endhandler
+    end
+end
 
-let main = fn () -> unit effect { Console } do
-    stdio.println(val: [=[--- Using ConsoleLogger ---]=])
-    inject console_logger do
-        greet(name: [=[Nexus User]=])
-    endinject
+let main = fn () -> unit require { PermConsole } do
+    inject stdio.system_handler do
+        Console.println(val: [=[--- Using ConsoleLogger ---]=])
+        inject console_logger do
+            greet(name: [=[Nexus User]=])
+        end
+    end
     return ()
-endfn
+end

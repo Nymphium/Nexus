@@ -1,4 +1,3 @@
-use chumsky::Parser;
 use nexus::lang::parser::parser;
 use nexus::lang::typecheck::TypeChecker;
 
@@ -15,7 +14,7 @@ fn test_float_arithmetic() {
         let x = 1.5 +. 2.5
         let y = x *. 2.0
         return ()
-    endfn
+    end
     "#;
     assert!(check(src).is_ok());
 }
@@ -25,8 +24,8 @@ fn test_float_compare() {
     let src = r#"
     let main = fn () -> unit do
         let b = 1.0 <. 2.0
-        if b then return () else return () endif
-    endfn
+        if b then return () else return () end
+    end
     "#;
     assert!(check(src).is_ok());
 }
@@ -37,7 +36,7 @@ fn test_float_int_mismatch() {
     let main = fn () -> unit do
         let x = 1 +. 2.0
         return ()
-    endfn
+    end
     "#;
     assert!(
         check(src).is_err(),
@@ -53,7 +52,7 @@ fn test_float_literal_type() {
         let y: float = 0.01
         let z: float = 123.456789
         return ()
-    endfn
+    end
     "#;
     assert!(check(src).is_ok());
 }
@@ -67,7 +66,7 @@ fn test_f32_and_f64_keywords() {
         let z = x +. 3.5
         let w = y +. 4.0
         return ()
-    endfn
+    end
     "#;
     assert!(check(src).is_ok());
 }

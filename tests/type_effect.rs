@@ -1,4 +1,3 @@
-use chumsky::Parser;
 use nexus::interpreter::{Interpreter, Value};
 use nexus::lang::parser;
 use nexus::lang::typecheck::TypeChecker;
@@ -27,14 +26,20 @@ fn run(src: &str) -> Result<Value, String> {
 fn io_program(body: &str) -> String {
     format!(
         r#"
-let io = fn (x: i64) -> unit effect {{ Console }} do
-    return ()
-endfn
+type IO = {{}}
 
-let main = fn () -> unit effect {{ Console }} do
+let io = fn (x: i64) -> unit effect {{ IO }} do
+    return ()
+end
+
+let helper = fn () -> unit effect {{ IO }} do
 {body}
     return ()
-endfn
+end
+
+let main = fn () -> unit do
+    return ()
+end
 "#
     )
 }
@@ -44,12 +49,12 @@ fn pure_program(body: &str) -> String {
         r#"
 let pure = fn (x: i64) -> unit do
     return ()
-endfn
+end
 
 let main = fn () -> unit do
 {body}
     return ()
-endfn
+end
 "#
     )
 }
@@ -112,12 +117,12 @@ fn labeled_call_order_program(digits: &[i64], perm: &[usize], via_function_value
         r#"
 let encode = fn ({params}) -> i64 do
     return {expr}
-endfn
+end
 
 let __test_main = fn () -> bool do
     let canonical = encode({canonical_args})
 {call_site}    return canonical == permuted
-endfn
+end
 "#
     )
 }
@@ -135,11 +140,11 @@ proptest! {
             r#"
 let id = fn <T>(x: T) -> T do
     return x
-endfn
+end
 
 let __test_main = fn () -> i64 do
     return id(x: {n})
-endfn
+end
 "#
         );
         prop_assert!(check(&src).is_ok());
@@ -151,11 +156,11 @@ endfn
             r#"
 let id = fn <T>(x: T) -> T do
     return x
-endfn
+end
 
 let __test_main = fn () -> bool do
     return id(x: {n})
-endfn
+end
 "#
         );
         prop_assert!(check(&src).is_err());
@@ -188,11 +193,11 @@ endfn
             r#"
 let first = fn <A, B>(a: A, b: B) -> A do
     return a
-endfn
+end
 
 let __test_main = fn () -> i64 do
     return first(a: {n}, b: {b})
-endfn
+end
 "#
         );
         prop_assert!(check(&src).is_ok());
@@ -204,11 +209,11 @@ endfn
             r#"
 let f = fn (x: i64) -> i64 do
     return x
-endfn
+end
 
 let __test_main = fn () -> i64 do
     return f(y: {n})
-endfn
+end
 "#
         );
         prop_assert!(check(&src).is_err());
@@ -222,19 +227,21 @@ endfn
         }
         let src = format!(
             r#"
-let io = fn (x: i64) -> unit effect {{ Console }} do
+type IO = {{}}
+
+let io = fn (x: i64) -> unit effect {{ IO }} do
     return ()
-endfn
+end
 
 let pure_wrap = fn (x: i64) -> unit effect {{}} do
 {body}
     return ()
-endfn
+end
 
 let main = fn () -> unit do
     pure_wrap(x: 0)
     return ()
-endfn
+end
 "#
         );
         prop_assert!(check(&src).is_err());
@@ -249,7 +256,7 @@ exception Fail(val: string)
 let fail = fn () -> unit do
     raise Fail(val: [=[{msg}]=])
     return ()
-endfn
+end
 "#
         );
         prop_assert!(check(&src).is_err());
@@ -259,29 +266,31 @@ endfn
     fn prop_try_catch_with_io_handler_typechecks(msg in "[a-zA-Z0-9_]{1,16}") {
         let src = format!(
             r#"
-import {{ print }} from nxlib/stdlib/stdio.nx
-import {{ i64_to_string }} from nxlib/stdlib/string.nx
+import {{ Console }}, * as stdio from nxlib/stdlib/stdio.nx
+import {{ from_i64 }} from nxlib/stdlib/string.nx
 exception MsgError(val: string)
 
 let risky = fn (msg: string) -> unit effect {{ Exn }} do
     raise MsgError(val: msg)
     return ()
-endfn
+end
 
-let main = fn () -> unit effect {{ Console }} do
-    try
-        risky(msg: [=[{msg}]=])
-    catch e ->
-        match e do
-            case MsgError(val: m) -> print(val: m)
-            case RuntimeError(val: m) -> print(val: m)
-            case InvalidIndex(val: i) ->
-                let m = i64_to_string(val: i)
-                print(val: m)
-        endmatch
-    endtry
+let main = fn () -> unit require {{ PermConsole }} do
+    inject stdio.system_handler do
+        try
+            risky(msg: [=[{msg}]=])
+        catch e ->
+            match e do
+                case MsgError(val: m) -> Console.print(val: m)
+                case RuntimeError(val: m) -> Console.print(val: m)
+                case InvalidIndex(val: i) ->
+                    let m = from_i64(val: i)
+                    Console.print(val: m)
+            end
+        end
+    end
     return ()
-endfn
+end
 "#
         );
         prop_assert!(check(&src).is_ok());
@@ -302,9 +311,9 @@ let __test_main = fn () -> i64 do
     let %arr = [| {elems} |]
     let arr_ref = &%arr
     let n = array.length(arr: arr_ref)
-    match %arr do case _ -> () endmatch
+    match %arr do case _ -> () end
     return n
-endfn
+end
 "#
         );
         prop_assert!(check(&src).is_ok());
@@ -319,7 +328,7 @@ let __test_main = fn () -> i64 do
     ~c <- {b}
     let v = ~c
     return v
-endfn
+end
 "#
         );
         prop_assert!(check(&src).is_ok());
@@ -333,7 +342,7 @@ let main = fn () -> unit do
     let ~c = {n}
     ~c <- true
     return ()
-endfn
+end
 "#
         );
         prop_assert!(check(&src).is_err());
@@ -347,7 +356,7 @@ let main = fn () -> unit do
     let c = {a}
     c <- {b}
     return ()
-endfn
+end
 "#
         );
         prop_assert!(check(&src).is_err());
@@ -359,9 +368,9 @@ endfn
             r#"
 let main = fn () -> unit do
     let %x = {n}
-    match %x do case _ -> () endmatch
+    match %x do case _ -> () end
     return ()
-endfn
+end
 "#
         );
         prop_assert!(check(&src).is_ok());
@@ -374,7 +383,7 @@ endfn
 let main = fn () -> unit do
     let %x = {n}
     return ()
-endfn
+end
 "#
         );
         // Primitive linear values are auto-dropped at scope end
@@ -387,10 +396,10 @@ endfn
             r#"
 let main = fn () -> unit do
     let %x = {n}
-    match %x do case _ -> () endmatch
-    match %x do case _ -> () endmatch
+    match %x do case _ -> () end
+    match %x do case _ -> () end
     return ()
-endfn
+end
 "#
         );
         prop_assert!(check(&src).is_err());
@@ -404,7 +413,7 @@ let main = fn () -> unit do
     let %x = {n}
     let ~r = %x
     return ()
-endfn
+end
 "#
         );
         prop_assert!(check(&src).is_err());
@@ -416,7 +425,7 @@ endfn
             r#"
 let peek = fn (x: &i64) -> i64 do
     return x
-endfn
+end
 
 let __test_main = fn () -> i64 do
     let %x = {n}
@@ -424,9 +433,9 @@ let __test_main = fn () -> i64 do
     let a = peek(x: x_ref1)
     let x_ref2 = &%x
     let b = peek(x: x_ref2)
-    match %x do case _ -> () endmatch
+    match %x do case _ -> () end
     return a + b
-endfn
+end
 "#
         );
         prop_assert!(check(&src).is_ok());
@@ -437,15 +446,15 @@ endfn
         let src = format!(
             r#"
 let consume = fn (x: %i64) -> i64 do
-    match x do case _ -> () endmatch
+    match x do case _ -> () end
     return 1
-endfn
+end
 
 let main = fn () -> unit do
     let y = consume(x: {n})
-    match y do case _ -> () endmatch
+    match y do case _ -> () end
     return ()
-endfn
+end
 "#
         );
         prop_assert!(check(&src).is_ok());
@@ -458,12 +467,12 @@ endfn
 let main = fn () -> unit do
     let %x = {n}
     if {cond} then
-        match %x do case _ -> () endmatch
+        match %x do case _ -> () end
     else
         return ()
-    endif
+    end
     return ()
-endfn
+end
 "#
         );
         prop_assert!(check(&src).is_err());
@@ -507,12 +516,12 @@ proptest! {
             r#"
 let id = fn (x: i64) -> i64 do
     return x
-endfn
+end
 
 let __test_main = fn () -> i64 do
     let f = id
     return f(x: {n})
-endfn
+end
 "#
         );
         let res = run(&src);
@@ -527,9 +536,9 @@ endfn
 let __test_main = fn () -> i64 do
     let inc = fn (x: i64) -> i64 do
         return x + 1
-    endfn
+    end
     return inc(x: {n})
-endfn
+end
 "#
         );
         let res = run(&src);
@@ -548,9 +557,9 @@ let __test_main = fn () -> i64 do
     let base = {base}
     let add_base = fn (x: i64) -> i64 do
         return x + base
-    endfn
+    end
     return add_base(x: {delta})
-endfn
+end
 "#
         );
         let res = run(&src);
@@ -571,10 +580,10 @@ let __test_main = fn () -> i64 do
             let n1 = n - 1
             let rec = fact(n: n1)
             return n * rec
-        endif
-    endfn
+        end
+    end
     return fact(n: {n})
-endfn
+end
 "#
         );
         let res = run(&src);
@@ -591,7 +600,7 @@ let __test_main = fn () -> i64 do
     ~c <- {b}
     let v = ~c
     return v
-endfn
+end
 "#
         );
         let res = run(&src);
@@ -605,17 +614,17 @@ endfn
             r#"
 let id = fn (x: i64) -> i64 do
     return x
-endfn
+end
 
 let __test_main = fn () -> bool do
     let x = {n}
     let _ = id(x)
     return true
-endfn
+end
 "#
         );
         let parser = parser::parser();
-        prop_assert!(parser.parse(src).is_err());
+        prop_assert!(parser.parse(&src).is_err());
     }
 
     #[test]
@@ -624,15 +633,15 @@ endfn
             r#"
 let f = fn (n: i64) -> unit do
     return ()
-endfn
+end
 
 let main = fn () -> unit do
     f({n})
     return ()
-endfn
+end
 "#
         );
         let parser = parser::parser();
-        prop_assert!(parser.parse(src).is_err());
+        prop_assert!(parser.parse(&src).is_err());
     }
 }

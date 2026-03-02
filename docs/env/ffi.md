@@ -56,5 +56,5 @@ let main = fn () -> unit do
   // assuming print_float is an effectful operation
   print_float(val: result)
   return ()
-endfn
+end
 ```

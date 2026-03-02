@@ -4,7 +4,6 @@
 //! - All operands become atoms (variables or literals)
 //! - Complex expressions are extracted into let-bound temporaries
 //! - If/Match compiled into IfReturn chains
-//! - CallIndirect preserved for evidence-based dispatch
 
 use crate::ir::lir::*;
 use crate::ir::mir::*;
@@ -249,14 +248,6 @@ impl LowerCtx {
                         expr: LirExpr::Atom(value_atom),
                     });
                 }
-                Ok(None)
-            }
-            MirStmt::If {
-                cond,
-                then_body,
-                else_body,
-            } => {
-                self.lower_if_stmt(cond, then_body, else_body.as_deref(), ret_type)?;
                 Ok(None)
             }
             MirStmt::Conc(_tasks) => {
@@ -604,43 +595,6 @@ impl LowerCtx {
                     typ,
                 ))
             }
-            MirExpr::CallIndirect {
-                evidence_base,
-                method_offset,
-                args,
-                ret_type,
-            } => {
-                let base_atom = self.lower_expr_to_atom(evidence_base)?;
-                // Compute table index: evidence_base + method_offset
-                let table_idx = if *method_offset == 0 {
-                    base_atom
-                } else {
-                    self.bind_expr_to_temp(
-                        LirExpr::Binary {
-                            op: BinaryOp::Add,
-                            lhs: base_atom,
-                            rhs: LirAtom::Int(*method_offset as i64),
-                            typ: Type::I32,
-                        },
-                        Type::I32,
-                    )
-                };
-
-                let mut lir_args: Vec<(String, LirAtom)> = Vec::new();
-                for (label, expr) in args {
-                    let atom = self.lower_expr_to_atom(expr)?;
-                    lir_args.push((label.clone(), atom));
-                }
-
-                Ok(self.bind_expr_to_temp(
-                    LirExpr::CallIndirect {
-                        table_idx,
-                        args: lir_args,
-                        typ: ret_type.clone(),
-                    },
-                    ret_type.clone(),
-                ))
-            }
             MirExpr::Constructor { name, args } => {
                 let mut lir_args = Vec::new();
                 for arg in args {
@@ -725,28 +679,6 @@ impl LowerCtx {
                     typ,
                 ))
             }
-            MirExpr::ObjectTag(expr) => {
-                let atom = self.lower_expr_to_atom(expr)?;
-                Ok(self.bind_expr_to_temp(
-                    LirExpr::ObjectTag {
-                        value: atom,
-                        typ: Type::I64,
-                    },
-                    Type::I64,
-                ))
-            }
-            MirExpr::ObjectField { value, index } => {
-                let atom = self.lower_expr_to_atom(value)?;
-                let typ = Type::I64;
-                Ok(self.bind_expr_to_temp(
-                    LirExpr::ObjectField {
-                        value: atom,
-                        index: *index,
-                        typ: typ.clone(),
-                    },
-                    typ,
-                ))
-            }
             MirExpr::If {
                 cond: _,
                 then_body: _,
@@ -763,18 +695,6 @@ impl LowerCtx {
                     detail:
                         "Match expression in atom position; should be lowered at statement level"
                             .to_string(),
-                })
-            }
-            MirExpr::Lambda {
-                params: _,
-                evidence_params: _,
-                ret_type: _,
-                body: _,
-            } => {
-                // Lambda in expression position — not directly supported in ANF
-                // Should have been lifted to a top-level function
-                Err(LirLowerError::UnsupportedExpression {
-                    detail: "Lambda in expression position".to_string(),
                 })
             }
             MirExpr::Borrow(name) => {

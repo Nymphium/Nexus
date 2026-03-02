@@ -1,4 +1,3 @@
-use chumsky::Parser;
 use nexus::lang::parser;
 use nexus::lang::typecheck::TypeChecker;
 
@@ -16,11 +15,10 @@ fn test_ffi_declaration() {
     import external math.wasm
     pub external add_i64 = [=[add]=] : (a: i64, b: i64) -> i64
 
-    let main = fn () -> unit effect { Console } do
+    let main = fn () -> unit do
       let x = add_i64(a: 1, b: 2)
-      // print(val: i64_to_string(val: x))
       return ()
-    endfn
+    end
     "#;
     match check_code(src) {
         Ok(_) => (),
@@ -32,13 +30,17 @@ fn test_ffi_declaration() {
 fn test_ffi_effectful() {
     let src = r#"
     import external time.wasm
-    pub external get_time = [=[get_time]=] : () -> float effect { Console }
+    type IO = {}
+    pub external get_time = [=[get_time]=] : () -> float effect { IO }
 
-    let main = fn () -> unit effect { Console } do
+    let helper = fn () -> unit effect { IO } do
       let t = get_time()
-      // print(val: float_to_string(val: t))
       return ()
-    endfn
+    end
+
+    let main = fn () -> unit do
+      return ()
+    end
     "#;
     match check_code(src) {
         Ok(_) => (),
@@ -52,7 +54,7 @@ fn test_ffi_mismatch() {
     pub external foo = [=[foo]=] : (a: i64) -> i64
     let main = fn () -> unit do
       let x = foo(a: true)
-    endfn
+    end
     "#;
     assert!(check_code(src).is_err());
 }
@@ -67,9 +69,9 @@ fn test_ffi_explicit_type_params() {
       let %a = [| 1, 2, 3 |]
       let r = &%a
       let n = array_len(arr: r)
-      match %a do case _ -> () endmatch
+      match %a do case _ -> () end
       return ()
-    endfn
+    end
     "#;
     match check_code(src) {
         Ok(_) => (),
@@ -83,7 +85,7 @@ fn test_ffi_unintroduced_type_var_errors() {
     pub external bad = [=[bad]=] : (arr: &[| T |]) -> i64
     let main = fn () -> unit do
       return ()
-    endfn
+    end
     "#;
     let err = check_code(src).unwrap_err();
     assert!(
@@ -100,7 +102,7 @@ fn test_ffi_concrete_types_no_type_params_needed() {
     let main = fn () -> unit do
       let x = add(a: 1, b: 2)
       return ()
-    endfn
+    end
     "#;
     match check_code(src) {
         Ok(_) => (),

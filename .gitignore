@@ -26,3 +26,6 @@ tree-sitter-nexus/*.so
 
 # Generated wasm artifacts
 *.wasm
+
+/tmp
+/result

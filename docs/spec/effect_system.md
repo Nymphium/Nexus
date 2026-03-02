@@ -18,23 +18,22 @@ Examples:
 ```nexus
 let pure = fn (x: i64) -> i64 do
   return x + 1
-endfn
+end
 
-let log = fn (msg: string) -> unit effect { Console } do
-  print(val: msg)
+let greet = fn (msg: string) -> unit require { Console } do
+  Console.println(val: msg)
   return ()
-endfn
+end
 
 let fetch = fn (url: string) -> string require { Net } do
   return Net.get(url: url)
-endfn
+end
 ```
 
 ## Builtin Effects
 
-Current builtin effects are:
+The only builtin effect is:
 
-- `Console`: console I/O (`print`, etc.)
 - `Exn`: exception raising/propagation
 
 `try ... catch` discharges `Exn` from the protected block.
@@ -42,16 +41,16 @@ Current builtin effects are:
 ```nexus
 let risky = fn () -> unit effect { Exn } do
   raise RuntimeError(msg: [=[oops]=])
-endfn
+end
 
-let main = fn () -> unit effect { Console } do
+let main = fn () -> unit do
   try
     risky()
   catch e ->
-    print(val: [=[recovered]=])
-  endtry
+    ()
+  end
   return ()
-endfn
+end
 ```
 
 ## Coeffects via Ports
@@ -61,36 +60,46 @@ endfn
 ```nexus
 port Logger do
   fn info(msg: string) -> unit
-endport
+end
 
 let program = fn () -> unit require { Logger } do
   Logger.info(msg: [=[hello]=])
   return ()
-endfn
+end
 ```
 
 ## Handler and Inject
 
-A handler value implements one port:
+A handler value implements one port. Handlers may declare `require { ... }` to propagate runtime permission requirements:
 
 ```nexus
-let logger = handler Logger do
+let console_logger = handler Logger require { Console } do
   fn info(msg: string) -> unit do
-    print(val: msg)
+    Console.println(val: msg)
     return ()
-  endfn
-endhandler
+  end
+end
+
+let mock_logger = handler Logger do
+  fn info(msg: string) -> unit do return () end
+end
 ```
+
+Handler method bodies inherit the handler's `require` clause, so `Console.println` is available inside `console_logger`'s methods.
 
 `inject` supplies handler values to a lexical scope and discharges matching requirements:
 
 ```nexus
-let main = fn () -> unit effect { Console } do
-  inject logger do
-    program()
-  endinject
+import { Console }, * as stdio from nxlib/stdlib/stdio.nx
+
+let main = fn () -> unit require { PermConsole } do
+  inject stdio.system_handler do
+    inject console_logger do
+      program()
+    end
+  end
   return ()
-endfn
+end
 ```
 
 Type checking enforces:
@@ -104,10 +113,10 @@ Type checking enforces:
 `main` is intentionally constrained:
 
 - `() -> unit`
-- `effect` may contain only `Console` (or be empty)
-- `require` may contain only `Net` and/or `Fs` (or be empty)
+- `effect` must be empty (or omitted)
+- `require` may contain any subset of `{ PermFs, PermNet, PermConsole, PermRandom, PermClock, PermProc }` (or be empty)
 
-This maps to capability-style component execution (for example WASI networking/filesystem).
+All I/O capabilities are now expressed as coeffects via ports. This maps to capability-style component execution (WASI-compatible).
 
 ## Subtyping
 

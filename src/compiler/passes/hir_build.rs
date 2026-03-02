@@ -16,14 +16,11 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub enum HirBuildError {
     ImportReadError { path: String, detail: String },
     ImportParseError { path: String, detail: String },
     CyclicImport { path: String },
     ImportItemNotFound { item: String, path: String },
-    MissingMain,
-    GenericHandlerNotSupported { coeffect: String, method: String },
 }
 
 impl std::fmt::Display for HirBuildError {
@@ -41,10 +38,6 @@ impl std::fmt::Display for HirBuildError {
             HirBuildError::ImportItemNotFound { item, path } => {
                 write!(f, "Item '{}' not found in '{}'", item, path)
             }
-            HirBuildError::MissingMain => write!(f, "No main function found"),
-            HirBuildError::GenericHandlerNotSupported { coeffect, method } => {
-                write!(f, "Generic handler method not supported: {}.{}", coeffect, method)
-            }
         }
     }
 }
@@ -57,28 +50,20 @@ pub fn build_hir(program: &Program) -> Result<HirProgram, HirBuildError> {
 }
 
 struct HirBuilder {
-    types: Vec<HirTypeDef>,
-    enums: Vec<HirEnumDef>,
-    exceptions: Vec<HirExceptionDef>,
     ports: Vec<HirPort>,
     functions: Vec<HirFunction>,
     externals: Vec<HirExternal>,
     handler_bindings: HashMap<String, HirHandlerBinding>,
-    global_lets: Vec<HirGlobalLet>,
     import_stack: Vec<String>,
 }
 
 impl HirBuilder {
     fn new() -> Self {
         HirBuilder {
-            types: Vec::new(),
-            enums: Vec::new(),
-            exceptions: Vec::new(),
             ports: Vec::new(),
             functions: Vec::new(),
             externals: Vec::new(),
             handler_bindings: HashMap::new(),
-            global_lets: Vec::new(),
             import_stack: Vec::new(),
         }
     }
@@ -136,14 +121,10 @@ impl HirBuilder {
             .collect();
 
         Ok(HirProgram {
-            types: self.types.clone(),
-            enums: self.enums.clone(),
-            exceptions: self.exceptions.clone(),
             ports: self.ports.clone(),
             functions,
             externals,
             handler_bindings,
-            global_lets: self.global_lets.clone(),
         })
     }
 
@@ -210,12 +191,8 @@ impl HirBuilder {
                         TopLevel::Import(import) if import.is_external => {
                             current_wasm_module = Some(import.path.clone());
                         }
-                        TopLevel::Enum(ed) => {
-                            self.enums.push(self.convert_enum_def(ed));
-                        }
-                        TopLevel::Exception(ex) => {
-                            self.exceptions.push(self.convert_exception_def(ex));
-                        }
+                        TopLevel::Enum(_) => {}
+                        TopLevel::Exception(_) => {}
                         TopLevel::Let(gl) if gl.is_public => {
                             if let Expr::External(wasm_name, _type_params, typ) = &gl.value.node {
                                 if let Type::Arrow(params, ret, _requires, effects) = typ {
@@ -233,7 +210,6 @@ impl HirBuilder {
                                                 .map(|(n, t)| HirParam {
                                                     name: n.clone(),
                                                     label: n.clone(),
-                                                    sigil: Sigil::Immutable,
                                                     typ: t.clone(),
                                                 })
                                                 .collect(),
@@ -267,44 +243,14 @@ impl HirBuilder {
                 TopLevel::Import(import) => {
                     self.process_import(import)?;
                 }
-                TopLevel::TypeDef(td) => {
-                    self.types.push(HirTypeDef {
-                        name: self.rename(&td.name, rename_map),
-                        type_params: td.type_params.clone(),
-                        fields: td.fields.clone(),
-                    });
-                }
-                TopLevel::Enum(ed) => {
-                    self.enums.push(HirEnumDef {
-                        name: self.rename(&ed.name, rename_map),
-                        is_opaque: ed.is_opaque,
-                        type_params: ed.type_params.clone(),
-                        variants: ed.variants.iter().map(|v| HirVariantDef {
-                            name: v.name.clone(),
-                            fields: v.fields.clone(),
-                        }).collect(),
-                    });
-                }
-                TopLevel::Exception(ex) => {
-                    self.exceptions.push(HirExceptionDef {
-                        name: self.rename(&ex.name, rename_map),
-                        fields: ex.fields.clone(),
-                    });
-                }
+                TopLevel::TypeDef(_) => {}
+                TopLevel::Enum(_) => {}
+                TopLevel::Exception(_) => {}
                 TopLevel::Port(port) => {
                     self.ports.push(HirPort {
                         name: self.rename(&port.name, rename_map),
                         functions: port.functions.iter().map(|f| HirPortMethod {
                             name: f.name.clone(),
-                            params: f.params.iter().map(|p| HirParam {
-                                name: p.name.clone(),
-                                label: p.name.clone(),
-                                sigil: p.sigil.clone(),
-                                typ: p.typ.clone(),
-                            }).collect(),
-                            ret_type: f.ret_type.clone(),
-                            requires: f.requires.clone(),
-                            effects: f.effects.clone(),
                         }).collect(),
                     });
                 }
@@ -315,8 +261,8 @@ impl HirBuilder {
                             type_params: _,
                             params,
                             ret_type,
-                            requires,
-                            effects,
+                            requires: _,
+                            effects: _,
                             body,
                         } => {
                             self.functions.push(HirFunction {
@@ -324,12 +270,9 @@ impl HirBuilder {
                                 params: params.iter().map(|p| HirParam {
                                     name: p.name.clone(),
                                     label: p.name.clone(),
-                                    sigil: p.sigil.clone(),
                                     typ: p.typ.clone(),
                                 }).collect(),
                                 ret_type: ret_type.clone(),
-                                requires: requires.clone(),
-                                effects: effects.clone(),
                                 body: self.convert_stmts(body, rename_map),
                             });
                         }
@@ -345,7 +288,6 @@ impl HirBuilder {
                                         params: params.iter().map(|(n, t)| HirParam {
                                             name: n.clone(),
                                             label: n.clone(),
-                                            sigil: Sigil::Immutable,
                                             typ: t.clone(),
                                         }).collect(),
                                         ret_type: *ret.clone(),
@@ -367,12 +309,9 @@ impl HirBuilder {
                                     params: hf.params.iter().map(|p| HirParam {
                                         name: p.name.clone(),
                                         label: p.name.clone(),
-                                        sigil: p.sigil.clone(),
                                         typ: p.typ.clone(),
                                     }).collect(),
                                     ret_type: hf.ret_type.clone(),
-                                    requires: hf.requires.clone(),
-                                    effects: hf.effects.clone(),
                                     body: self.convert_stmts(&hf.body, rename_map),
                                 });
                             }
@@ -385,15 +324,11 @@ impl HirBuilder {
                             );
                         }
                         _ => {
-                            self.global_lets.push(HirGlobalLet {
-                                name,
-                                typ: gl.typ.clone(),
-                                value: self.convert_expr(&gl.value, rename_map),
-                            });
+                            // Global let values not represented in HIR
+                            // (no downstream consumer reads them)
                         }
                     }
                 }
-                TopLevel::Comment => {}
             }
         }
         Ok(())
@@ -506,10 +441,9 @@ impl HirBuilder {
 
     fn convert_stmt(&self, stmt: &Stmt, rename_map: &HashMap<String, String>) -> Option<HirStmt> {
         match stmt {
-            Stmt::Let { name, sigil, typ, value } => {
+            Stmt::Let { name, typ, value, .. } => {
                 Some(HirStmt::Let {
                     name: name.clone(),
-                    sigil: sigil.clone(),
                     typ: typ.clone(),
                     value: self.convert_expr(value, rename_map),
                 })
@@ -532,8 +466,6 @@ impl HirBuilder {
                         name: t.name.clone(),
                         params: vec![],
                         ret_type: Type::Unit,
-                        requires: t.requires.clone(),
-                        effects: t.effects.clone(),
                         body: self.convert_stmts(&t.body, rename_map),
                     }
                 }).collect();
@@ -552,7 +484,6 @@ impl HirBuilder {
                     body: self.convert_stmts(body, rename_map),
                 })
             }
-            Stmt::Comment => None,
         }
     }
 
@@ -583,7 +514,6 @@ impl HirBuilder {
             }
             Expr::Constructor(name, args) => {
                 HirExpr::Constructor {
-                    enum_name: String::new(), // resolved later
                     variant: name.clone(),
                     args: args.iter().map(|(_, e)| self.convert_expr(e, rename_map)).collect(),
                 }
@@ -624,18 +554,14 @@ impl HirBuilder {
                     }).collect(),
                 }
             }
-            Expr::Lambda { type_params, params, ret_type, requires, effects, body } => {
+            Expr::Lambda { type_params: _, params, ret_type, requires: _, effects: _, body } => {
                 HirExpr::Lambda {
-                    type_params: type_params.clone(),
                     params: params.iter().map(|p| HirParam {
                         name: p.name.clone(),
                         label: p.name.clone(),
-                        sigil: p.sigil.clone(),
                         typ: p.typ.clone(),
                     }).collect(),
                     ret_type: ret_type.clone(),
-                    requires: requires.clone(),
-                    effects: effects.clone(),
                     body: self.convert_stmts(body, rename_map),
                 }
             }
@@ -645,21 +571,16 @@ impl HirBuilder {
             Expr::External(sym, tparams, typ) => {
                 HirExpr::External(sym.clone(), tparams.clone(), typ.clone())
             }
-            Expr::Handler { coeffect_name, requires, functions } => {
+            Expr::Handler { coeffect_name: _, requires: _, functions } => {
                 HirExpr::Handler {
-                    coeffect_name: coeffect_name.clone(),
-                    requires: requires.clone(),
                     functions: functions.iter().map(|f| HirFunction {
                         name: f.name.clone(),
                         params: f.params.iter().map(|p| HirParam {
                             name: p.name.clone(),
                             label: p.name.clone(),
-                            sigil: p.sigil.clone(),
                             typ: p.typ.clone(),
                         }).collect(),
                         ret_type: f.ret_type.clone(),
-                        requires: f.requires.clone(),
-                        effects: f.effects.clone(),
                         body: self.convert_stmts(&f.body, rename_map),
                     }).collect(),
                 }
@@ -673,7 +594,6 @@ impl HirBuilder {
             Pattern::Variable(name, sigil) => HirPattern::Variable(name.clone(), sigil.clone()),
             Pattern::Constructor(name, fields) => {
                 HirPattern::Constructor {
-                    enum_name: String::new(), // resolved later
                     variant: name.clone(),
                     fields: fields.iter().map(|(label, p)| {
                         (label.clone(), self.convert_pattern(&p.node))
@@ -690,24 +610,6 @@ impl HirBuilder {
         }
     }
 
-    fn convert_enum_def(&self, ed: &EnumDef) -> HirEnumDef {
-        HirEnumDef {
-            name: ed.name.clone(),
-            is_opaque: ed.is_opaque,
-            type_params: ed.type_params.clone(),
-            variants: ed.variants.iter().map(|v| HirVariantDef {
-                name: v.name.clone(),
-                fields: v.fields.clone(),
-            }).collect(),
-        }
-    }
-
-    fn convert_exception_def(&self, ex: &ExceptionDef) -> HirExceptionDef {
-        HirExceptionDef {
-            name: ex.name.clone(),
-            fields: ex.fields.clone(),
-        }
-    }
 }
 
 fn get_default_alias(path: &str) -> String {
@@ -757,12 +659,6 @@ fn collect_calls_in_hir_expr(expr: &HirExpr, out: &mut Vec<String>) {
     match expr {
         HirExpr::Call { func, args } => {
             out.push(func.clone());
-            for (_, arg) in args {
-                collect_calls_in_hir_expr(arg, out);
-            }
-        }
-        HirExpr::PortCall { port, method, args } => {
-            out.push(format!("{}.{}", port, method));
             for (_, arg) in args {
                 collect_calls_in_hir_expr(arg, out);
             }

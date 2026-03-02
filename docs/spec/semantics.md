@@ -51,10 +51,10 @@ Sigils are not just syntactic markers; they represent fundamental semantic const
 
 Nexus tracks two signature dimensions:
 
-- **Effects (`effect`)** for builtin runtime actions (`Console`, `Exn`).
-- **Coeffects (`require`)** for environment capabilities declared by `port`.
+- **Effects (`effect`)** for builtin runtime actions (`Exn`).
+- **Coeffects (`require`)** for environment capabilities declared by `port` (e.g. `Console`, `Fs`, `Net`, `Random`, `Clock`, `Proc`).
 
-Handlers are values (`handler Port do ... endhandler`) and are introduced lexically with `inject ... do ... endinject`.
+Handlers are values (`handler Port do ... end`) and are introduced lexically with `inject ... do ... end`.
 `try ... catch` discharges `Exn` from the protected region.
 
 ## Concurrency Model
