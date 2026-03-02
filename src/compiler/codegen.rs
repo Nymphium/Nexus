@@ -89,96 +89,63 @@ impl CodegenError {
 impl std::fmt::Display for CodegenError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let code = self.code();
-        match self {
+        let msg = match self {
             CodegenError::MissingMain => {
-                write!(f, "[{}] main function not found in ANF program", code)
+                "main function not found in ANF program".to_string()
             }
-            CodegenError::UnsupportedBinaryOp { op, operand_type } => write!(
-                f,
-                "[{}] unsupported {} binary operator '{}'",
-                code, operand_type, op
-            ),
-            CodegenError::UnsupportedBinaryOpPair { op, lhs, rhs } => write!(
-                f,
-                "[{}] unsupported binary operator '{}' for operand types ({}, {})",
-                code, op, lhs, rhs
-            ),
-            CodegenError::UnsupportedWasmType { typ } => write!(
-                f,
-                "[{}] type '{}' is not supported by current wasm codegen",
-                code, typ
-            ),
-            CodegenError::UnitWasmType => write!(
-                f,
-                "[{}] unit cannot be represented as a local/param wasm valtype",
-                code
-            ),
-            CodegenError::UnsupportedCoercion { from_type, to_type } => write!(
-                f,
-                "[{}] unsupported numeric coercion from '{}' to '{}'",
-                code, from_type, to_type
-            ),
-            CodegenError::CallTargetNotFound { name } => write!(
-                f,
-                "[{}] call to '{}' is not supported in wasm codegen (callee not found in internal/external lowered symbols)",
-                code, name
-            ),
-            CodegenError::CallArityMismatch { name, expected, got } => write!(
-                f,
-                "[{}] call arity mismatch for '{}': expected {}, got {}",
-                code, name, expected, got
-            ),
-            CodegenError::CallLabelMismatch { name, expected, got } => write!(
-                f,
-                "[{}] call label mismatch for '{}': expected '{}', got '{}'",
-                code, name, expected, got
-            ),
-            CodegenError::ConflictingLocalTypes { name } => write!(
-                f,
-                "[{}] variable '{}' has conflicting wasm local types",
-                code, name
-            ),
-            CodegenError::ObjectHeapRequired { context } => write!(
-                f,
-                "[{}] codegen internal error: {} requested without object heap",
-                code, context
-            ),
-            CodegenError::UnsupportedPack { typ } => write!(
-                f,
-                "[{}] cannot pack value of type '{}' into object field",
-                code, typ
-            ),
-            CodegenError::UnsupportedUnpack { typ } => write!(
-                f,
-                "[{}] cannot unpack object field into type '{}'",
-                code, typ
-            ),
-            CodegenError::UnsupportedExternalParamType { typ } => write!(
-                f,
-                "[{}] external param type '{}' is not supported by current wasm codegen",
-                code, typ
-            ),
-            CodegenError::UnsupportedExternalReturnType { typ } => write!(
-                f,
-                "[{}] external return type '{}' is not supported by current wasm codegen",
-                code, typ
-            ),
-            CodegenError::ExternalArgTypeMismatch { expected, got } => write!(
-                f,
-                "[{}] external call argument type mismatch: expected {}, got {}",
-                code, expected, got
-            ),
-            CodegenError::StringConcatTypeMismatch { lhs, rhs } => write!(
-                f,
-                "[{}] string concat expects string operands, got ({}, {})",
-                code, lhs, rhs
-            ),
-            CodegenError::StringLiteralsWithoutMemory => write!(
-                f,
-                "[{}] codegen internal error: string literals exist without memory configuration",
-                code
-            ),
-        }
+            CodegenError::UnsupportedBinaryOp { op, operand_type } => {
+                format!("unsupported {} binary operator '{}'", operand_type, op)
+            }
+            CodegenError::UnsupportedBinaryOpPair { op, lhs, rhs } => {
+                format!("unsupported binary operator '{}' for operand types ({}, {})", op, lhs, rhs)
+            }
+            CodegenError::UnsupportedWasmType { typ } => {
+                format!("type '{}' is not supported by current wasm codegen", typ)
+            }
+            CodegenError::UnitWasmType => {
+                "unit cannot be represented as a local/param wasm valtype".to_string()
+            }
+            CodegenError::UnsupportedCoercion { from_type, to_type } => {
+                format!("unsupported numeric coercion from '{}' to '{}'", from_type, to_type)
+            }
+            CodegenError::CallTargetNotFound { name } => {
+                format!("call target '{}' not found in lowered symbols", name)
+            }
+            CodegenError::CallArityMismatch { name, expected, got } => {
+                format!("call arity mismatch for '{}': expected {}, got {}", name, expected, got)
+            }
+            CodegenError::CallLabelMismatch { name, expected, got } => {
+                format!("call label mismatch for '{}': expected '{}', got '{}'", name, expected, got)
+            }
+            CodegenError::ConflictingLocalTypes { name } => {
+                format!("variable '{}' has conflicting wasm local types", name)
+            }
+            CodegenError::ObjectHeapRequired { context } => {
+                format!("{} requested without object heap", context)
+            }
+            CodegenError::UnsupportedPack { typ } => {
+                format!("cannot pack value of type '{}' into object field", typ)
+            }
+            CodegenError::UnsupportedUnpack { typ } => {
+                format!("cannot unpack object field into type '{}'", typ)
+            }
+            CodegenError::UnsupportedExternalParamType { typ } => {
+                format!("external param type '{}' is not supported by current wasm codegen", typ)
+            }
+            CodegenError::UnsupportedExternalReturnType { typ } => {
+                format!("external return type '{}' is not supported by current wasm codegen", typ)
+            }
+            CodegenError::ExternalArgTypeMismatch { expected, got } => {
+                format!("external call argument type mismatch: expected {}, got {}", expected, got)
+            }
+            CodegenError::StringConcatTypeMismatch { lhs, rhs } => {
+                format!("string concat expects string operands, got ({}, {})", lhs, rhs)
+            }
+            CodegenError::StringLiteralsWithoutMemory => {
+                "string literals exist without memory configuration".to_string()
+            }
+        };
+        write!(f, "internal compiler error: {} [{}] (this is a bug; please report it)", msg, code)
     }
 }
 
@@ -258,10 +225,22 @@ struct CodegenLayout {
 
 /// Compiles a parsed Nexus program through HIR → MIR → LIR → WASM pipeline.
 pub fn compile_program_to_wasm(program: &Program) -> Result<Vec<u8>, CompileError> {
+    // Extract main's require ports from the AST before lowering
+    // (the lowering pipeline currently drops the requires clause).
+    let caps = extract_main_require_ports_from_ast(program);
+
     let hir = build_hir(program).map_err(CompileError::HirBuild)?;
     let mir = lower_hir_to_mir(&hir).map_err(CompileError::MirLower)?;
     let lir = lower_mir_to_lir(&mir).map_err(CompileError::LirLower)?;
-    compile_lir_to_wasm(&lir, &mir.evidence_table).map_err(CompileError::Codegen)
+    let mut wasm = compile_lir_to_wasm(&lir, &mir.evidence_table).map_err(CompileError::Codegen)?;
+
+    // Append nexus:capabilities section from AST requires, since the
+    // lowering pipeline doesn't preserve requires through to ANF.
+    if !caps.is_empty() {
+        append_capabilities_section(&mut wasm, &caps);
+    }
+
+    Ok(wasm)
 }
 
 /// Compiles typed ANF directly into core wasm bytes.
@@ -423,16 +402,6 @@ pub fn compile_typed_anf_to_wasm(program: &AnfProgram) -> Result<Vec<u8>, Codege
         module.section(&data);
     }
 
-    // Emit nexus:capabilities custom section from main's require row
-    let caps = extract_main_require_ports(program);
-    if !caps.is_empty() {
-        let payload = caps.join("\n");
-        module.section(&CustomSection {
-            name: Cow::Borrowed(NEXUS_CAPABILITIES_SECTION),
-            data: Cow::Borrowed(payload.as_bytes()),
-        });
-    }
-
     Ok(module.finish())
 }
 
@@ -441,24 +410,45 @@ fn perm_to_capability(name: &str) -> Option<&'static str> {
     Permission::from_perm_name(name).map(|p| p.cap_name())
 }
 
-/// Extracts runtime permission names from main function's require row for capability metadata.
-fn extract_main_require_ports(program: &AnfProgram) -> Vec<String> {
-    let main_func = program.functions.iter().find(|f| f.name == ENTRYPOINT);
-    let Some(func) = main_func else {
-        return vec![];
-    };
-    match &func.requires {
-        Type::Row(reqs, _) => reqs
-            .iter()
-            .filter_map(|r| match r {
-                Type::UserDefined(name, args) if args.is_empty() => {
-                    perm_to_capability(name).map(|s| s.to_string())
+/// Extracts runtime permission names from main function's require row in the AST.
+fn extract_main_require_ports_from_ast(program: &Program) -> Vec<String> {
+    use crate::lang::ast::{Expr, TopLevel};
+    for def in &program.definitions {
+        if let TopLevel::Let(gl) = &def.node {
+            if gl.name == ENTRYPOINT {
+                if let Expr::Lambda { requires, .. } = &gl.value.node {
+                    return match requires {
+                        Type::Row(reqs, _) => reqs
+                            .iter()
+                            .filter_map(|r| match r {
+                                Type::UserDefined(name, args) if args.is_empty() => {
+                                    perm_to_capability(name).map(|s| s.to_string())
+                                }
+                                _ => None,
+                            })
+                            .collect(),
+                        _ => vec![],
+                    };
                 }
-                _ => None,
-            })
-            .collect(),
-        _ => vec![],
+            }
+        }
     }
+    vec![]
+}
+
+/// Appends the `nexus:capabilities` custom section to a core WASM module binary.
+fn append_capabilities_section(wasm: &mut Vec<u8>, caps: &[String]) {
+    let payload = caps.join("\n");
+    let section = CustomSection {
+        name: Cow::Borrowed(NEXUS_CAPABILITIES_SECTION),
+        data: Cow::Borrowed(payload.as_bytes()),
+    };
+    // Encode the section into a temporary module and extract the raw section bytes.
+    let mut tmp = Module::new();
+    tmp.section(&section);
+    let encoded = tmp.finish();
+    // Module preamble is 8 bytes (magic + version). The rest is the section.
+    wasm.extend_from_slice(&encoded[8..]);
 }
 
 fn compile_wasi_cli_run_wrapper(main_idx: u32, main_ret_type: &Type) -> Function {

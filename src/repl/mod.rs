@@ -12,7 +12,7 @@ use ariadne::{Color, Label, Report, ReportKind, Source};
 use rustyline::error::ReadlineError;
 use rustyline::Config;
 
-use crate::compiler::codegen;
+use crate::compiler::{bundler, codegen};
 use crate::constants::ENTRYPOINT;
 use crate::lang::ast::{Expr, GlobalLet, Literal, Program, Spanned, Stmt, TopLevel, Type};
 use crate::lang::parser::{parser, stmt_parser, ParseError};
@@ -91,6 +91,9 @@ impl ReplState {
     fn compile_and_run(&self, program: &Program) -> Result<(), String> {
         let wasm =
             codegen::compile_program_to_wasm(program).map_err(|e| format!("Compile error: {e}"))?;
+
+        let config = bundler::BundleConfig::default();
+        let wasm = bundler::bundle_core_wasm(&wasm, &config)?;
 
         let module = Module::from_binary(&self.engine, &wasm)
             .map_err(|e| format!("WASM load error: {e}"))?;

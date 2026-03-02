@@ -1,6 +1,5 @@
 use ariadne::{Color, Label, Report, ReportKind, Source};
 use clap::{Parser, Subcommand};
-use std::collections::BTreeSet;
 use std::fs;
 use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
@@ -17,7 +16,8 @@ use wit_component::{embed_component_metadata, ComponentEncoder, StringEncoding};
 use wit_parser::Resolve;
 
 use nexus::compiler;
-use nexus::constants::{is_preview2_wasi_module, Permission, ENTRYPOINT, NEXUS_HOST_HTTP_MODULE, WASI_SNAPSHOT_MODULE};
+use nexus::compiler::bundler::{self, BundleConfig, WASM_MERGE_MAIN_NAME};
+use nexus::constants::{Permission, ENTRYPOINT, NEXUS_CAPABILITIES_SECTION, NEXUS_HOST_HTTP_MODULE, WASI_SNAPSHOT_MODULE};
 use nexus::lang;
 use nexus::repl;
 use nexus::runtime::{self, ExecutionCapabilities};
@@ -109,8 +109,6 @@ struct LoadedSource {
 }
 
 const NET_HOST_ADAPTER_WASM: &[u8] = include_bytes!("../nxlib/stdlib/net-host-adapter.wasm");
-const WASM_MERGE_PATH_ENV: &str = "NEXUS_WASM_MERGE";
-const WASM_MERGE_MAIN_NAME: &str = "__nexus_main__";
 #[cfg(test)]
 fn is_component_wasm(wasm: &[u8]) -> bool {
     wasmparser::Parser::is_component(wasm)
@@ -213,7 +211,7 @@ fn run_command(input: Option<PathBuf>, capabilities: ExecutionCapabilities) -> E
     }
 
     // Compile and execute via wasmtime
-    let wasm_merge_command = resolve_wasm_merge_command(None);
+    let wasm_merge_command = bundler::resolve_wasm_merge_command(None);
     let compiled = match compile_loaded_source_to_wasm(&loaded, true, &wasm_merge_command) {
         Ok(compiled) => compiled,
         Err(code) => return code,
@@ -262,7 +260,7 @@ fn build_command(
         }
     };
 
-    let wasm_merge_command = resolve_wasm_merge_command(wasm_merge.as_deref());
+    let wasm_merge_command = bundler::resolve_wasm_merge_command(wasm_merge.as_deref());
     let compiled = match compile_loaded_source_to_wasm(&loaded, true, &wasm_merge_command) {
         Ok(c) => c,
         Err(code) => return code,
@@ -445,18 +443,6 @@ fn default_wasm_output_path() -> PathBuf {
     PathBuf::from("main.wasm")
 }
 
-fn resolve_wasm_merge_command(cli_override: Option<&Path>) -> PathBuf {
-    if let Some(path) = cli_override {
-        return path.to_path_buf();
-    }
-    if let Some(path) = std::env::var_os(WASM_MERGE_PATH_ENV) {
-        if !path.is_empty() {
-            return PathBuf::from(path);
-        }
-    }
-    PathBuf::from("wasm-merge")
-}
-
 fn compile_loaded_source_to_core_wasm(loaded: &LoadedSource) -> Result<Vec<u8>, ExitCode> {
     let src = strip_shebang(loaded.source.clone());
     let program = match parse_program(&loaded.display_name, &src) {
@@ -498,8 +484,11 @@ fn compile_loaded_source_to_wasm(
     // net sub-crate, but only programs that actually call net FFI functions
     // (e.g. __nx_http_get) need the host adapter composed in.
     let app_needs_nexus_host = module_uses_net_ffi(&wasm);
-    let merged = match bundle_external_imports(&wasm, allow_nexus_host_import, wasm_merge_command)
-    {
+    let config = BundleConfig {
+        wasm_merge_command: wasm_merge_command.to_path_buf(),
+        allow_nexus_host_import,
+    };
+    let merged = match bundler::bundle_core_wasm(&wasm, &config) {
         Ok(wasm) => wasm,
         Err(msg) => {
             eprintln!("Bundle Error: {}", msg);
@@ -511,7 +500,7 @@ fn compile_loaded_source_to_wasm(
     // stub (unreachable) implementations so the component encoder sees
     // no unresolved host imports.
     let merged = if !app_needs_nexus_host {
-        let merged_imports = module_import_names(&merged).unwrap_or_default();
+        let merged_imports = bundler::module_import_names(&merged).unwrap_or_default();
         if merged_imports.contains(NEXUS_HOST_HTTP_MODULE) {
             match merge_nexus_host_stubs(&merged, wasm_merge_command) {
                 Ok(m) => m,
@@ -636,6 +625,11 @@ fn encode_core_wasm_as_component(
     needs_nexus_host: bool,
 ) -> Result<Vec<u8>, String> {
     validate_main_export(core_wasm)?;
+
+    // Extract nexus:capabilities custom section before component encoding
+    // (ComponentEncoder does not preserve custom sections from the core module).
+    let caps = runtime::parse_nexus_capabilities(core_wasm);
+
     let wit_source = if needs_nexus_host {
         "package nexus:cli;\n\ninterface nexus-host {\n  host-http-request: func(method: string, url: string, headers: string, body: string) -> string;\n  host-http-listen: func(addr: string) -> s64;\n  host-http-accept: func(server-id: s64) -> string;\n  host-http-respond: func(req-id: s64, status: s64, headers: string, body: string) -> s32;\n  host-http-stop: func(server-id: s64) -> s32;\n}\n\nworld app {\n  import nexus-host;\n  export main: func();\n  export wasi:cli/run@0.2.6;\n}\n".to_string()
     } else {
@@ -671,44 +665,41 @@ fn encode_core_wasm_as_component(
         )
         .map_err(|e| format!("failed to add preview1 adapter: {}", e))?
         .validate(true);
-    let component_wasm = encoder
+    let mut component_wasm = encoder
         .encode()
         .map_err(|e| format!("failed to encode component wasm: {}", e))?;
 
     if needs_nexus_host {
         let adapter_component_wasm = build_nexus_host_adapter_component()?;
-        compose_component_with_nexus_host_adapter(&component_wasm, &adapter_component_wasm)
-    } else {
-        Ok(component_wasm)
+        component_wasm = compose_component_with_nexus_host_adapter(&component_wasm, &adapter_component_wasm)?;
     }
+
+    // Re-append nexus:capabilities custom section to the component binary.
+    if !caps.is_empty() {
+        append_custom_section(&mut component_wasm, &caps);
+    }
+
+    Ok(component_wasm)
 }
 
-fn bundle_external_imports(
-    wasm: &[u8],
-    allow_nexus_host_import: bool,
-    wasm_merge_command: &Path,
-) -> Result<Vec<u8>, String> {
-    let imports = module_import_names(wasm)?;
-    let unresolved = file_backed_imports(&imports, allow_nexus_host_import)?;
-    if unresolved.is_empty() {
-        return Ok(wasm.to_vec());
-    }
-    let candidate_modules = bundle_candidate_modules(&unresolved, allow_nexus_host_import)?;
-    let merged = merge_dependencies_once(wasm, &candidate_modules, wasm_merge_command)?;
-    let merged_imports = module_import_names(&merged)?;
-    let merged_unresolved = file_backed_imports(&merged_imports, allow_nexus_host_import)?;
-    if !merged_unresolved.is_empty() {
-        let unresolved_list = merged_unresolved
-            .iter()
-            .cloned()
-            .collect::<Vec<_>>()
-            .join(", ");
-        return Err(format!(
-            "failed to resolve imports while bundling; unresolved after internal linker pass: {}",
-            unresolved_list
-        ));
-    }
-    Ok(merged)
+/// Appends the `nexus:capabilities` custom section to a WASM component binary.
+/// Uses raw LEB128 encoding to add a section 0 (custom) at the end.
+fn append_custom_section(wasm: &mut Vec<u8>, caps: &[String]) {
+    use std::borrow::Cow;
+    let payload = caps.join("\n");
+    let section = wenc::CustomSection {
+        name: Cow::Borrowed(NEXUS_CAPABILITIES_SECTION),
+        data: Cow::Borrowed(payload.as_bytes()),
+    };
+    // Component custom sections use section id 0, same as core modules.
+    // wasm_encoder::CustomSection implements ComponentSection, so we can
+    // append it directly to a component.
+    let mut comp = wenc::Component::new();
+    comp.section(&section);
+    let encoded = comp.finish();
+    // The component preamble is 8 bytes (magic + version). Skip it and
+    // append only the section bytes.
+    wasm.extend_from_slice(&encoded[8..]);
 }
 
 /// Builds a tiny wasm module that provides stub (unreachable) implementations
@@ -837,50 +828,6 @@ fn merge_nexus_host_stubs(
     result
 }
 
-fn bundle_candidate_modules(
-    unresolved: &BTreeSet<String>,
-    allow_nexus_host_import: bool,
-) -> Result<Vec<String>, String> {
-    let mut leaf = Vec::new();
-    let mut non_leaf = Vec::new();
-    for candidate in unresolved.iter().rev() {
-        let candidate_wasm = fs::read(candidate).map_err(|e| {
-            format!(
-                "failed to read dependency module '{}' while resolving bundle order: {}",
-                candidate, e
-            )
-        })?;
-        let candidate_imports = module_import_names(&candidate_wasm)?;
-        let candidate_unresolved =
-            file_backed_imports(&candidate_imports, allow_nexus_host_import)?;
-        let depends_on_other_unresolved = candidate_unresolved
-            .iter()
-            .any(|dep| dep != candidate && unresolved.contains(dep));
-        if depends_on_other_unresolved {
-            non_leaf.push(candidate.clone());
-        } else {
-            leaf.push(candidate.clone());
-        }
-    }
-
-    leaf.extend(non_leaf);
-    Ok(leaf)
-}
-
-fn module_import_names(wasm: &[u8]) -> Result<BTreeSet<String>, String> {
-    let mut out = BTreeSet::new();
-    for payload in wasmparser::Parser::new(0).parse_all(wasm) {
-        let payload = payload.map_err(|e| format!("failed to parse wasm: {}", e))?;
-        if let Payload::ImportSection(section) = payload {
-            for import in section {
-                let import =
-                    import.map_err(|e| format!("failed to parse wasm import section: {}", e))?;
-                out.insert(import.module.to_string());
-            }
-        }
-    }
-    Ok(out)
-}
 
 /// Returns true if the wasm module imports any function whose name starts with
 /// `__nx_http` — i.e. it actually uses the net FFI.  Used to decide whether the
@@ -904,107 +851,6 @@ fn module_uses_net_ffi(wasm: &[u8]) -> bool {
     false
 }
 
-fn file_backed_imports(
-    imports: &BTreeSet<String>,
-    allow_nexus_host_import: bool,
-) -> Result<BTreeSet<String>, String> {
-    let mut out = BTreeSet::new();
-    for module_name in imports {
-        if module_name == WASI_SNAPSHOT_MODULE {
-            continue;
-        }
-        if module_name == NEXUS_HOST_HTTP_MODULE {
-            if allow_nexus_host_import {
-                continue;
-            }
-            return Err(format!(
-                "import module '{}' is deprecated; use component builds (`nexus build`) for HTTP",
-                NEXUS_HOST_HTTP_MODULE
-            ));
-        }
-        if is_preview2_wasi_module(module_name) {
-            continue;
-        }
-        let path = Path::new(module_name);
-        if !path.exists() {
-            return Err(format!(
-                "import module '{}' is not a local wasm path; cannot bundle dynamically",
-                module_name
-            ));
-        }
-        out.insert(module_name.clone());
-    }
-    Ok(out)
-}
-
-fn merge_dependencies_once(
-    current_wasm: &[u8],
-    module_names: &[String],
-    wasm_merge_command: &Path,
-) -> Result<Vec<u8>, String> {
-    let temp_dir = std::env::temp_dir().join(format!(
-        "nexus-bundle-{}-{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    fs::create_dir_all(&temp_dir)
-        .map_err(|e| format!("failed to create temp bundle directory: {}", e))?;
-
-    let current_path = temp_dir.join("current.wasm");
-    let merged_path = temp_dir.join("merged.wasm");
-    fs::write(&current_path, current_wasm)
-        .map_err(|e| format!("failed to write temporary wasm: {}", e))?;
-
-    let mut command = ProcessCommand::new(wasm_merge_command);
-    command.arg(&current_path).arg(WASM_MERGE_MAIN_NAME);
-    for module_name in module_names {
-        let dep_path = PathBuf::from(module_name).canonicalize().map_err(|e| {
-            format!(
-                "failed to resolve import module '{}' as a filesystem path: {}",
-                module_name, e
-            )
-        })?;
-        command.arg(dep_path).arg(module_name);
-    }
-    command
-        .arg("--all-features")
-        .arg("-o")
-        .arg(&merged_path)
-        .arg("--skip-export-conflicts");
-
-    let output = command.output().map_err(|e| {
-        format!(
-            "failed to execute '{}' while bundling dependencies: {} (use `--wasm-merge PATH` or {} env var)",
-            wasm_merge_command.display(),
-            e,
-            WASM_MERGE_PATH_ENV
-        )
-    })?;
-    if !output.status.success() {
-        let _ = fs::remove_dir_all(&temp_dir);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stderr = stderr.trim();
-        let detail = if stderr.is_empty() {
-            format!("exit status {}", output.status)
-        } else {
-            format!("exit status {}: {}", output.status, stderr)
-        };
-        return Err(format!(
-            "external wasm linker '{}' failed while bundling [{}] ({})",
-            wasm_merge_command.display(),
-            module_names.join(", "),
-            detail
-        ));
-    }
-
-    let merged =
-        fs::read(&merged_path).map_err(|e| format!("failed to read merged wasm output: {}", e))?;
-    let _ = fs::remove_dir_all(&temp_dir);
-    Ok(merged)
-}
 
 fn parse_program(filename: &str, src: &str) -> Option<lang::ast::Program> {
     let parser = lang::parser::parser();
@@ -1080,21 +926,6 @@ mod tests {
         assert!(is_component_wasm(component));
     }
 
-    #[test]
-    fn file_backed_imports_rejects_legacy_nexus_host_module() {
-        let mut imports = BTreeSet::new();
-        imports.insert(WASI_SNAPSHOT_MODULE.to_string());
-        imports.insert("wasi:http/outgoing-handler@0.2.0".to_string());
-        imports.insert(NEXUS_HOST_HTTP_MODULE.to_string());
-
-        let err = file_backed_imports(&imports, false)
-            .expect_err("legacy nexus host module should be rejected");
-        assert!(
-            err.contains(NEXUS_HOST_HTTP_MODULE),
-            "unexpected error: {}",
-            err
-        );
-    }
 
     #[test]
     fn cli_build_wasm_merge_flag_is_supported() {
