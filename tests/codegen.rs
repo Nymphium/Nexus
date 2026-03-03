@@ -432,3 +432,43 @@ fn codegen_fixture_module_test_compiles() {
     let wasm = compile_src(&src).expect("module_test fixture should compile");
     run_main_unit_with_wasi(&wasm).expect("wasm main should run");
 }
+
+use proptest::prelude::*;
+
+proptest! {
+    #![proptest_config(ProptestConfig {
+        cases: 64,
+        failure_persistence: None,
+        .. ProptestConfig::default()
+    })]
+
+    #[test]
+    fn prop_codegen_arithmetic_associativity(a in -100i64..100, b in -100i64..100, c in -100i64..100) {
+        let src = format!("
+let main = fn () -> i64 do
+    return ({} + {}) + {}
+end
+", a, b, c);
+        let wasm = common::wasm_runner::compile_src(&src).unwrap();
+        let result = common::wasm_runner::run_main_i64(&wasm).unwrap();
+        assert_eq!(result, (a + b) + c);
+    }
+
+    #[test]
+    fn prop_codegen_simple_if(a in 0i64..10) {
+        let src = format!("
+let main = fn () -> i64 do
+    if {} > 5 then
+        return 1
+    else
+        return 2
+    end
+    return 0
+end
+", a);
+        let wasm = common::wasm_runner::compile_src(&src).unwrap();
+        let result = common::wasm_runner::run_main_i64(&wasm).unwrap();
+        let expected = if a > 5 { 1 } else { 2 };
+        assert_eq!(result, expected);
+    }
+}

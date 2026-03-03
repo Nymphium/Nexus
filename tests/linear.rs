@@ -262,3 +262,40 @@ fn test_adt_with_linear_arg_consumed_once_passes() {
         Err(e) => panic!("Expected OK but got: {}", e),
     }
 }
+
+use proptest::prelude::*;
+
+proptest! {
+    #![proptest_config(ProptestConfig {
+        cases: 64,
+        failure_persistence: None,
+        .. ProptestConfig::default()
+    })]
+
+    #[test]
+    fn prop_linear_primitive_drops(x in 0i64..100) {
+        let src = format!("
+let main = fn () -> i64 do
+    let %a = {}
+    match %a do case _ -> () end
+    return 1
+end
+", x);
+        assert!(common::source::check(&src).is_ok());
+    }
+
+    #[test]
+    fn prop_linear_shadowing_requires_consumption(val in 0i64..100) {
+        // Shadowing a linear variable makes the outer variable unconsumable, which is an error
+        let src = format!("
+let main = fn () -> i64 do
+    let %a = {}
+    let %a = {}
+    match %a do case _ -> () end
+    match %a do case _ -> () end
+    return 1
+end
+", val, val);
+        assert!(common::source::check(&src).is_err());
+    }
+}
