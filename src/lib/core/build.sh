@@ -25,7 +25,7 @@ build_module "$REPO_ROOT/src/lib/math/Cargo.toml"
 build_module "$REPO_ROOT/src/lib/fs/Cargo.toml"
 build_module "$REPO_ROOT/src/lib/random/Cargo.toml"
 build_module "$REPO_ROOT/src/lib/net/Cargo.toml"
-build_module "$REPO_ROOT/src/lib/net_host_adapter/Cargo.toml"
+build_module "$REPO_ROOT/src/lib/nexus_host_bridge/Cargo.toml"
 
 copy_module \
   "$REPO_ROOT/src/lib/stdio/target/wasm32-wasip1/release/nexus_stdio_wasm.wasm" \
@@ -49,7 +49,7 @@ copy_module \
   "$REPO_ROOT/src/lib/net/target/wasm32-wasip1/release/nexus_net_wasm.wasm" \
   "$REPO_ROOT/nxlib/stdlib/net.wasm"
 copy_module \
-  "$REPO_ROOT/src/lib/net_host_adapter/target/wasm32-wasip1/release/nexus_net_host_adapter_wasm.wasm" \
-  "$REPO_ROOT/nxlib/stdlib/net-host-adapter.wasm"
+  "$REPO_ROOT/src/lib/nexus_host_bridge/target/wasm32-wasip1/release/nexus_nexus_host_bridge_wasm.wasm" \
+  "$REPO_ROOT/nxlib/stdlib/nexus-host-bridge.wasm"
 
-echo "Wrote $REPO_ROOT/nxlib/stdlib/{stdio,core,string,math,fs,random,net,net-host-adapter}.wasm"
+echo "Wrote $REPO_ROOT/nxlib/stdlib/{stdio,core,string,math,fs,random,net,nexus-host-bridge}.wasm"

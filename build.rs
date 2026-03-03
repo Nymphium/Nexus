@@ -20,10 +20,10 @@ const MODULES: &[WasmModule] = &[
         output_name: "stdlib.wasm",
     },
     WasmModule {
-        manifest_rel: "src/lib/net_host_adapter/Cargo.toml",
-        src_rel: "src/lib/net_host_adapter",
-        artifact_name: "nexus_net_host_adapter_wasm.wasm",
-        output_name: "net-host-adapter.wasm",
+        manifest_rel: "src/lib/nexus_host_bridge/Cargo.toml",
+        src_rel: "src/lib/nexus_host_bridge",
+        artifact_name: "nexus_nexus_host_bridge_wasm.wasm",
+        output_name: "nexus-host-bridge.wasm",
     },
 ];
 

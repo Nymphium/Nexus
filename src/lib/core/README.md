@@ -13,7 +13,7 @@
 | `nxlib/stdlib/fs.nx` | `nxlib/stdlib/fs.wasm` | `src/lib/fs` |
 | `nxlib/stdlib/random.nx` | `nxlib/stdlib/random.wasm` | `src/lib/random` |
 | `nxlib/stdlib/net.nx` | `nxlib/stdlib/net.wasm` | `src/lib/net` |
-| component adapter | `nxlib/stdlib/net-host-adapter.wasm` | `src/lib/net_host_adapter` |
+| component adapter | `nxlib/stdlib/nexus-host-bridge.wasm` | `src/lib/nexus_host_bridge` |
 
 ## Build
 

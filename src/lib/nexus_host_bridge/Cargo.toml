@@ -1,5 +1,5 @@
 [package]
-name = "nexus_net_host_adapter_wasm"
+name = "nexus_nexus_host_bridge_wasm"
 version = "0.1.0"
 edition = "2021"
 

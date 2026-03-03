@@ -108,7 +108,7 @@ struct LoadedSource {
     source: String,
 }
 
-const NET_HOST_ADAPTER_WASM: &[u8] = include_bytes!("../nxlib/stdlib/net-host-adapter.wasm");
+const NEXUS_HOST_BRIDGE_WASM: &[u8] = include_bytes!("../nxlib/stdlib/nexus-host-bridge.wasm");
 #[cfg(test)]
 fn is_component_wasm(wasm: &[u8]) -> bool {
     wasmparser::Parser::is_component(wasm)
@@ -553,7 +553,7 @@ fn validate_main_export(core_wasm: &[u8]) -> Result<(), String> {
 
 fn build_nexus_host_adapter_component() -> Result<Vec<u8>, String> {
     let mut encoder = ComponentEncoder::default()
-        .module(NET_HOST_ADAPTER_WASM)
+        .module(NEXUS_HOST_BRIDGE_WASM)
         .map_err(|e| format!("failed to load host adapter core module: {}", e))?
         .adapter(
             WASI_SNAPSHOT_MODULE,
