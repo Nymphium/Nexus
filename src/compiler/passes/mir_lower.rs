@@ -42,6 +42,7 @@ struct HandlerScope {
     active: HashMap<String, String>,
 }
 
+#[tracing::instrument(skip_all, name = "lower_hir_to_mir")]
 pub fn lower_hir_to_mir(hir: &HirProgram) -> Result<MirProgram, MirLowerError> {
     let mut lowerer = MirLowerer::new(hir);
     lowerer.lower()

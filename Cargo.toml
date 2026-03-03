@@ -17,6 +17,11 @@ wit-component = "0.243.0"
 wit-parser = "0.243.0"
 wasm-compose = "0.243.0"
 ureq = "3.2.0"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
+opentelemetry = "0.31.0"
+opentelemetry_sdk = "0.31.0"
+tracing-opentelemetry = "0.32.1"
 
 [dev-dependencies]
 proptest = "1"

@@ -224,6 +224,7 @@ struct CodegenLayout {
 }
 
 /// Compiles a parsed Nexus program through HIR → MIR → LIR → WASM pipeline.
+#[tracing::instrument(skip_all, name = "compile_program_to_wasm")]
 pub fn compile_program_to_wasm(program: &Program) -> Result<Vec<u8>, CompileError> {
     // Extract main's require ports from the AST before lowering
     // (the lowering pipeline currently drops the requires clause).

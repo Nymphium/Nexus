@@ -707,6 +707,7 @@ impl TypeChecker {
     }
 
     /// Type-checks a full program and updates internal environment state.
+    #[tracing::instrument(skip_all, name = "typecheck")]
     pub fn check_program(&mut self, program: &Program) -> Result<(), TypeError> {
         self.warnings.clear();
         // Pass 1: Collect imports, types, enums, exceptions, ports, and signatures of global lets

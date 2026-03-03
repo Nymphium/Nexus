@@ -44,6 +44,7 @@ impl std::fmt::Display for HirBuildError {
 
 /// Builds an HirProgram from a parsed AST Program.
 /// Performs module resolution, name resolution, and handler collection.
+#[tracing::instrument(skip_all, name = "build_hir")]
 pub fn build_hir(program: &Program) -> Result<HirProgram, HirBuildError> {
     let mut builder = HirBuilder::new();
     builder.build(program)

@@ -29,6 +29,7 @@ impl std::fmt::Display for LirLowerError {
     }
 }
 
+#[tracing::instrument(skip_all, name = "lower_mir_to_lir")]
 pub fn lower_mir_to_lir(mir: &MirProgram) -> Result<LirProgram, LirLowerError> {
     let mut lowerer = LirLowerer::new(mir);
     lowerer.lower()

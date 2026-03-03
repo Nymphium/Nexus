@@ -1827,6 +1827,7 @@ impl Parser {
 // ---- Public API ----
 
 /// Parses a Nexus source string into a Program AST.
+#[tracing::instrument(skip_all, name = "parse")]
 pub fn parse(source: &str) -> Result<Program, Vec<ParseError>> {
     let tokens = lexer::tokenize(source).map_err(|errs| {
         errs.into_iter()

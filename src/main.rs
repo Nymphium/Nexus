@@ -44,6 +44,10 @@ enum ExplainCapabilitiesFormat {
 #[command(name = "nexus")]
 #[command(about = "Nexus language CLI")]
 struct Cli {
+    /// Enable verbose structured timing output to stderr
+    #[arg(short, long, global = true)]
+    verbose: bool,
+
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -116,6 +120,15 @@ fn is_component_wasm(wasm: &[u8]) -> bool {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+
+    if cli.verbose {
+        tracing_subscriber::fmt()
+            .with_writer(std::io::stderr)
+            .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
+            .with_target(false)
+            .with_env_filter("nexus=trace")
+            .init();
+    }
 
     match cli.command {
         Some(Command::Run {
