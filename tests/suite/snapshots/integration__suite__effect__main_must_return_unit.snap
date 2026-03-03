@@ -1,0 +1,5 @@
+---
+source: tests/suite/effect.rs
+expression: err
+---
+main must be a function '() -> unit'
