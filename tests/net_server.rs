@@ -66,11 +66,7 @@ fn net_server_linear_leak_is_rejected() {
     end
     "#;
     let err = check(src).expect_err("leaking linear Server should be a type error");
-    assert!(
-        err.contains("Unused linear"),
-        "expected unused linear error, got: {}",
-        err
-    );
+    insta::assert_snapshot!(err);
 }
 
 #[test]
@@ -199,9 +195,5 @@ fn net_requires_inject() {
     end
     "#;
     let err = check(src).expect_err("Net.get without inject Net should be a type error");
-    assert!(
-        err.contains("requires") || err.contains("Net"),
-        "expected coeffect error, got: {}",
-        err
-    );
+    insta::assert_snapshot!(err);
 }

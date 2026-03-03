@@ -24,7 +24,7 @@ Primitive linear values are auto-dropped at scope end. Composite linear values m
 
 ## Console (`stdio`)
 
-Console I/O is provided via the `Console` port. `system_handler` requires the `PermConsole` runtime permission.
+Console I/O is provided via the `Console` port. `system_handler` requires the `PermConsole` runtime permission (see [WASI Mapping](wasm-wasi.md)).
 
 ```nexus
 import { Console }, * as stdio from nxlib/stdlib/stdio.nx
@@ -48,7 +48,7 @@ let main = fn () -> unit require { PermConsole } do
 end
 ```
 
-Run with `nexus run --allow-console example.nx`.
+Run with `nexus run --allow-console example.nx` (see [CLI Reference](../cli.md)).
 
 Mock handlers can implement `Console` without `require` for testing (no runtime permissions needed).
 
@@ -66,9 +66,10 @@ pub external to_i64 = [=[__nx_string_to_i64]=] : (s: string) -> i64
 ## File System (`fs`)
 
 All fs operations are defined in `port Fs` and dispatched via handler.
-Use `inject fs_mod.system_handler do ... end` for real filesystem access (requires `--allow-fs` at runtime), or inject a mock handler for testing (no runtime capabilities needed).
+Use `inject fs_mod.system_handler do ... end` for real filesystem access (requires `--allow-fs` at runtime, see [CLI Reference](../cli.md)), or inject a mock handler for testing (no runtime capabilities needed).
 
-`system_handler` declares `require { PermFs }`, so injecting it propagates the `PermFs` runtime permission to the caller's `require` row. Mock handlers without `require` need no runtime permissions.
+`system_handler` declares `require { PermFs }`, so injecting it propagates the `PermFs` runtime permission to the caller's `require` row (see [WASI Mapping](wasm-wasi.md)).
+ Mock handlers without `require` need no runtime permissions.
 
 ### Query operations
 
@@ -128,14 +129,14 @@ let main = fn () -> unit require { PermFs } effect { Exn } do
 end
 ```
 
-Run with `nexus run --allow-fs example.nx`.
+Run with `nexus run --allow-fs example.nx` (see [CLI Reference](../cli.md)).
 
 `open_*` and mutating operations may raise `RuntimeError`. The `read`, `fd_write`, and `fd_path` operations consume the handle and return a new one in the result record, enabling stateless handlers (no borrow needed).
 
 ## Network (`net`)
 
 `net` functions are capability-gated by `require { Net }`.
-`system_handler` declares `require { PermNet }`, so injecting it propagates the `PermNet` runtime permission to the caller. Run with `nexus run --allow-net` for real network access.
+`system_handler` declares `require { PermNet }`, so injecting it propagates the `PermNet` runtime permission to the caller (see [WASI Mapping](wasm-wasi.md)). Run with `nexus run --allow-net` for real network access (see [CLI Reference](../cli.md)).
 
 ```nexus
 pub type Header = Header(name: string, value: string)
@@ -198,7 +199,7 @@ let m1 = hashmap.put(map: m0, key: 1, value: [=[one]=])
 
 ## Random
 
-Random number generation is provided via the `Random` port. `system_handler` requires the `PermRandom` runtime permission.
+Random number generation is provided via the `Random` port. `system_handler` requires the `PermRandom` runtime permission (see [WASI Mapping](wasm-wasi.md)).
 
 ```nexus
 import { Random }, * as rng from nxlib/stdlib/random.nx
@@ -223,11 +224,11 @@ let main = fn () -> unit require { PermRandom } do
 end
 ```
 
-Run with `nexus run --allow-random example.nx`.
+Run with `nexus run --allow-random example.nx` (see [CLI Reference](../cli.md)).
 
 ## Clock
 
-Time operations are provided via the `Clock` port. `system_handler` requires the `PermClock` runtime permission.
+Time operations are provided via the `Clock` port. `system_handler` requires the `PermClock` runtime permission (see [WASI Mapping](wasm-wasi.md)).
 
 ```nexus
 import { Clock }, * as clk from nxlib/stdlib/clock.nx
@@ -252,11 +253,11 @@ let main = fn () -> unit require { PermClock } do
 end
 ```
 
-Run with `nexus run --allow-clock example.nx`.
+Run with `nexus run --allow-clock example.nx` (see [CLI Reference](../cli.md)).
 
 ## Process (`proc`)
 
-Process control is provided via the `Proc` port. `system_handler` requires the `PermProc` runtime permission.
+Process control is provided via the `Proc` port. `system_handler` requires the `PermProc` runtime permission (see [WASI Mapping](wasm-wasi.md)).
 
 ```nexus
 import { Proc }, * as proc_mod from nxlib/stdlib/proc.nx
@@ -278,7 +279,7 @@ let main = fn () -> unit require { PermProc } do
 end
 ```
 
-Run with `nexus run --allow-proc example.nx`.
+Run with `nexus run --allow-proc example.nx` (see [CLI Reference](../cli.md)).
 
 ## Result Helpers
 

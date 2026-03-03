@@ -44,8 +44,7 @@ fn static_capability_check_rejects_missing_net() {
     let result = caps.validate_program_requires(requires);
     assert!(result.is_err(), "should reject missing --allow-net");
     let err = result.unwrap_err();
-    assert!(err.contains("--allow-net"), "got: {}", err);
-    assert!(err.contains("PermNet"), "got: {}", err);
+    insta::assert_snapshot!(err);
 }
 
 #[test]
@@ -88,8 +87,7 @@ fn static_capability_check_rejects_multiple_missing() {
     let result = caps.validate_program_requires(requires);
     assert!(result.is_err());
     let err = result.unwrap_err();
-    assert!(err.contains("--allow-net"), "got: {}", err);
-    assert!(err.contains("--allow-console"), "got: {}", err);
+    insta::assert_snapshot!(err);
 }
 
 #[test]

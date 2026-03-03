@@ -81,11 +81,7 @@ fn test_ffi_unintroduced_type_var_errors() {
     end
     "#;
     let err = check_code(src).unwrap_err();
-    assert!(
-        err.contains("unintroduced type variable"),
-        "expected unintroduced type var error, got: {}",
-        err
-    );
+    insta::assert_snapshot!(err);
 }
 
 #[test]

@@ -104,7 +104,7 @@ fn test_main_must_return_unit() {
     end
     "#;
     let err = check(src).expect_err("main -> i64 must be rejected");
-    assert!(err.contains("main must be a function '() -> unit'"), "unexpected error: {}", err);
+    insta::assert_snapshot!(err);
 }
 
 #[test]
@@ -116,7 +116,7 @@ fn test_main_effect_net_only_is_rejected() {
     end
     "#;
     let err = check(src).expect_err("main with { Net } must fail");
-    assert!(err.contains("main function effects must be {}"));
+    insta::assert_snapshot!(err);
 }
 
 #[test]

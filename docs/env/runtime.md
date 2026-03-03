@@ -20,7 +20,7 @@ end
 - **Return Type**: It must return `unit`.
 - **Visibility**: It must be private (`pub let main` is rejected).
 - **Effects**: `main` must have an empty `effect` row (or omit it). All I/O is expressed via coeffects.
-- **Coeffects**: `main` may declare any subset of `{ PermFs, PermNet, PermConsole, PermRandom, PermClock, PermProc }` in `require` (or be empty).
+- **Coeffects**: `main` may declare any subset of `{ PermFs, PermNet, PermConsole, PermRandom, PermClock, PermProc }` in `require` (or be empty). These map to WASI capabilities as described in [WebAssembly and WASI](wasm-wasi.md).
 - **Exn**: `main` cannot expose `Exn` in its effect row.
 
 ### Execution

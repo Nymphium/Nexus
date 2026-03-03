@@ -18,6 +18,23 @@ Runs Nexus source (`.nx`) via interpreter (`main` is executed after parse + type
 nexus run example.nx
 ```
 
+#### Capability Flags
+
+By default, the interpreter runs in a secure sandbox with all capabilities disabled. Use the following flags to grant specific permissions. These map to WASI capabilities when running in Wasm mode (see [WebAssembly and WASI](env/wasm-wasi.md)).
+
+- `--allow-fs`: Allow filesystem access.
+- `--allow-net`: Allow outbound network access.
+- `--allow-console`: Allow console I/O (print, println).
+- `--allow-random`: Allow random number generation.
+- `--allow-clock`: Allow clock/time operations.
+- `--allow-proc`: Allow process operations (exit, etc.).
+- `--preopen DIR`: Preopen a host directory for guest filesystem access (repeatable).
+
+Example:
+```bash
+nexus run --allow-console --allow-fs --preopen ./data script.nx
+```
+
 If no file is provided and stdin is piped, `run` reads from stdin:
 
 ```bash

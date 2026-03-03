@@ -110,13 +110,13 @@ Type checking enforces:
 
 ## Main Constraints
 
-`main` is intentionally constrained:
+`main` is intentionally constrained. See the [Runtime Guide](../env/runtime.md) for full details on the `main` function.
 
 - `() -> unit`
 - `effect` must be empty (or omitted)
 - `require` may contain any subset of `{ PermFs, PermNet, PermConsole, PermRandom, PermClock, PermProc }` (or be empty)
 
-All I/O capabilities are now expressed as coeffects via ports. This maps to capability-style component execution (WASI-compatible).
+All I/O capabilities are now expressed as coeffects via ports. These map directly to capability-style component execution (WASI-compatible). See [WebAssembly and WASI](../env/wasm-wasi.md) for the complete mapping.
 
 ## Subtyping
 

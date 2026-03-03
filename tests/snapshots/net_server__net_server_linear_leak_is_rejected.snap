@@ -1,0 +1,5 @@
+---
+source: tests/net_server.rs
+expression: err
+---
+Unused linear: ["server"]

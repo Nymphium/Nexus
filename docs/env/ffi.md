@@ -4,7 +4,7 @@ Nexus supports interfacing with WebAssembly (Wasm) modules, allowing developers 
 
 ## Loading Wasm Modules
 
-To load a Wasm module, use the `import external` directive.
+To load a Wasm module, use the `import external` directive. Nexus handles these modules using the [WebAssembly Component Model and WASI](wasm-wasi.md).
 
 ```nexus
 import external math.wasm

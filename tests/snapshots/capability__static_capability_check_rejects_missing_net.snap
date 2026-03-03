@@ -1,0 +1,5 @@
+---
+source: tests/capability.rs
+expression: err
+---
+main requires {PermNet} but {--allow-net} not specified

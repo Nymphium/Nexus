@@ -231,11 +231,7 @@ end
     let err = checker
         .check_program(&program)
         .expect_err("missing close should be a type error");
-    assert!(
-        err.message.contains("Unused linear"),
-        "expected unused linear error, got: {}",
-        err.message
-    );
+    insta::assert_snapshot!(err.message);
 }
 
 #[test]
@@ -272,11 +268,7 @@ end
     let err = checker
         .check_program(&program)
         .expect_err("double close should be a type error");
-    assert!(
-        err.message.contains("already consumed"),
-        "expected consumed error, got: {}",
-        err.message
-    );
+    insta::assert_snapshot!(err.message);
 }
 
 #[test]
@@ -479,11 +471,7 @@ let main = fn () -> bool do
 end
 "#;
     let err = check(src).expect_err("Fs.exists without inject Fs should be a type error");
-    assert!(
-        err.contains("requires") || err.contains("Fs"),
-        "expected coeffect error, got: {}",
-        err
-    );
+    insta::assert_snapshot!(err);
 }
 
 #[test]

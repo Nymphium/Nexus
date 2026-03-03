@@ -58,7 +58,7 @@ Primitive linear values are **auto-dropped** at scope end. Composite types (Reco
 
 ### Effect System
 
-Functions declare their side effects and environment requirements:
+Functions declare their side effects and environment requirements. See the [Effect System Specification](spec/effect_system.md) for details.
 
 ```nexus
 let fetch = fn (url: string) -> string require { Net } do
@@ -82,7 +82,7 @@ end
 
 ### Wasm-First
 
-Nexus targets the WebAssembly component model for portable, secure deployment:
+Nexus targets the WebAssembly component model for portable, secure deployment. See [WebAssembly and WASI](env/wasm-wasi.md) for how Nexus maps permissions to WASI capabilities.
 
 ```bash
 nexus build program.nx
@@ -90,6 +90,8 @@ wasmtime run -Scli -Shttp -Sinherit-network main.wasm
 ```
 
 ## Example: Fibonacci
+
+This example uses the `stdio` and `string` modules from the [Standard Library](env/stdlib.md).
 
 ```nexus
 import { Console }, * as stdio from nxlib/stdlib/stdio.nx
@@ -124,6 +126,7 @@ end
 ### Environment
 
 - [CLI](cli.md) -- Command-line interface
+- [WebAssembly and WASI](env/wasm-wasi.md) -- Capability mapping and enforcement
 - [FFI](env/ffi.md) -- Wasm interop
 - [Runtime](env/runtime.md) -- Entrypoint and execution
 - [Standard Library](env/stdlib.md) -- Builtin modules

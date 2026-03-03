@@ -325,11 +325,7 @@ fn test_lambda_cannot_capture_ref() {
     end
     "#;
     let err = check_code(src).unwrap_err();
-    assert!(
-        err.contains("capture Ref"),
-        "expected capture Ref error, got: {}",
-        err
-    );
+    insta::assert_snapshot!(err);
 }
 
 #[test]
@@ -366,11 +362,7 @@ fn test_linear_capturing_lambda_cannot_be_called_twice() {
     end
     "#;
     let err = check_code(src).unwrap_err();
-    assert!(
-        err.contains("already consumed"),
-        "expected linear consume error, got: {}",
-        err
-    );
+    insta::assert_snapshot!(err);
 }
 
 #[test]
@@ -406,21 +398,8 @@ fn test_constructor_arity_error_is_llm_friendly() {
     end
     "#;
     let err = check_code(src).unwrap_err();
-    assert!(
-        err.contains("Arity mismatch in constructor `Pair`"),
-        "expected contextual constructor arity error, got: {}",
-        err
-    );
-    assert!(
-        err.contains("Expected fields:"),
-        "expected expected-fields section, got: {}",
-        err
-    );
-    assert!(
-        err.contains("Provided arguments:"),
-        "expected provided-arguments section, got: {}",
-        err
-    );
+    insta::assert_snapshot!(err);
+    insta::assert_snapshot!(err);
 }
 
 #[test]
@@ -436,16 +415,7 @@ fn test_constructor_pattern_arity_error_is_llm_friendly() {
     end
     "#;
     let err = check_code(src).unwrap_err();
-    assert!(
-        err.contains("Arity mismatch in pattern `Pair`"),
-        "expected contextual pattern arity error, got: {}",
-        err
-    );
-    assert!(
-        err.contains("Provided pattern arguments:"),
-        "expected provided-pattern-arguments section, got: {}",
-        err
-    );
+    insta::assert_snapshot!(err);
 }
 
 #[test]
@@ -488,16 +458,7 @@ fn test_function_arity_mismatch_shows_expected() {
     end
     "#;
     let err = check_code(src).unwrap_err();
-    assert!(
-        err.contains("expected 2") || err.contains("Expected"),
-        "arity mismatch error should mention expected count, got: {}",
-        err
-    );
-    assert!(
-        err.contains("got 1") || err.contains("Provided"),
-        "arity mismatch error should mention provided count, got: {}",
-        err
-    );
+    insta::assert_snapshot!(err);
 }
 
 #[test]
@@ -512,11 +473,7 @@ fn test_function_arity_mismatch_too_many_args() {
     end
     "#;
     let err = check_code(src).unwrap_err();
-    assert!(
-        err.contains("expected 1") || err.contains("Expected"),
-        "arity mismatch error should mention expected count, got: {}",
-        err
-    );
+    insta::assert_snapshot!(err);
 }
 
 // #[test]
