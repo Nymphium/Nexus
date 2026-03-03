@@ -205,24 +205,7 @@ fn test_poly_variants() {
 
 #[test]
 fn test_type_sum_definition_with_labeled_variant_fields() {
-    let src = r#"
-    type Result<T, E> = Ok(val: T) | Err(err: E)
-
-    let unwrap_or = fn (r: Result<i64, i64>, fallback: i64) -> i64 do
-        match r do
-            case Ok(val: v) -> return v
-            case Err(err: e) -> return fallback
-        end
-    end
-
-    let test_fn = fn () -> i64 do
-        let a: Result<i64, i64> = Ok(val: 10)
-        let b: Result<i64, i64> = Err(err: 1)
-        let x = unwrap_or(r: a, fallback: 0)
-        let y = unwrap_or(r: b, fallback: 7)
-        return x + y
-    end
-    "#;
+    let src = &common::fixtures::read_test_fixture("test_type_sum_definition_with_labeled_variant_fields.nx");
     assert!(check_code(src).is_ok());
 }
 
@@ -367,20 +350,7 @@ fn test_linear_capturing_lambda_cannot_be_called_twice() {
 
 #[test]
 fn test_recursive_lambda_with_annotation_typechecks() {
-    let src = r#"
-    let test_fn = fn () -> i64 do
-        let fact: (n: i64) -> i64 = fn (n: i64) -> i64 do
-            if n == 0 then
-                return 1
-            else
-                let n1 = n - 1
-                let rec = fact(n: n1)
-                return n * rec
-            end
-        end
-        return fact(n: 5)
-    end
-    "#;
+    let src = &common::fixtures::read_test_fixture("test_recursive_lambda_with_annotation_typechecks.nx");
     match check_code(src) {
         Ok(_) => (),
         Err(e) => panic!("Type check failed: {}", e),
@@ -744,19 +714,7 @@ fn test_ref_creation_and_type() {
 // Maybe I should test that `let c = ~x` (implicit deref) results in value, not ref.
 #[test]
 fn test_gravity_rule_immutable_holds_value() {
-    let src = r#"
-    let main = fn () -> unit do
-        let ~c = 0
-        let x = ~c // x should be i64, not Ref
-        // If x was Ref, we could modify it? No, x is immutable.
-        // But if x was Ref, we could potentially pass it to something expecting Ref?
-        // But functions cannot take Ref arguments in Nexus?
-        // Wait, params can be `~x`.
-        // If I pass `x` (which holds Ref) to `fn f(~p)`, `p` becomes Ref.
-        // But `x` is `i64`.
-        return ()
-    end
-    "#;
+    let src = &common::fixtures::read_test_fixture("test_gravity_rule_immutable_holds_value.nx");
     match check_code(src) {
         Ok(_) => (),
         Err(e) => panic!("Type check failed: {}", e),
@@ -830,19 +788,7 @@ fn test_ref_read() {
 
 #[test]
 fn test_ref_generic() {
-    let src = r#"
-    let box = fn <T>(x: T) -> unit do
-        let ~r = x
-        let v = ~r
-        return ()
-    end
-
-    let main = fn () -> unit do
-        box(x: 10)
-        box(x: true)
-        return ()
-    end
-    "#;
+    let src = &common::fixtures::read_test_fixture("test_ref_generic.nx");
     match check_code(src) {
         Ok(_) => (),
         Err(e) => panic!("Type check failed: {}", e),

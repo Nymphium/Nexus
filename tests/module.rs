@@ -108,21 +108,7 @@ fn test_stdlib_array_module_length() {
 
 #[test]
 fn test_stdlib_result_module_helpers() {
-    let src = r#"
-    import as result from nxlib/stdlib/result.nx
-
-    let inc = fn (val: i64) -> i64 do
-      return val + 1
-    end
-
-    let main = fn () -> i64 do
-      let ok = Ok(val: 10)
-      let err = Err(err: [=[boom]=])
-      let a = result.unwrap_or(res: ok, default: 0)
-      let b = result.unwrap_or(res: err, default: 31)
-      return a + b + inc(val: a)
-    end
-    "#;
+    let src = &common::fixtures::read_test_fixture("test_stdlib_result_module_helpers.nx");
     assert_eq!(run(src).unwrap(), Value::Int(52));
 }
 
@@ -242,63 +228,19 @@ fn test_stdlib_global_array_length() {
 
 #[test]
 fn test_exception_constructor_raise_and_catch() {
-    let src = r#"
-    exception Boom(i64)
-
-    let main = fn () -> i64 do
-      try
-        let err = Boom(42)
-        raise err
-      catch e ->
-        match e do
-          case Boom(code) -> return code
-          case RuntimeError(_) -> return -1
-          case InvalidIndex(_) -> return -2
-        end
-      end
-      return 0
-    end
-    "#;
+    let src = &common::fixtures::read_test_fixture("test_exception_constructor_raise_and_catch.nx");
     assert_eq!(run(src).unwrap(), Value::Int(42));
 }
 
 #[test]
 fn test_exception_constructor_with_labels_raise_and_catch() {
-    let src = r#"
-    exception Boom(code: i64)
-
-    let main = fn () -> i64 do
-      try
-        let err = Boom(code: 42)
-        raise err
-      catch e ->
-        match e do
-          case Boom(code: c) -> return c
-          case RuntimeError(val: _) -> return -1
-          case InvalidIndex(val: _) -> return -2
-        end
-      end
-      return 0
-    end
-    "#;
+    let src = &common::fixtures::read_test_fixture("test_exception_constructor_with_labels_raise_and_catch.nx");
     assert_eq!(run(src).unwrap(), Value::Int(42));
 }
 
 #[test]
 fn test_try_catch_can_catch_runtime_error_as_exception() {
-    let src = r#"
-    let main = fn () -> unit do
-      try
-        let _ = [| 1 |][10]
-      catch e ->
-        match e do
-          case RuntimeError(val: _) -> return ()
-          case InvalidIndex(val: _) -> return ()
-        end
-      end
-      return ()
-    end
-    "#;
+    let src = &common::fixtures::read_test_fixture("test_try_catch_can_catch_runtime_error_as_exception.nx");
     let res = run(src);
     assert!(
         res.is_ok(),
@@ -667,72 +609,24 @@ fn test_stdio_system_handler_defined() {
 
 #[test]
 fn test_result_map_ok() {
-    let src = r#"
-    import as result from nxlib/stdlib/result.nx
-
-    let double = fn (val: i64) -> i64 do
-      return val * 2
-    end
-
-    let main = fn () -> i64 do
-      let ok = Ok(val: 5)
-      let mapped = result.map(res: ok, f: double)
-      return result.unwrap_or(res: mapped, default: 0)
-    end
-    "#;
+    let src = &common::fixtures::read_test_fixture("test_result_map_ok.nx");
     assert_eq!(run(src).unwrap(), Value::Int(10));
 }
 
 #[test]
 fn test_result_map_err_case() {
-    let src = r#"
-    import as result from nxlib/stdlib/result.nx
-
-    let double = fn (val: i64) -> i64 do
-      return val * 2
-    end
-
-    let main = fn () -> i64 do
-      let err = Err(err: [=[oops]=])
-      let mapped = result.map(res: err, f: double)
-      return result.unwrap_or(res: mapped, default: 99)
-    end
-    "#;
+    let src = &common::fixtures::read_test_fixture("test_result_map_err_case.nx");
     assert_eq!(run(src).unwrap(), Value::Int(99));
 }
 
 #[test]
 fn test_result_and_then_ok() {
-    let src = r#"
-    import as result from nxlib/stdlib/result.nx
-
-    let try_double = fn (val: i64) -> Result<i64, string> do
-      return Ok(val: val * 2)
-    end
-
-    let main = fn () -> i64 do
-      let ok = Ok(val: 5)
-      let r = result.and_then(res: ok, f: try_double)
-      return result.unwrap_or(res: r, default: 0)
-    end
-    "#;
+    let src = &common::fixtures::read_test_fixture("test_result_and_then_ok.nx");
     assert_eq!(run(src).unwrap(), Value::Int(10));
 }
 
 #[test]
 fn test_result_map_err_fn() {
-    let src = r#"
-    import as result from nxlib/stdlib/result.nx
-
-    let wrap = fn (val: string) -> i64 do
-      return 42
-    end
-
-    let main = fn () -> bool do
-      let err = Err(err: [=[oops]=])
-      let mapped = result.map_err(res: err, f: wrap)
-      return result.is_err(res: mapped)
-    end
-    "#;
+    let src = &common::fixtures::read_test_fixture("test_result_map_err_fn.nx");
     assert_eq!(run(src).unwrap(), Value::Bool(true));
 }

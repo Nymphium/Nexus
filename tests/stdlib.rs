@@ -86,69 +86,19 @@ end
 
 #[test]
 fn set_insert_contains_and_size() {
-    let src = r#"
-import as set from nxlib/stdlib/set.nx
-
-let main = fn () -> i64 do
-  let ops = set.i64_key_ops()
-  let s0 = set.empty(key_ops: ops)
-  let s1 = set.insert(set: s0, val: 10)
-  let s2 = set.insert(set: s1, val: 20)
-  let s3 = set.insert(set: s2, val: 10)
-  let has_10 = set.contains(set: s3, val: 10)
-  if has_10 then
-    return set.size(set: s3)
-  else
-    return -1
-  end
-end
-"#;
+    let src = &common::fixtures::read_test_fixture("set_insert_contains_and_size.nx");
     assert_eq!(run(src).unwrap(), Value::Int(2));
 }
 
 #[test]
 fn set_union_intersection_difference() {
-    let src = r#"
-import as set from nxlib/stdlib/set.nx
-
-let main = fn () -> i64 do
-  let ax = [1, 2, 3]
-  let bx = [3, 4]
-  let ops = set.i64_key_ops()
-  let a = set.from_list(key_ops: ops, xs: ax)
-  let b = set.from_list(key_ops: ops, xs: bx)
-  let u = set.union(left: a, right: b)
-  let i = set.intersection(left: a, right: b)
-  let d = set.difference(left: a, right: b)
-  let u_part = set.size(set: u) * 100
-  let i_part = set.size(set: i) * 10
-  let d_part = set.size(set: d)
-  return u_part + i_part + d_part
-end
-"#;
+    let src = &common::fixtures::read_test_fixture("set_union_intersection_difference.nx");
     assert_eq!(run(src).unwrap(), Value::Int(412));
 }
 
 #[test]
 fn set_custom_key_ops_can_change_membership_rule() {
-    let src = r#"
-import as set from nxlib/stdlib/set.nx
-
-let eq_half = fn (left: i64, right: i64) -> bool do
-  return (left / 2) == (right / 2)
-end
-
-let hash_half = fn (key: i64) -> i64 do
-  return key / 2
-end
-
-let main = fn () -> bool do
-  let ops = set.make_key_ops(eq: eq_half, hash: hash_half)
-  let s0 = set.empty(key_ops: ops)
-  let s1 = set.insert(set: s0, val: 4)
-  return set.contains(set: s1, val: 5)
-end
-"#;
+    let src = &common::fixtures::read_test_fixture("set_custom_key_ops_can_change_membership_rule.nx");
     assert_eq!(run(src).unwrap(), Value::Bool(true));
 }
 
@@ -156,71 +106,19 @@ end
 
 #[test]
 fn hashmap_put_get_or_and_contains_key() {
-    let src = r#"
-import as hashmap from nxlib/stdlib/hashmap.nx
-
-let main = fn () -> i64 do
-  let ops = hashmap.i64_key_ops()
-  let m0 = hashmap.empty(key_ops: ops)
-  let m1 = hashmap.put(map: m0, key: 1, value: 10)
-  let m2 = hashmap.put(map: m1, key: 2, value: 20)
-  let m3 = hashmap.put(map: m2, key: 1, value: 99)
-  let v1 = hashmap.get_or(map: m3, key: 1, default: 0)
-  let v2 = hashmap.get_or(map: m3, key: 2, default: 0)
-  let v3 = hashmap.get_or(map: m3, key: 3, default: 7)
-  let has2 = hashmap.contains_key(map: m3, key: 2)
-  if has2 then
-    return v1 + v2 + v3
-  else
-    return -1
-  end
-end
-"#;
+    let src = &common::fixtures::read_test_fixture("hashmap_put_get_or_and_contains_key.nx");
     assert_eq!(run(src).unwrap(), Value::Int(126));
 }
 
 #[test]
 fn hashmap_get_lookup_and_remove() {
-    let src = r#"
-import as hashmap from nxlib/stdlib/hashmap.nx
-
-let main = fn () -> i64 do
-  let ops = hashmap.i64_key_ops()
-  let m0 = hashmap.empty(key_ops: ops)
-  let m1 = hashmap.put(map: m0, key: 7, value: 70)
-  let m2 = hashmap.put(map: m1, key: 8, value: 80)
-  let got = hashmap.get(map: m2, key: 7)
-  let m3 = hashmap.remove(map: m2, key: 8)
-  let sz = hashmap.size(map: m3)
-  match got do
-    case Found(value: v) -> return v + sz
-    case Missing() -> return -1
-  end
-end
-"#;
+    let src = &common::fixtures::read_test_fixture("hashmap_get_lookup_and_remove.nx");
     assert_eq!(run(src).unwrap(), Value::Int(71));
 }
 
 #[test]
 fn hashmap_custom_key_ops_can_change_key_equivalence() {
-    let src = r#"
-import as hashmap from nxlib/stdlib/hashmap.nx
-
-let eq_half = fn (left: i64, right: i64) -> bool do
-  return (left / 2) == (right / 2)
-end
-
-let hash_half = fn (key: i64) -> i64 do
-  return key / 2
-end
-
-let main = fn () -> i64 do
-  let ops = hashmap.make_key_ops(eq: eq_half, hash: hash_half)
-  let m0 = hashmap.empty(key_ops: ops)
-  let m1 = hashmap.put(map: m0, key: 4, value: 40)
-  return hashmap.get_or(map: m1, key: 5, default: -1)
-end
-"#;
+    let src = &common::fixtures::read_test_fixture("hashmap_custom_key_ops_can_change_key_equivalence.nx");
     assert_eq!(run(src).unwrap(), Value::Int(40));
 }
 
@@ -385,19 +283,7 @@ end
 
 #[test]
 fn result_to_exn_raises_and_is_catchable() {
-    let src = r#"
-import as result from nxlib/stdlib/result.nx
-
-let main = fn () -> bool do
-  let err: Result<i64, Exn> = Err(err: RuntimeError(val: [=[boom]=]))
-  try
-    let _ = result.to_exn(res: err)
-    return false
-  catch e ->
-    return true
-  end
-end
-"#;
+    let src = &common::fixtures::read_test_fixture("result_to_exn_raises_and_is_catchable.nx");
     assert_eq!(run(src).unwrap(), Value::Bool(true));
 }
 

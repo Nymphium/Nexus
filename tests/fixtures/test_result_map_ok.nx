@@ -1,0 +1,13 @@
+
+    import as result from nxlib/stdlib/result.nx
+
+    let double = fn (val: i64) -> i64 do
+      return val * 2
+    end
+
+    let main = fn () -> i64 do
+      let ok = Ok(val: 5)
+      let mapped = result.map(res: ok, f: double)
+      return result.unwrap_or(res: mapped, default: 0)
+    end
+    

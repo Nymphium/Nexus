@@ -43,20 +43,7 @@ fn test_list_type_annotation_sugar() {
 
 #[test]
 fn test_list_is_empty() {
-    let src = r#"
-    import as list from nxlib/stdlib/list.nx
-    let main = fn () -> i64 do
-      let empty = Nil()
-      let nonempty = Cons(v: 1, rest: Nil())
-      let a = list.is_empty(xs: empty)
-      let b = list.is_empty(xs: nonempty)
-      if a then
-        if b then return 0 else return 1 end
-      else
-        return 0
-      end
-    end
-    "#;
+    let src = &common::fixtures::read_test_fixture("test_list_is_empty.nx");
     assert_eq!(run(src).unwrap(), Value::Int(1));
 }
 
@@ -122,19 +109,7 @@ fn test_list_nth() {
 
 #[test]
 fn test_list_contains() {
-    let src = r#"
-    import as list from nxlib/stdlib/list.nx
-    let main = fn () -> i64 do
-      let xs = Cons(v: 1, rest: Cons(v: 2, rest: Cons(v: 3, rest: Nil())))
-      let a = list.contains(xs: xs, val: 2)
-      let b = list.contains(xs: xs, val: 5)
-      if a then
-        if b then return 0 else return 1 end
-      else
-        return 0
-      end
-    end
-    "#;
+    let src = &common::fixtures::read_test_fixture("test_list_contains.nx");
     assert_eq!(run(src).unwrap(), Value::Int(1));
 }
 
@@ -157,21 +132,6 @@ fn test_list_fold_left_sum() {
 
 #[test]
 fn test_list_map_and_map_rev() {
-    let src = r#"
-    import as list from nxlib/stdlib/list.nx
-
-    let twice = fn (val: i64) -> i64 do
-      return val * 2
-    end
-
-    let main = fn () -> i64 do
-      let xs = Cons(v: 1, rest: Cons(v: 2, rest: Cons(v: 3, rest: Nil())))
-      let mapped = list.map(xs: xs, f: twice)
-      let rev_mapped = list.map_rev(xs: xs, f: twice)
-      let a = list.nth(xs: mapped, n: 1)
-      let b = list.head(xs: rev_mapped)
-      return a * 10 + b
-    end
-    "#;
+    let src = &common::fixtures::read_test_fixture("test_list_map_and_map_rev.nx");
     assert_eq!(run(src).unwrap(), Value::Int(46));
 }

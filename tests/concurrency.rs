@@ -6,27 +6,7 @@ use proptest::prelude::*;
 
 #[test]
 fn test_conc_parallel_execution() {
-    let src = r#"
-    let main = fn () -> unit do
-        let %arr = [| 0, 0 |]
-        conc do
-            task t1 do
-                let lock = &%arr
-                lock[0] <- 1
-            end
-            task t2 do
-                let lock = &%arr
-                lock[1] <- 2
-            end
-        end
-
-        let lock = &%arr
-        let v1 = lock[0]
-        let v2 = lock[1]
-        match %arr do case _ -> () end
-        return ()
-    end
-    "#;
+    let src = &common::fixtures::read_test_fixture("test_conc_parallel_execution.nx");
 
     let res = run(src);
     assert!(res.is_ok(), "Execution failed: {:?}", res.err());
@@ -188,27 +168,7 @@ proptest! {
 
     #[test]
     fn prop_conc_task_capture_linearity(_n in 1usize..5) {
-        let src = format!(
-            r#"
-            let main = fn () -> unit do
-                let %l = [| 42 |]
-                conc do
-                    task t1 do
-                        let b = &%l
-                        let v = b[0]
-                    end
-                    task t2 do
-                        let b = &%l
-                        let v = b[0]
-                    end
-                end
-                let b = &%l
-                let v = b[0]
-                match %l do case _ -> () end
-                return ()
-            end
-            "#
-        );
+        let src = common::fixtures::read_test_fixture("prop_conc_task_capture_linearity.nx");
         let res = run(&src);
         prop_assert!(res.is_ok(), "Linearity check failed: {:?}", res.err());
     }

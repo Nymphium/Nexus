@@ -1,0 +1,16 @@
+
+import as set from nxlib/stdlib/set.nx
+
+let main = fn () -> i64 do
+  let ops = set.i64_key_ops()
+  let s0 = set.empty(key_ops: ops)
+  let s1 = set.insert(set: s0, val: 10)
+  let s2 = set.insert(set: s1, val: 20)
+  let s3 = set.insert(set: s2, val: 10)
+  let has_10 = set.contains(set: s3, val: 10)
+  if has_10 then
+    return set.size(set: s3)
+  else
+    return -1
+  end
+end
