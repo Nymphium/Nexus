@@ -6,7 +6,7 @@ use nexus::lang::parser;
 fn check_code(src: &str) -> Result<(), String> {
     let src = src
         .replace(
-            "let main = fn () -> i64 do",
+            "let test_fn = fn () -> i64 do",
             "let __test_main = fn () -> i64 do",
         )
         .replace(
@@ -63,7 +63,7 @@ fn test_basic_poly() {
 fn test_nested_calls() {
     let src = r#"
     let id = fn <T>(x: T) -> T do return x end
-    let main = fn () -> i64 do
+    let test_fn = fn () -> i64 do
         let v = id(x: 10)
         return id(x: v)
     end
@@ -78,7 +78,7 @@ fn test_nested_calls() {
 fn test_label_punning_is_rejected() {
     let src = r#"
     let id = fn <T>(x: T) -> T do return x end
-    let main = fn () -> i64 do
+    let test_fn = fn () -> i64 do
         let x = 10
         return id(x)
     end
@@ -111,7 +111,7 @@ fn test_two_generics() {
         return a
     end
 
-    let main = fn () -> i64 do
+    let test_fn = fn () -> i64 do
         let f = first(a: 10, b: true)
         let s = first(a: true, b: 10)
         return f
@@ -132,7 +132,7 @@ fn test_record_access() {
         return b.val
     end
 
-    let main = fn () -> i64 do
+    let test_fn = fn () -> i64 do
         // Since my infer for Record currently returns AnonymousRecord,
         // we can't test full record inference yet, but unbox signature check works.
         return 42
@@ -151,7 +151,7 @@ fn test_let_poly_binding() {
         return x
     end
 
-    let main = fn () -> i64 do
+    let test_fn = fn () -> i64 do
         let f = id
         let a = f(x: 10)
         let b = f(x: true)
@@ -215,7 +215,7 @@ fn test_type_sum_definition_with_labeled_variant_fields() {
         end
     end
 
-    let main = fn () -> i64 do
+    let test_fn = fn () -> i64 do
         let a: Result<i64, i64> = Ok(val: 10)
         let b: Result<i64, i64> = Err(err: 1)
         let x = unwrap_or(r: a, fallback: 0)
@@ -230,7 +230,7 @@ fn test_type_sum_definition_with_labeled_variant_fields() {
 fn test_arg_mismatch() {
     let src = r#"
     let foo = fn (x: i64) -> i64 do return x end
-    let main = fn () -> i64 do
+    let test_fn = fn () -> i64 do
         return foo(x: true)
     end
     "#;
@@ -242,7 +242,7 @@ fn test_arg_mismatch() {
 #[test]
 fn test_int_literal_defaults_to_i64() {
     let src = r#"
-    let main = fn () -> i64 do
+    let test_fn = fn () -> i64 do
         let x = 1
         return x
     end
@@ -292,7 +292,7 @@ fn test_named_function_can_be_used_as_value() {
         return x
     end
 
-    let main = fn () -> i64 do
+    let test_fn = fn () -> i64 do
         let f = id
         return f(x: 42)
     end
@@ -303,7 +303,7 @@ fn test_named_function_can_be_used_as_value() {
 #[test]
 fn test_inline_lambda_literal_typechecks() {
     let src = r#"
-    let main = fn () -> i64 do
+    let test_fn = fn () -> i64 do
         let f = fn (x: i64) -> i64 do
             return x + 1
         end
@@ -316,7 +316,7 @@ fn test_inline_lambda_literal_typechecks() {
 #[test]
 fn test_lambda_cannot_capture_ref() {
     let src = r#"
-    let main = fn () -> i64 do
+    let test_fn = fn () -> i64 do
         let ~counter = 1
         let read_counter = fn () -> i64 do
             return ~counter
@@ -331,7 +331,7 @@ fn test_lambda_cannot_capture_ref() {
 #[test]
 fn test_linear_capture_makes_lambda_linear_and_single_use() {
     let src = r#"
-    let main = fn () -> i64 do
+    let test_fn = fn () -> i64 do
         let %x = 7
         let f = fn () -> i64 do
             match %x do case _ -> () end
@@ -350,7 +350,7 @@ fn test_linear_capture_makes_lambda_linear_and_single_use() {
 #[test]
 fn test_linear_capturing_lambda_cannot_be_called_twice() {
     let src = r#"
-    let main = fn () -> i64 do
+    let test_fn = fn () -> i64 do
         let %x = 7
         let f = fn () -> i64 do
             match %x do case _ -> () end
@@ -368,7 +368,7 @@ fn test_linear_capturing_lambda_cannot_be_called_twice() {
 #[test]
 fn test_recursive_lambda_with_annotation_typechecks() {
     let src = r#"
-    let main = fn () -> i64 do
+    let test_fn = fn () -> i64 do
         let fact: (n: i64) -> i64 = fn (n: i64) -> i64 do
             if n == 0 then
                 return 1
@@ -392,7 +392,7 @@ fn test_constructor_arity_error_is_llm_friendly() {
     let src = r#"
     type Pair = Pair(left: i64, right: i64)
 
-    let main = fn () -> i64 do
+    let test_fn = fn () -> i64 do
         let _p = Pair(left: 1)
         return 0
     end
@@ -407,7 +407,7 @@ fn test_constructor_pattern_arity_error_is_llm_friendly() {
     let src = r#"
     type Pair = Pair(left: i64, right: i64)
 
-    let main = fn () -> i64 do
+    let test_fn = fn () -> i64 do
         let p: Pair = Pair(left: 1, right: 2)
         match p do
             case Pair(left: x) -> return x
@@ -425,7 +425,7 @@ fn test_binary_op_in_call_arg() {
         return a + b
     end
 
-    let main = fn () -> i64 do
+    let test_fn = fn () -> i64 do
         return add(a: 1 + 2, b: 3 * 4)
     end
     "#;
@@ -453,7 +453,7 @@ fn test_function_arity_mismatch_shows_expected() {
         return a + b
     end
 
-    let main = fn () -> i64 do
+    let test_fn = fn () -> i64 do
         return add(a: 1)
     end
     "#;
@@ -468,7 +468,7 @@ fn test_function_arity_mismatch_too_many_args() {
         return x + 1
     end
 
-    let main = fn () -> i64 do
+    let test_fn = fn () -> i64 do
         return inc(x: 1, y: 2)
     end
     "#;
@@ -846,5 +846,39 @@ fn test_ref_generic() {
     match check_code(src) {
         Ok(_) => (),
         Err(e) => panic!("Type check failed: {}", e),
+    }
+}
+
+use proptest::prelude::*;
+
+proptest! {
+    #![proptest_config(ProptestConfig {
+        cases: 64,
+        failure_persistence: None,
+        .. ProptestConfig::default()
+    })]
+
+    #[test]
+    fn prop_typecheck_nested_arithmetic(a in -100i64..100, b in -100i64..100, c in -100i64..100) {
+        let src = format!("
+let test_fn = fn () -> i64 do
+    return ({} + {}) * {}
+end
+", a, b, c);
+        check(&src).expect("typecheck failed");
+    }
+
+    #[test]
+    fn prop_typecheck_if_else_branches_must_match(cond in proptest::bool::ANY) {
+        let src = format!("
+let test_fn = fn () -> i64 do
+    if {} then
+        return 1
+    else
+        return [=[string]=]
+    end
+end
+", if cond { "true" } else { "false" });
+        assert!(check(&src).is_err());
     }
 }

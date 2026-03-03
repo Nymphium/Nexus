@@ -422,3 +422,69 @@ end
         assert_eq!(run(&src).unwrap(), Value::Bool(true));
     }
 }
+
+proptest! {
+    #![proptest_config(ProptestConfig {
+        cases: 64,
+        failure_persistence: None,
+        .. ProptestConfig::default()
+    })]
+
+    #[test]
+    fn prop_math_max_symmetry(a in -1000i64..1000, b in -1000i64..1000) {
+        let src1 = format!("
+import {{ max }} from nxlib/stdlib/math.nx
+let main = fn () -> i64 do return max(a: {}, b: {}) end
+", a, b);
+        let src2 = format!("
+import {{ max }} from nxlib/stdlib/math.nx
+let main = fn () -> i64 do return max(a: {}, b: {}) end
+", b, a);
+        let val1 = run(&src1).unwrap();
+        let val2 = run(&src2).unwrap();
+        assert_eq!(val1, val2);
+    }
+
+    #[test]
+    fn prop_math_min_symmetry(a in -1000i64..1000, b in -1000i64..1000) {
+        let src1 = format!("
+import {{ min }} from nxlib/stdlib/math.nx
+let main = fn () -> i64 do return min(a: {}, b: {}) end
+", a, b);
+        let src2 = format!("
+import {{ min }} from nxlib/stdlib/math.nx
+let main = fn () -> i64 do return min(a: {}, b: {}) end
+", b, a);
+        assert_eq!(run(&src1).unwrap(), run(&src2).unwrap());
+    }
+
+    #[test]
+    fn prop_math_max_gte(a in -1000i64..1000, b in -1000i64..1000) {
+        let src = format!("
+import {{ max }} from nxlib/stdlib/math.nx
+let main = fn () -> bool do
+    let m = max(a: {}, b: {})
+    if m >= {} then
+        return m >= {}
+    else
+        return false
+    end
+end
+", a, b, a, b);
+        assert_eq!(run(&src).unwrap(), Value::Bool(true));
+    }
+
+    #[test]
+    fn prop_string_length_concat(s1 in "[a-zA-Z0-9]{0,20}", s2 in "[a-zA-Z0-9]{0,20}") {
+        let src = format!("
+import {{ length }} from nxlib/stdlib/string.nx
+let main = fn () -> bool do
+    let s1 = [=[{}]=]
+    let s2 = [=[{}]=]
+    let concat = s1 ++ s2
+    return length(s: concat) == (length(s: s1) + length(s: s2))
+end
+", s1, s2);
+        assert_eq!(run(&src).unwrap(), Value::Bool(true));
+    }
+}
