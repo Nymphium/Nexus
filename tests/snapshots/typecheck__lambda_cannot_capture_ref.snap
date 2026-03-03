@@ -1,0 +1,5 @@
+---
+source: tests/typecheck.rs
+expression: err
+---
+Lambda cannot capture Ref value '~counter'

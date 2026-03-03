@@ -1,0 +1,6 @@
+---
+source: tests/typecheck.rs
+assertion_line: 365
+expression: err
+---
+Linear variable f already consumed

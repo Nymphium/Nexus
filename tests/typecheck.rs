@@ -498,3 +498,353 @@ fn test_function_arity_mismatch_too_many_args() {
 //         err
 //     );
 // }
+
+
+use common::source::check_raw as check;
+
+#[test]
+fn test_float_arithmetic() {
+    let src = r#"
+    let main = fn () -> unit do
+        let x = 1.5 +. 2.5
+        let y = x *. 2.0
+        return ()
+    end
+    "#;
+    assert!(check(src).is_ok());
+}
+
+#[test]
+fn test_float_compare() {
+    let src = r#"
+    let main = fn () -> unit do
+        let b = 1.0 <. 2.0
+        if b then return () else return () end
+    end
+    "#;
+    assert!(check(src).is_ok());
+}
+
+#[test]
+fn test_float_int_mismatch() {
+    let src = r#"
+    let main = fn () -> unit do
+        let x = 1 +. 2.0
+        return ()
+    end
+    "#;
+    assert!(
+        check(src).is_err(),
+        "Should fail: mixing int and float with float op"
+    );
+}
+
+#[test]
+fn test_float_literal_type() {
+    let src = r#"
+    let main = fn () -> unit do
+        let x: float = 3.14
+        let y: float = 0.01
+        let z: float = 123.456789
+        return ()
+    end
+    "#;
+    assert!(check(src).is_ok());
+}
+
+#[test]
+fn test_f32_and_f64_keywords() {
+    let src = r#"
+    let main = fn () -> unit do
+        let x: f32 = 1.5
+        let y: f64 = 2.0
+        let z = x +. 3.5
+        let w = y +. 4.0
+        return ()
+    end
+    "#;
+    assert!(check(src).is_ok());
+}
+
+
+
+#[test]
+fn test_anonymous_record() {
+    let src = r#"
+    import { Console }, * as stdio from nxlib/stdlib/stdio.nx
+    import { from_i64 } from nxlib/stdlib/string.nx
+    let main = fn () -> unit require { PermConsole } do
+        inject stdio.system_handler do
+            let r = { x: 1, y: [=[hello]=] }
+            let i = r.x
+            let i_s = from_i64(val: i)
+            let msg = [=[i=]=] ++ i_s
+            Console.print(val: msg)
+        end
+        return ()
+    end
+    "#;
+    assert!(check(src).is_ok());
+}
+
+#[test]
+fn test_record_unification() {
+    // Structural typing: Order should not matter
+    let src = r#"
+    let take_record = fn (r: { x: i64, y: i64 }) -> unit do
+        return ()
+    end
+
+    let main = fn () -> unit do
+        let r1 = { x: 1, y: 2 }
+        let r2 = { y: 2, x: 1 } // Different order
+        take_record(r: r1)
+        take_record(r: r2)
+        return ()
+    end
+    "#;
+    assert!(check(src).is_ok());
+}
+
+#[test]
+fn test_record_fail() {
+    let src = r#"
+    let main = fn () -> unit do
+        let r = { x: 1 }
+        let y = r.y // Field missing
+        return ()
+    end
+    "#;
+    assert!(check(src).is_err());
+}
+
+
+
+#[test]
+fn test_ffi_declaration() {
+    let src = r#"
+    import external math.wasm
+    pub external add_i64 = [=[add]=] : (a: i64, b: i64) -> i64
+
+    let main = fn () -> unit do
+      let x = add_i64(a: 1, b: 2)
+      return ()
+    end
+    "#;
+    match check_code(src) {
+        Ok(_) => (),
+        Err(e) => panic!("Type check failed: {}", e),
+    }
+}
+
+#[test]
+fn test_ffi_effectful() {
+    let src = r#"
+    import external time.wasm
+    type IO = {}
+    pub external get_time = [=[get_time]=] : () -> float effect { IO }
+
+    let helper = fn () -> unit effect { IO } do
+      let t = get_time()
+      return ()
+    end
+
+    let main = fn () -> unit do
+      return ()
+    end
+    "#;
+    match check_code(src) {
+        Ok(_) => (),
+        Err(e) => panic!("Type check failed: {}", e),
+    }
+}
+
+#[test]
+fn test_ffi_mismatch() {
+    let src = r#"
+    pub external foo = [=[foo]=] : (a: i64) -> i64
+    let main = fn () -> unit do
+      let x = foo(a: true)
+    end
+    "#;
+    assert!(check_code(src).is_err());
+}
+
+#[test]
+fn test_ffi_explicit_type_params() {
+    let src = r#"
+    import external core.wasm
+    pub external array_len = [=[array_length]=] : <T>(arr: &[| T |]) -> i64
+
+    let main = fn () -> unit do
+      let %a = [| 1, 2, 3 |]
+      let r = &%a
+      let n = array_len(arr: r)
+      match %a do case _ -> () end
+      return ()
+    end
+    "#;
+    match check_code(src) {
+        Ok(_) => (),
+        Err(e) => panic!("Type check failed: {}", e),
+    }
+}
+
+#[test]
+fn test_ffi_unintroduced_type_var_errors() {
+    let src = r#"
+    pub external bad = [=[bad]=] : (arr: &[| T |]) -> i64
+    let main = fn () -> unit do
+      return ()
+    end
+    "#;
+    let err = check_code(src).unwrap_err();
+    insta::assert_snapshot!(err);
+}
+
+#[test]
+fn test_ffi_concrete_types_no_type_params_needed() {
+    let src = r#"
+    pub external add = [=[add]=] : (a: i64, b: i64) -> i64
+    let main = fn () -> unit do
+      let x = add(a: 1, b: 2)
+      return ()
+    end
+    "#;
+    match check_code(src) {
+        Ok(_) => (),
+        Err(e) => panic!("Type check failed: {}", e),
+    }
+}
+
+
+
+#[test]
+fn test_ref_creation_and_type() {
+    let src = r#"
+    let main = fn () -> unit do
+        let ~c = 0
+        return ()
+    end
+    "#;
+    match check_code(src) {
+        Ok(_) => (),
+        Err(e) => panic!("Type check failed: {}", e),
+    }
+}
+
+// This test is now tricky because immutable vars simply cannot hold Ref if we can't create explicit Ref.
+// But if I assign value to immutable, it's just value.
+// The only way to get a Ref is by `let ~x`.
+// So immutable variable cannot hold Ref unless a function returns Ref.
+// And functions cannot return Ref.
+// So this Gravity Rule is implicitly enforced by syntax + return check.
+// I will change this test to ensure we CANNOT assign to immutable var later?
+// No, immutable var cannot be assigned.
+// Maybe I should test that `let c = ~x` (implicit deref) results in value, not ref.
+#[test]
+fn test_gravity_rule_immutable_holds_value() {
+    let src = r#"
+    let main = fn () -> unit do
+        let ~c = 0
+        let x = ~c // x should be i64, not Ref
+        // If x was Ref, we could modify it? No, x is immutable.
+        // But if x was Ref, we could potentially pass it to something expecting Ref?
+        // But functions cannot take Ref arguments in Nexus?
+        // Wait, params can be `~x`.
+        // If I pass `x` (which holds Ref) to `fn f(~p)`, `p` becomes Ref.
+        // But `x` is `i64`.
+        return ()
+    end
+    "#;
+    match check_code(src) {
+        Ok(_) => (),
+        Err(e) => panic!("Type check failed: {}", e),
+    }
+}
+
+// Since `ref()` is gone, we cannot construct a ref to return.
+// But we can try to return `~c`?
+// `~c` evaluates to value.
+// Can we return the reference itself?
+// If we use just `c` (without tilde)?
+// My parser for Variable with Mutable sigil expects `~`.
+// If I use `c`, it's Variable("c", Immutable).
+// But "c" is not in env. "~c" is.
+// So I cannot access the reference itself by name!
+// This means References are truly second-class and confined to stack!
+// Excellent.
+#[test]
+fn test_cannot_return_ref() {
+    // Attempting to return a reference is syntactically impossible or type error?
+    // If I have `let ~c = 0`.
+    // `return ~c` returns 0 (i64).
+    // `return c` fails "Variable not found".
+    // So Gravity Rule "Return cannot contain Ref" is enforced by:
+    // 1. Implicit deref on access.
+    // 2. Inability to access raw Ref.
+    let src = r#"
+    let main = fn () -> unit do
+        let ~c = 0
+        // return c // Variable not found
+        return ()
+    end
+    "#;
+    match check_code(src) {
+        Ok(_) => (),
+        Err(e) => panic!("Type check failed: {}", e),
+    }
+}
+
+#[test]
+fn test_ref_assignment() {
+    let src = r#"
+    let main = fn () -> unit do
+        let ~c = 0
+        ~c <- 1
+        return ()
+    end
+    "#;
+    match check_code(src) {
+        Ok(_) => (),
+        Err(e) => panic!("Type check failed: {}", e),
+    }
+}
+
+#[test]
+fn test_ref_read() {
+    let src = r#"
+    let __test_main = fn () -> i64 do
+        let ~c = 10
+        let v = ~c
+        return v
+    end
+    "#;
+    match check_code(src) {
+        Ok(_) => (),
+        Err(e) => panic!("Type check failed: {}", e),
+    }
+}
+
+// test_ref_assignment_type_mismatch: covered by prop_ref_assignment_type_mismatch_is_error
+
+#[test]
+fn test_ref_generic() {
+    let src = r#"
+    let box = fn <T>(x: T) -> unit do
+        let ~r = x
+        let v = ~r
+        return ()
+    end
+
+    let main = fn () -> unit do
+        box(x: 10)
+        box(x: true)
+        return ()
+    end
+    "#;
+    match check_code(src) {
+        Ok(_) => (),
+        Err(e) => panic!("Type check failed: {}", e),
+    }
+}

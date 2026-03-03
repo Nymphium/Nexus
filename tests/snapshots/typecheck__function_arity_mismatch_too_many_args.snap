@@ -1,0 +1,7 @@
+---
+source: tests/typecheck.rs
+expression: err
+---
+Arity mismatch in call to `inc`: expected 1 arguments, got 2.
+Expected parameters: (x)
+Provided arguments: (x, y)
