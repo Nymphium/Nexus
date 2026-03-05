@@ -32,3 +32,5 @@ tree-sitter-nexus/*.so
 
 # insta snapshot pending review
 *.snap.new
+
+.beads
