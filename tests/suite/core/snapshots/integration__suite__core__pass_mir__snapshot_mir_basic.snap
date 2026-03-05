@@ -1,5 +1,6 @@
 ---
-source: tests/suite/pass_mir.rs
+source: tests/suite/core/pass_mir.rs
+assertion_line: 15
 expression: mir
 ---
 MirProgram {

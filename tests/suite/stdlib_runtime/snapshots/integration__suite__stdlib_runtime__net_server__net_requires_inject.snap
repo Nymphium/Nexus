@@ -1,0 +1,6 @@
+---
+source: tests/suite/stdlib_runtime/net_server.rs
+assertion_line: 206
+expression: err
+---
+Call to 'Net.get' requires {Net}

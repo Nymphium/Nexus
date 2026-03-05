@@ -1,5 +1,6 @@
 ---
-source: tests/suite/pass_hir.rs
+source: tests/suite/core/pass_hir.rs
+assertion_line: 30
 expression: hir
 ---
 HirProgram {

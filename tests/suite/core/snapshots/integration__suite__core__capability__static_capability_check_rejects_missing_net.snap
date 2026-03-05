@@ -1,5 +1,6 @@
 ---
-source: tests/suite/capability.rs
+source: tests/suite/core/capability.rs
+assertion_line: 46
 expression: err
 ---
 main requires {PermNet} but {--allow-net} not specified

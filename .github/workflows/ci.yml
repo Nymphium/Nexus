@@ -9,31 +9,40 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  tests:
+  check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: NixOS/nix-installer-action@main
-        with:
-          extra-conf: |
-            cores = 0
-            max-substitution-jobs = 32
-            http-connections = 50
-            download-buffer-size = 2560000
-      - uses: nix-community/cache-nix-action@main
-        with:
-          primary-key: nix-${{ runner.os }}-${{ hashFiles('**/*.nix', '**/flake.lock') }}
-      - uses: Swatinem/rust-cache@v2
-      - uses: nicknovitski/nix-develop@v1
-      - name: Run Rust tests
-        run: cargo test --release --quiet
-      - name: Run tree-sitter corpus tests
+      - uses: ./.github/actions/setup
+      - name: cargo fmt
+        run: cargo fmt -- --check
+      - name: nix fmt
+        run: nix fmt -- --ci
+
+  tree-sitter:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup
+      - name: tree-sitter test
         run: cd tree-sitter-nexus && tree-sitter test
-      - name: Ensure generated parser artifacts are up to date
+      - name: tree-sitter generate (check up to date)
         run: |
           cd tree-sitter-nexus && tree-sitter generate
           git diff --exit-code tree-sitter-nexus
-      - name: Format
-        run: |
-          cargo fmt -- --check
-          nix fmt -- --ci
+
+  test-core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup
+      - name: core tests
+        run: cargo test --release --test integration suite::core -- --quiet
+
+  test-stdlib-runtime:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup
+      - name: stdlib & runtime tests
+        run: cargo test --release --test integration suite::stdlib_runtime -- --quiet

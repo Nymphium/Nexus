@@ -1,0 +1,18 @@
+name: Setup
+description: Nix and Rust cache setup
+
+runs:
+  using: composite
+  steps:
+    - uses: NixOS/nix-installer-action@main
+      with:
+        extra-conf: |
+          cores = 0
+          max-substitution-jobs = 32
+          http-connections = 50
+          download-buffer-size = 2560000
+    - uses: nix-community/cache-nix-action@main
+      with:
+        primary-key: nix-${{ runner.os }}-${{ hashFiles('**/*.nix', '**/flake.lock') }}
+    - uses: Swatinem/rust-cache@v2
+    - uses: nicknovitski/nix-develop@v1

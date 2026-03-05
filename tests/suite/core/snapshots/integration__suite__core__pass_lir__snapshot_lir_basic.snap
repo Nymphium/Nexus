@@ -1,5 +1,6 @@
 ---
-source: tests/suite/pass_lir.rs
+source: tests/suite/core/pass_lir.rs
+assertion_line: 17
 expression: lir
 ---
 LirProgram {
