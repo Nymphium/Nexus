@@ -1,70 +1,112 @@
 # Semantics
 
-This document describes the execution model and behavioral rules of the Nexus language.
+This document describes the execution model of Nexus.
 
 ## Evaluation Strategy
 
-Nexus is a **call-by-value** language. All expressions are fully evaluated to values before being passed to functions or used in constructors.
+Nexus is **call-by-value**. All expressions are fully evaluated before being passed to functions or constructors.
 
 ### Evaluation Order
-Nexus follows a strict **left-to-right** evaluation order:
-- **Arguments:** In a function call `f(a: e1, b: e2)`, `e1` is evaluated before `e2`.
-- **Binary Operators:** In `e1 + e2`, `e1` is evaluated before `e2`.
-- **Records/Constructors:** Fields and arguments are evaluated in the order they appear in the source code.
+
+Strict **left-to-right**:
+- Function arguments: `f(a: e1, b: e2)` evaluates `e1` before `e2`
+- Binary operators: `e1 + e2` evaluates `e1` before `e2`
+- Records and constructors: fields evaluated in source order
 
 ## Scoping
 
-Nexus uses **lexical scoping**. Bindings are visible only within the block where they are defined and in nested blocks.
+**Lexical scoping.** Bindings are visible in the block where they are defined and in nested blocks.
 
-### Variable Shadowing
-Shadowing is permitted. A `let` binding in an inner block can reuse a name from an outer block, masking the outer binding until the inner block ends.
+**Shadowing** is permitted. An inner `let` can reuse a name from an outer scope, masking it until the inner block ends.
 
-## Sigil Semantics
+## Sigil Behavioral Semantics
 
-Sigils are not just syntactic markers; they represent fundamental semantic constraints on how data is handled at runtime.
+Sigils are not annotations -- they impose runtime behavioral constraints.
 
 ### Mutability (`~`)
-- **Scope-Bound:** Mutable bindings are restricted to the stack of the function that defines them.
-- **No Escape:** Mutable references cannot be returned from functions or stored in heap-allocated structures, ensuring mutation remains localized and predictable.
-- **Assignment:** The `<-` operator updates the value of a mutable binding.
-- **Concurrency:** Mutable references cannot be captured by concurrent tasks (`conc`) or asynchronous closures to prevent race conditions.
+
+- **Stack-confined**: mutable bindings exist only on the stack of the defining function
+- **No escape**: cannot be returned, stored in heap structures, or captured by closures
+- **Assignment**: `~x <- expr` updates the value
+- **Concurrency**: cannot be captured by `conc` tasks (prevents data races)
 
 ### Linearity (`%`)
-- **Exactly Once (composites):** A non-primitive linear binding must be consumed exactly once via a function call, a return, or pattern matching.
-- **Auto-drop (primitives):** Primitive linear values (`i64`, `f64`, `bool`, `string`, `unit`) are automatically released at scope end. Using `%` on primitives is valid but triggers a warning.
-- **Static Enforcement:** The type system ensures linear resources (like file handles or sockets) are never leaked and never used after consumption.
-- **No Discard:** The wildcard pattern `_` cannot be used to discard a non-primitive linear value. Every composite linear resource must be explicitly handled.
-- **No Ref:** Mutable references to linear types (`Ref<%T>`) are strictly forbidden to prevent aliasing violations.
-- **Weakening at Calls:** A plain value `T` can be passed to a function expecting a linear parameter `%T`. In this context, the value is treated as a linear resource for the duration of the call.
+
+- **Exactly-once consumption** (composites): must be consumed via function call, pattern match, or return
+- **Auto-drop** (primitives): `i64`, `f64`, `bool`, `string`, `unit` are released at scope end
+- **Static enforcement**: the type checker tracks linear bindings and rejects programs that leak or double-use them
+- **No discard**: `_` cannot discard composite linear values
+- **No mutable ref**: `~` cannot hold linear types
 
 ### Borrowing (`&`)
-- **Immutable View:** The `&` sigil represents a **borrowed reference** that provides read-only access to a value.
-- **Non-Consuming:** Borrowing does not consume the resource, allowing it to be used again later. This is essential for inspecting linear values (`%T`) without destroying them.
-- **Generic Applicability:** While frequently seen with arrays (e.g., `&[| T |]`) to avoid copying large data, `&` is a general type constructor `&T` that can be applied to any type.
-- **Temporary access:** A &is always temporary and its lifetime is tied to the scope of the binding it was created from.
+
+- **Immutable view**: read-only access without consumption
+- **Non-consuming**: the source binding remains live
+- **Coercion**: `&T` coerces to `T` for reading operations
 
 ## Closures and Captures
 
-- **Lexical Captures:** Lambdas can capture immutable bindings from their lexical scope.
-- **Mutability Restriction:** Closures cannot capture mutable bindings (`~`).
-- **Linearity Propagation:** If a closure captures a linear value (`%`), the closure itself becomes linear and can only be invoked (consumed) once.
+- **Lexical captures**: lambdas capture immutable bindings from enclosing scope
+- **No mutable capture**: closures cannot capture `~` bindings
+- **Linearity propagation**: capturing a `%` binding makes the closure linear (single-use)
+- **Recursive lambdas**: must use an immutable `let` binding with explicit type annotation
 
-Nexus tracks two signature dimensions:
+## Exception Propagation
 
-- **Effects (`effect`)** for builtin runtime actions (`Exn`).
-- **Coeffects (`require`)** for environment capabilities declared by `port` (e.g. `Console`, `Fs`, `Net`, `Random`, `Clock`, `Proc`).
+`raise` immediately terminates the current computation and unwinds the call stack until it reaches a `try/catch` block. The `Exn` value is passed to the `catch` parameter:
 
-Handlers are values (`handler Port do ... end`) and are introduced lexically with `inject ... do ... end`.
-`try ... catch` discharges `Exn` from the protected region.
+```nexus
+try
+    raise NotFound(msg: [=[key]=])
+catch e ->
+    // e : Exn
+    match e do
+        case NotFound(msg: m) -> ()
+        case _ -> ()
+    end
+end
+```
+
+Exceptions are the only builtin effect. There are no unchecked exceptions -- any function that may raise must declare `effect { Exn }`. `try/catch` discharges `Exn` from the protected region.
 
 ## Concurrency Model
 
 ### Structured Concurrency (`conc`)
-- A `conc` block spawns multiple `task` units.
-- The `conc` block is synchronous with respect to its caller: it blocks until **all** child tasks have completed.
-- In the reference interpreter, tasks may execute sequentially, but the semantics allow for parallel execution.
 
-## Exception Handling
+```nexus
+conc do
+    task worker1 do
+        // ...
+    end
+    task worker2 do
+        // ...
+    end
+end
+```
 
-- `raise` immediately terminates the current computation and unwinds the stack until it hits a `try...catch` block.
-- The `Exn` value is passed to the `catch` parameter, and execution resumes in the catch block.
+- `conc` spawns multiple `task` units and blocks until **all** complete
+- Tasks cannot capture mutable (`~`) bindings from the enclosing scope
+- In the reference interpreter, tasks execute sequentially for deterministic debugging
+- The semantics allow parallel execution in compiled output
+
+## Entrypoint
+
+### `main` Function
+
+Every Nexus program must define a `main` function with these constraints:
+
+- **Signature**: `() -> unit`
+- **Effects**: must be empty (all exceptions handled internally)
+- **Requirements**: may include any subset of `{ PermFs, PermNet, PermConsole, PermRandom, PermClock, PermProc }`
+- **Visibility**: must not be `pub`
+
+```nexus
+let main = fn () -> unit require { PermConsole } do
+    inject stdio.system_handler do
+        Console.println(val: [=[Hello]=])
+    end
+    return ()
+end
+```
+
+The runtime calls `main`, which performs all side effects via injected handlers. Exit code is `0` on success, non-zero on unhandled error.

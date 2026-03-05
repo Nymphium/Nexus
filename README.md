@@ -146,15 +146,15 @@ end
 
 | Document | Description |
 |---|---|
+| [Design](docs/design.md) | Design thesis: literal vs contextual |
 | [Syntax](docs/spec/syntax.md) | Grammar and EBNF |
 | [Types](docs/spec/types.md) | Type system, linear types, borrowing |
-| [Semantics](docs/spec/semantics.md) | Evaluation model |
-| [Effects](docs/spec/effect_system.md) | Coeffect system, ports, handlers |
-| [Memory](docs/spec/memory.md) | Linear types, borrowing, auto-drop |
+| [Effects](docs/spec/effects.md) | Coeffect system, ports, handlers |
+| [Semantics](docs/spec/semantics.md) | Evaluation model, entrypoint |
+| [CLI](docs/env/cli.md) | Command-line interface |
+| [WASM](docs/env/wasm.md) | WASM compilation and WASI capabilities |
 | [FFI](docs/env/ffi.md) | Wasm interop |
-| [Runtime](docs/env/runtime.md) | Entrypoint and execution |
 | [Stdlib](docs/env/stdlib.md) | Standard library |
-| [CLI](docs/cli.md) | Command-line interface |
 
 ## License
 

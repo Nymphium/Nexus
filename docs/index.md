@@ -210,20 +210,22 @@ wasmtime run -Scli -Shttp -Sinherit-network main.wasm
 
 ## Documentation
 
+### Design
+
+- [Design Thesis](design.md) -- Why every construct is literal, not contextual
+
 ### Language Specification
 
 - [Syntax](spec/syntax.md) -- Grammar and EBNF
-- [Types](spec/types.md) -- Type system, linear types, borrowing
-- [Semantics](spec/semantics.md) -- Evaluation model
-- [Memory Management](spec/memory.md) -- Linear types, borrowing, auto-drop
-- [Effect System](spec/effect_system.md) -- Coeffects, ports, handlers
+- [Types](spec/types.md) -- Type system, linear types, borrowing, memory management
+- [Effects and Coeffects](spec/effects.md) -- Ports, handlers, inject, exceptions
+- [Semantics](spec/semantics.md) -- Evaluation model, entrypoint, concurrency
 
 ### Environment
 
-- [CLI](cli.md) -- Command-line interface
-- [WebAssembly and WASI](env/wasm-wasi.md) -- Capability mapping and enforcement
+- [CLI](env/cli.md) -- Command-line interface
+- [WASM and WASI](env/wasm.md) -- Capability mapping and enforcement
 - [FFI](env/ffi.md) -- Wasm interop
-- [Runtime](env/runtime.md) -- Entrypoint and execution
 - [Standard Library](env/stdlib.md) -- Builtin modules
 
 ## Source

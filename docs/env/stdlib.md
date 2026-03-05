@@ -1,309 +1,323 @@
 # Standard Library
 
-Nexus stdlib APIs are provided by `nxlib/stdlib/*.nx` modules.
-
-Core modules:
-
-- `nxlib/stdlib/core.nx`
-- `nxlib/stdlib/stdio.nx`
-- `nxlib/stdlib/fs.nx`
-- `nxlib/stdlib/net.nx`
-- `nxlib/stdlib/string.nx`
-- `nxlib/stdlib/math.nx`
-- `nxlib/stdlib/list.nx`
-- `nxlib/stdlib/array.nx`
-- `nxlib/stdlib/set.nx`
-- `nxlib/stdlib/hashmap.nx`
-- `nxlib/stdlib/random.nx`
-- `nxlib/stdlib/clock.nx`
-- `nxlib/stdlib/proc.nx`
-- `nxlib/stdlib/result.nx`
-- `nxlib/stdlib/exn.nx`
-
-Primitive linear values are auto-dropped at scope end. Composite linear values must be consumed via pattern matching or function calls.
-
-## Console (`stdio`)
-
-Console I/O is provided via the `Console` port. `system_handler` requires the `PermConsole` runtime permission (see [WASI Mapping](wasm-wasi.md)).
+All stdlib modules are in `nxlib/stdlib/`. Import with:
 
 ```nexus
 import { Console }, * as stdio from nxlib/stdlib/stdio.nx
-
-pub port Console do
-  fn print(val: string) -> unit
-  fn println(val: string) -> unit
-end
-
-pub let system_handler = handler Console require { PermConsole } do ... end
 ```
 
-Usage:
+## I/O Ports
+
+I/O is capability-gated via ports. Each port has a `system_handler` that declares `require { PermX }`, propagating the permission to the caller when injected. Mock handlers without `require` need no runtime permissions.
+
+### Console (`stdio.nx`)
+
+Requires `PermConsole`. CLI flag: `--allow-console`.
+
+```nexus
+port Console do
+    fn print(val: string) -> unit
+    fn println(val: string) -> unit
+end
+```
 
 ```nexus
 let main = fn () -> unit require { PermConsole } do
-  inject stdio.system_handler do
-    Console.println(val: [=[Hello]=])
-  end
-  return ()
-end
-```
-
-Run with `nexus run --allow-console example.nx` (see [CLI Reference](../cli.md)).
-
-Mock handlers can implement `Console` without `require` for testing (no runtime permissions needed).
-
-## String (`string`)
-
-### Conversions
-
-```nexus
-pub external from_i64 = [=[__nx_string_from_i64]=] : (val: i64) -> string
-pub external from_float = [=[__nx_string_from_float]=] : (val: float) -> string
-pub external from_bool = [=[__nx_string_from_bool]=] : (val: bool) -> string
-pub external to_i64 = [=[__nx_string_to_i64]=] : (s: string) -> i64
-```
-
-## File System (`fs`)
-
-All fs operations are defined in `port Fs` and dispatched via handler.
-Use `inject fs_mod.system_handler do ... end` for real filesystem access (requires `--allow-fs` at runtime, see [CLI Reference](../cli.md)), or inject a mock handler for testing (no runtime capabilities needed).
-
-`system_handler` declares `require { PermFs }`, so injecting it propagates the `PermFs` runtime permission to the caller's `require` row (see [WASI Mapping](wasm-wasi.md)).
- Mock handlers without `require` need no runtime permissions.
-
-### Query operations
-
-```nexus
-fn exists(path: string) -> bool
-fn read_to_string(path: string) -> string
-```
-
-### Mutating path-level operations
-
-These raise `RuntimeError` on failure instead of returning `bool`:
-
-```nexus
-fn write_string(path: string, content: string) -> unit effect { Exn }
-fn append_string(path: string, content: string) -> unit effect { Exn }
-fn remove_file(path: string) -> unit effect { Exn }
-fn create_dir_all(path: string) -> unit effect { Exn }
-```
-
-### Directory listing
-
-`read_dir` returns a list of opened file handles (subdirectories are skipped):
-
-```nexus
-fn read_dir(path: string) -> List<Handle> effect { Exn }
-```
-
-### Stateful fd operations (consume-and-return pattern)
-
-```nexus
-pub type Handle = Handle(id: i64)   // non-opaque — any handler can construct
-
-fn open_read(path: string) -> %Handle effect { Exn }
-fn open_write(path: string) -> %Handle effect { Exn }
-fn open_append(path: string) -> %Handle effect { Exn }
-fn read(handle: %Handle) -> { content: string, handle: %Handle }
-fn fd_write(handle: %Handle, content: string) -> { ok: bool, handle: %Handle }
-fn fd_path(handle: %Handle) -> { path: string, handle: %Handle }
-fn close(handle: %Handle) -> unit
-```
-
-Usage pattern:
-```nexus
-import { Fs, Handle }, * as fs_mod from nxlib/stdlib/fs.nx
-
-// main requires { PermFs } because system_handler declares require { PermFs }
-let main = fn () -> unit require { PermFs } effect { Exn } do
-  inject fs_mod.system_handler do
-    Fs.write_string(path: [=[data.txt]=], content: [=[hello]=])
-    let %h = Fs.open_read(path: [=[data.txt]=])
-    let %r = Fs.read(handle: %h)
-    match %r do case { content: content, handle: %h2 } ->
-      Fs.close(handle: %h2)
-      // use content
+    inject stdio.system_handler do
+        Console.println(val: [=[Hello]=])
     end
-  end
+    return ()
 end
 ```
 
-Run with `nexus run --allow-fs example.nx` (see [CLI Reference](../cli.md)).
+### File System (`fs.nx`)
 
-`open_*` and mutating operations may raise `RuntimeError`. The `read`, `fd_write`, and `fd_path` operations consume the handle and return a new one in the result record, enabling stateless handlers (no borrow needed).
+Requires `PermFs`. CLI flag: `--allow-fs`.
 
-## Network (`net`)
-
-`net` functions are capability-gated by `require { Net }`.
-`system_handler` declares `require { PermNet }`, so injecting it propagates the `PermNet` runtime permission to the caller (see [WASI Mapping](wasm-wasi.md)). Run with `nexus run --allow-net` for real network access (see [CLI Reference](../cli.md)).
+**Types:**
 
 ```nexus
-pub type Header = Header(name: string, value: string)
-pub type Response = Response(status: i64, body: string)
-
-pub let header = fn (name: string, value: string) -> Header do ... end
-pub let request_response = fn (method: string, url: string, headers: List<Header>, body: string) -> Response require { Net } do ... end
-pub let request = fn (method: string, url: string, headers: List<Header>) -> string require { Net } do ... end
-pub let request_with_body = fn (method: string, url: string, headers: List<Header>, body: string) -> string require { Net } do ... end
-pub let get = fn (url: string) -> string require { Net } do ... end
+type Handle = Handle(id: i64)   // linear file handle
 ```
 
-## List and Array
-
-`List<T>` is an ADT with `Nil()` / `Cons(v: T, rest: List<T>)`.
+**Port methods:**
 
 ```nexus
-import as list from nxlib/stdlib/list.nx
-import as array from nxlib/stdlib/array.nx
+port Fs do
+    // Query
+    fn exists(path: string) -> bool
+    fn read_to_string(path: string) -> string
 
-list.length(xs)
-list.fold_left(xs, init, f)
-list.map_rev(xs, f)
-list.map(xs, f)
+    // Mutating (raise on failure)
+    fn write_string(path: string, content: string) -> unit effect { Exn }
+    fn append_string(path: string, content: string) -> unit effect { Exn }
+    fn remove_file(path: string) -> unit effect { Exn }
+    fn create_dir_all(path: string) -> unit effect { Exn }
+    fn read_dir(path: string) -> List<Handle> effect { Exn }
 
-array.length(arr)
-array.is_empty(arr)
-array.get(arr, idx)
-array.set(arr, idx, val)
-array.head(arr)
-array.last(arr)
-array.fold_left(arr, init, f)
-array.any(arr, pred)
-array.all(arr, pred)
-array.find_index(arr, pred)
-array.for_each(arr, f)
-array.map_in_place(arr, f)
-array.filter(arr, pred)
-array.partition(arr, pred)
-array.zip_with(left, right, f)
-array.zip(left, right)
-```
-
-## Set and HashMap
-
-Both collections use dictionary-passed key operations (`eq`/`hash`).
-
-```nexus
-import as set from nxlib/stdlib/set.nx
-import as hashmap from nxlib/stdlib/hashmap.nx
-
-let key_ops = set.make_key_ops(eq: eq_fn, hash: hash_fn)
-let s0 = set.empty(key_ops: key_ops)
-let s1 = set.insert(set: s0, val: 10)
-
-let map_ops = hashmap.make_key_ops(eq: eq_fn, hash: hash_fn)
-let m0 = hashmap.empty(key_ops: map_ops)
-let m1 = hashmap.put(map: m0, key: 1, value: [=[one]=])
-```
-
-## Random
-
-Random number generation is provided via the `Random` port. `system_handler` requires the `PermRandom` runtime permission (see [WASI Mapping](wasm-wasi.md)).
-
-```nexus
-import { Random }, * as rng from nxlib/stdlib/random.nx
-
-pub port Random do
-  fn next_i64() -> i64
-  fn range(min: i64, max: i64) -> i64
-  fn next_bool() -> bool
-end
-
-pub let system_handler = handler Random require { PermRandom } do ... end
-```
-
-Usage:
-
-```nexus
-let main = fn () -> unit require { PermRandom } do
-  inject rng.system_handler do
-    let n = Random.range(min: 0, max: 10)
-  end
-  return ()
+    // File descriptor operations (consume-and-return pattern)
+    fn open_read(path: string) -> %Handle effect { Exn }
+    fn open_write(path: string) -> %Handle effect { Exn }
+    fn open_append(path: string) -> %Handle effect { Exn }
+    fn read(handle: %Handle) -> { content: string, handle: %Handle }
+    fn fd_write(handle: %Handle, content: string) -> { ok: bool, handle: %Handle }
+    fn fd_path(handle: %Handle) -> { path: string, handle: %Handle }
+    fn close(handle: %Handle) -> unit
 end
 ```
 
-Run with `nexus run --allow-random example.nx` (see [CLI Reference](../cli.md)).
-
-## Clock
-
-Time operations are provided via the `Clock` port. `system_handler` requires the `PermClock` runtime permission (see [WASI Mapping](wasm-wasi.md)).
+The fd operations use a **consume-and-return** pattern: the linear handle is consumed and a fresh handle is returned in the result record, enabling stateless handlers.
 
 ```nexus
-import { Clock }, * as clk from nxlib/stdlib/clock.nx
-
-pub port Clock do
-  fn sleep(ms: i64) -> unit
-  fn now() -> i64
-end
-
-pub let system_handler = handler Clock require { PermClock } do ... end
-```
-
-Usage:
-
-```nexus
-let main = fn () -> unit require { PermClock } do
-  inject clk.system_handler do
-    let t = Clock.now()
-    Clock.sleep(ms: 100)
-  end
-  return ()
+let %h = Fs.open_read(path: [=[data.txt]=])
+let %r = Fs.read(handle: %h)
+match %r do
+    case { content: c, handle: %h2 } ->
+        Fs.close(handle: %h2)
 end
 ```
 
-Run with `nexus run --allow-clock example.nx` (see [CLI Reference](../cli.md)).
+### Network (`net.nx`)
 
-## Process (`proc`)
+Requires `PermNet`. CLI flag: `--allow-net`.
 
-Process control is provided via the `Proc` port. `system_handler` requires the `PermProc` runtime permission (see [WASI Mapping](wasm-wasi.md)).
+**Types:**
 
 ```nexus
-import { Proc }, * as proc_mod from nxlib/stdlib/proc.nx
+type Header = Header(name: string, value: string)
+type Response = Response(status: i64, body: string)
+type Server = Server(id: i64)     // linear server handle
+type Request = Request(method: string, path: string, headers: string, body: string, req_id: i64)
+```
 
-pub port Proc do
-  fn exit(status: i64) -> unit
+**Port methods:**
+
+```nexus
+port Net do
+    // HTTP client
+    fn get(url: string) -> string
+    fn request(method: string, url: string, headers: List<Header>) -> string
+    fn request_with_body(method: string, url: string, headers: List<Header>, body: string) -> string
+    fn request_response(method: string, url: string, headers: List<Header>, body: string) -> Response
+
+    // HTTP server
+    fn listen(addr: string) -> %Server effect { Exn }
+    fn accept(server: &Server) -> Request
+    fn respond(req: Request, status: i64, body: string) -> bool
+    fn respond_with_headers(req: Request, status: i64, headers: List<Header>, body: string) -> bool
+    fn stop(server: %Server) -> unit
 end
-
-pub let system_handler = handler Proc require { PermProc } do ... end
 ```
 
-Usage:
+**Helper functions:**
 
 ```nexus
-let main = fn () -> unit require { PermProc } do
-  inject proc_mod.system_handler do
-    Proc.exit(status: 0)
-  end
+fn header(name: string, value: string) -> Header
+fn response_status(res: Response) -> i64
+fn response_body(res: Response) -> string
+fn request_method(req: &Request) -> string
+fn request_path(req: &Request) -> string
+fn request_body(req: &Request) -> string
+```
+
+### Random (`random.nx`)
+
+Requires `PermRandom`. CLI flag: `--allow-random`.
+
+```nexus
+port Random do
+    fn next_i64() -> i64
+    fn range(min: i64, max: i64) -> i64
+    fn next_bool() -> bool
 end
 ```
 
-Run with `nexus run --allow-proc example.nx` (see [CLI Reference](../cli.md)).
+### Clock (`clock.nx`)
 
-## Result Helpers
-
-`result.nx` provides helpers and Exn bridges.
+Requires `PermClock`. CLI flag: `--allow-clock`.
 
 ```nexus
-import as result from nxlib/stdlib/result.nx
-
-result.is_ok(res)
-result.is_err(res)
-result.unwrap_or(res, default)
-result.from_exn(exn)
-result.to_exn(res) // effect { Exn }
+port Clock do
+    fn sleep(ms: i64) -> unit
+    fn now() -> i64
+end
 ```
 
-## Exception Utilities (`exn`)
+### Process (`proc.nx`)
 
-`exn.nx` provides helpers for inspecting caught exceptions.
+Requires `PermProc`. CLI flag: `--allow-proc`.
 
 ```nexus
-import as exn from nxlib/stdlib/exn.nx
-
-exn.to_string(exn)    // Exn -> string
-exn.backtrace(exn)    // Exn -> [string]
+port Proc do
+    fn exit(status: i64) -> unit
+end
 ```
 
-`to_string` converts an `Exn` value to a human-readable string. `backtrace` returns the call-stack frames captured at the point the exception was raised (interpreter only; returns `[]` in Wasm builds).
+## Data Structures
+
+### List (`list.nx`)
+
+Immutable singly-linked list: `type List<T> = Nil | Cons(v: T, rest: List<T>)`
+
+```nexus
+fn empty<T>() -> List<T>
+fn cons<T>(x: T, xs: List<T>) -> List<T>
+fn is_empty<T>(xs: List<T>) -> bool
+fn length<T>(xs: List<T>) -> i64
+fn head<T>(xs: List<T>) -> T
+fn tail<T>(xs: List<T>) -> List<T>
+fn last<T>(xs: List<T>) -> T
+fn reverse<T>(xs: List<T>) -> List<T>
+fn concat<T>(xs: List<T>, ys: List<T>) -> List<T>
+fn take<T>(xs: List<T>, n: i64) -> List<T>
+fn drop_n<T>(xs: List<T>, n: i64) -> List<T>
+fn nth<T>(xs: List<T>, n: i64) -> T
+fn contains(xs: List<i64>, val: i64) -> bool
+fn fold_left<T, U>(xs: List<T>, init: U, f: (acc: U, val: T) -> U) -> U
+fn map<T, U>(xs: List<T>, f: (val: T) -> U) -> List<U>
+fn map_rev<T, U>(xs: List<T>, f: (val: T) -> U) -> List<U>
+```
+
+### Array (`array.nx`)
+
+Linear mutable array: `[| T |]`
+
+```nexus
+fn length<T>(arr: &[| T |]) -> i64
+fn is_empty<T>(arr: &[| T |]) -> bool
+fn get<T>(arr: &[| T |], idx: i64) -> T
+fn set<T>(arr: &[| T |], idx: i64, val: T) -> unit
+fn head<T>(arr: &[| T |]) -> T
+fn last<T>(arr: &[| T |]) -> T
+fn fold_left<T, U>(arr: &[| T |], init: U, f: (acc: U, val: T) -> U) -> U
+fn any<T>(arr: &[| T |], pred: (val: T) -> bool) -> bool
+fn all<T>(arr: &[| T |], pred: (val: T) -> bool) -> bool
+fn find_index<T>(arr: &[| T |], pred: (val: T) -> bool) -> i64
+fn for_each<T>(arr: &[| T |], f: (val: T) -> unit) -> unit
+fn map_in_place<T>(arr: &[| T |], f: (val: T) -> T) -> unit
+fn filter<T>(arr: &[| T |], pred: (val: T) -> bool) -> List<T>
+fn partition<T>(arr: &[| T |], pred: (val: T) -> bool) -> Partition<T>
+fn zip_with<A, B, C>(left: &[| A |], right: &[| B |], f: (left: A, right: B) -> C) -> List<C>
+fn zip<A, B>(left: &[| A |], right: &[| B |]) -> List<Pair<A, B>>
+fn consume<T>(%arr: [| T |], f: (val: %T) -> unit) -> unit
+```
+
+### Set (`set.nx`)
+
+Hash set with dictionary-passed key operations:
+
+```nexus
+type SetKeyOps<K> = SetKeyOps(eq: SetEq<K>, hash: SetHash<K>)
+type Set<K> = Set(key_ops: SetKeyOps<K>, entries: List<SetEntry<K>>)
+
+fn make_key_ops<K>(eq: (left: K, right: K) -> bool, hash: (key: K) -> i64) -> SetKeyOps<K>
+fn i64_key_ops() -> SetKeyOps<i64>
+fn empty<K>(key_ops: SetKeyOps<K>) -> Set<K>
+fn contains<K>(set: Set<K>, val: K) -> bool
+fn insert<K>(set: Set<K>, val: K) -> Set<K>
+fn remove<K>(set: Set<K>, val: K) -> Set<K>
+fn from_list<K>(key_ops: SetKeyOps<K>, xs: List<K>) -> Set<K>
+fn to_list<K>(set: Set<K>) -> List<K>
+fn size<K>(set: Set<K>) -> i64
+fn union<K>(left: Set<K>, right: Set<K>) -> Set<K>
+fn intersection<K>(left: Set<K>, right: Set<K>) -> Set<K>
+fn difference<K>(left: Set<K>, right: Set<K>) -> Set<K>
+```
+
+### HashMap (`hashmap.nx`)
+
+Hash map with dictionary-passed key operations:
+
+```nexus
+type KeyOps<K> = KeyOps(eq: Eq<K>, hash: Hash<K>)
+type HashMap<K, V> = HashMap(key_ops: KeyOps<K>, entries: List<Entry<K, V>>)
+type Lookup<V> = Found(value: V) | Missing
+
+fn make_key_ops<K>(eq: (left: K, right: K) -> bool, hash: (key: K) -> i64) -> KeyOps<K>
+fn i64_key_ops() -> KeyOps<i64>
+fn empty<K, V>(key_ops: KeyOps<K>) -> HashMap<K, V>
+fn from_entries<K, V>(key_ops: KeyOps<K>, entries: List<Entry<K, V>>) -> HashMap<K, V>
+fn entries<K, V>(map: HashMap<K, V>) -> List<Entry<K, V>>
+fn size<K, V>(map: HashMap<K, V>) -> i64
+fn contains_key<K, V>(map: HashMap<K, V>, key: K) -> bool
+fn get<K, V>(map: HashMap<K, V>, key: K) -> Lookup<V>
+fn get_or<K, V>(map: HashMap<K, V>, key: K, default: V) -> V
+fn put<K, V>(map: HashMap<K, V>, key: K, value: V) -> HashMap<K, V>
+fn remove<K, V>(map: HashMap<K, V>, key: K) -> HashMap<K, V>
+fn keys<K, V>(map: HashMap<K, V>) -> List<K>
+fn values<K, V>(map: HashMap<K, V>) -> List<V>
+```
+
+## Utilities
+
+### String (`string.nx`)
+
+```nexus
+fn length(s: string) -> i64
+fn contains(s: string, sub: string) -> bool
+fn substring(s: string, start: i64, len: i64) -> string
+fn index_of(s: string, sub: string) -> i64
+fn starts_with(s: string, prefix: string) -> bool
+fn ends_with(s: string, suffix: string) -> bool
+fn trim(s: string) -> string
+fn to_upper(s: string) -> string
+fn to_lower(s: string) -> string
+fn replace(s: string, from_str: string, to_str: string) -> string
+fn char_at(s: string, idx: i64) -> string
+fn from_i64(val: i64) -> string
+fn from_float(val: float) -> string
+fn from_bool(val: bool) -> string
+fn to_i64(s: string) -> i64
+fn split(s: string, sep: string) -> List<string>
+```
+
+### Math (`math.nx`)
+
+```nexus
+fn abs(val: i64) -> i64
+fn max(a: i64, b: i64) -> i64
+fn min(a: i64, b: i64) -> i64
+fn mod_i64(a: i64, b: i64) -> i64
+fn abs_float(val: float) -> float
+fn sqrt(val: float) -> float
+fn floor(val: float) -> float
+fn ceil(val: float) -> float
+fn pow(base: float, exp: float) -> float
+fn i64_to_float(val: i64) -> float
+fn float_to_i64(val: float) -> i64
+```
+
+### Result (`result.nx`)
+
+```nexus
+type Result<T, E> = Ok(val: T) | Err(err: E)
+
+fn is_ok<T, E>(res: Result<T, E>) -> bool
+fn is_err<T, E>(res: Result<T, E>) -> bool
+fn unwrap_or<T, E>(res: Result<T, E>, default: T) -> T
+fn map<T, U, E>(res: Result<T, E>, f: (val: T) -> U) -> Result<U, E>
+fn map_err<T, E, F>(res: Result<T, E>, f: (val: E) -> F) -> Result<T, F>
+fn and_then<T, U, E>(res: Result<T, E>, f: (val: T) -> Result<U, E>) -> Result<U, E>
+fn from_exn<T>(exn: Exn) -> Result<T, Exn>
+fn to_exn<T>(res: Result<T, Exn>) -> T effect { Exn }
+```
+
+### Exception Utilities (`exn.nx`)
+
+```nexus
+fn to_string(exn: Exn) -> string
+fn backtrace(exn: Exn) -> [string]
+```
+
+`backtrace` returns call-stack frames captured at raise point (interpreter only; returns `[]` in WASM builds).
+
+### Core (`core.nx`)
+
+```nexus
+type Pair<A, B> = Pair(left: A, right: B)
+type Partition<T> = Partition(matched: List<T>, rest: List<T>)
+
+fn fst<A, B>(p: Pair<A, B>) -> A
+fn snd<A, B>(p: Pair<A, B>) -> B
+fn negate(val: bool) -> bool
+```

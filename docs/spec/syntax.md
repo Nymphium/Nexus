@@ -1,207 +1,54 @@
 # Syntax
 
-Nexus uses a clean, keyword-oriented syntax designed for readability and clarity for both humans and AI.
+Nexus uses keyword-terminated blocks and mandatory labeled arguments to make program structure unambiguous (see [Design](../design.md)). This reference covers all syntactic constructs. For semantic behavior, see [Types](types.md), [Effects](effects.md), and [Semantics](semantics.md).
 
 ## Comments
-
-Nexus supports C-style comments:
 
 ```nexus
 // line comment
 /* block comment */
 ```
 
-## Functions
+## Definitions
 
-Functions are first-class values in Nexus. At the top level, they are defined by binding a lambda expression to a name using `let`.
+### Functions
+
+Functions are first-class values bound with `let`:
 
 ```nexus
 pub let add = fn (a: i64, b: i64) -> i64 do
-  return a + b
+    return a + b
 end
 ```
 
-- `pub let` makes the function visible to other modules.
-- All arguments are **labeled** at call sites: `add(a: 1, b: 2)`.
-- Generic type parameters can be declared with `<T, U>`:
+- `pub let` makes the function visible to other modules
+- All arguments are **labeled** at call sites: `add(a: 1, b: 2)`
+- Generic type parameters: `fn <T>(x: T) -> T do ... end`
 
-```nexus
-let identity = fn <T>(x: T) -> T do
-  return x
-end
-```
-
-### Function values and lambdas
-
-```nexus
-let add1 = fn (x: i64) -> i64 do
-  return x + 1
-end
-
-let main = fn () -> unit do
-  let f = add1
-  let g = fn (x: i64) -> i64 do
-    return x * 2
-  end
-  let _ = g(x: f(x: 10))
-  return ()
-end
-```
-
-- Local lambda literals use `fn (...) -> T do ... end`.
-- A local recursive lambda must use an immutable binding with an explicit type annotation.
-
-### Coeffect/effect annotation
-
-Functions may declare:
-
-- `require { ... }` for coeffects (ports).
-- `effect { ... }` for builtin effects.
-
-Both are optional; omitted means an empty row.
+### Coeffect/Effect Annotations
 
 ```nexus
 let greet = fn (name: string) -> unit require { Logger, Console } do
-  Logger.log(msg: name)
-  Console.println(val: name)
-  return ()
+    Logger.log(msg: name)
+    Console.println(val: name)
+    return ()
 end
 ```
 
-### External functions
+Both `require { ... }` and `effect { ... }` are optional; omitted means empty row.
 
-Foreign functions are declared with the `external` keyword as a dedicated top-level statement.
-The Wasm export name is given as a string after `=`, followed by `:` and the type:
+### External Functions
+
+Foreign function declarations bind a Wasm export to a Nexus name:
 
 ```nexus
 pub external sin = [=[sin]=] : (x: float) -> float
-pub external add_ints = [=[add]=] : (a: i64, b: i64) -> i64
 pub external length = [=[array_length]=] : <T>(arr: &[| T |]) -> i64
 ```
 
-Generic external bindings require explicit type parameters with `<T, U, ...>` before the arrow type.
-Using an unknown type name without declaring it as a type parameter is a type error.
+Generic externals require explicit type parameters with `<T, U, ...>`.
 
-## Variables and Constants (`let`)
-
-Variables are defined with `let`. A type annotation is optional.
-
-### Top-level `let`
-
-At the top level, `let` defines a module-level constant or global variable. Sigils (`~`, `%`) are **not allowed** at the top level.
-
-```nexus
-pub let PI = 3.14159
-let internal_config = [=[ debug ]=]
-```
-
-- `pub let` makes the value visible to other modules.
-
-### Local `let`
-
-Inside functions, a **sigil** controls linearity and mutability:
-
-| Sigil | Meaning |
-|---|---|
-| (none) | Immutable binding |
-| `~` | Mutable binding |
-| `%` | Linear binding (must be consumed exactly once) |
-| `&` | Borrowed reference (read-only access without consumption) |
-
-
-```nexus
-let main = fn() -> unit do
-  let x = 10
-  let name: string = [=[ Nexus ]=]
-  let ~counter: i64 = 0
-  let %resource: %Handle = acquire()
-  // ...
-  return ()
-end
-```
-
-Variables are lexically scoped.
-
-## Operators
-
-### Binary operators
-
-All binary operators are left-associative. Precedence from lowest to highest:
-
-| Level | Operators | Domain |
-|---|---|---|
-| 1 | `==` `!=` `<=` `>=` `<` `>` | Integer / generic comparison |
-| 1 | `==.` `!=.` `<=.` `>=.` `<.` `>.` | Float comparison |
-| 2 | `+` `-` | Integer arithmetic |
-| 2 | `++` | String concatenation |
-| 2 | `+.` `-.` | Float arithmetic |
-| 3 | `*` `/` | Integer arithmetic |
-| 3 | `*.` `/.` | Float arithmetic |
-
-### Assignment
-
-```nexus
-~x <- 42
-```
-
-Assigns a new value to a mutable binding. The left-hand side is any expression that resolves to a mutable location.
-
-## Types
-
-### Primitive types
-
-| Type | Description |
-|---|---|
-| `i32` | 32-bit signed integer |
-| `i64` | 64-bit signed integer |
-| `f32` | 32-bit floating-point |
-| `f64` | 64-bit floating-point |
-| `float` | Alias of `f64` |
-| `bool` | Boolean (`true` / `false`) |
-| `string` | Immutable UTF-8 string |
-| `unit` | The unit type, written `()` as a value |
-
-### Composite types
-
-| Syntax | Description |
-|---|---|
-| `{ x: T, y: U }` | Record type |
-| `[T]` | Immutable list |
-| `[| T |]` | Linear array |
-| `Name<T, U>` | Generic user-defined type |
-| `Result<T, E>` | `Result` sum type from stdlib |
-
-### Pointer / ownership types
-
-| Syntax | Description |
-|---|---|
-| `ref(T)` | Mutable reference |
-| `&T` | Borrowed reference |
-| `%T` | Linear type (must be consumed once) |
-
-### Function / signature types
-
-```nexus
-(label: T) -> R                       // pure function
-(a: i64, b: i64) -> i64               // labeled parameters
-() -> unit effect { Exn }             // builtin effects
-() -> string require { Net }          // coeffect requirements
-(x: T) -> R require { C | r } effect { E | e } // open rows
-```
-
-An unlabeled parameter uses `_` as an internal label.
-
-### Signature rows
-
-`require`/`effect` rows use `{}` with optional tail variables:
-
-```nexus
-{ Exn }                 // single entry
-{ Net, Fs }             // multiple entries
-{ Console | e }         // open row with tail variable (coeffect)
-```
-
-### Type definitions
+### Type Definitions
 
 ```nexus
 pub type Point = { x: float, y: float }
@@ -209,201 +56,20 @@ pub type Pair<A, B> = { fst: A, snd: B }
 pub type Result<T, E> = Ok(val: T) | Err(err: E)
 ```
 
-- `pub` makes the type visible to other modules.
-- `type` can define either:
-    - A record type (`{ ... }`)
-    - A sum/variant type (`A(...) | B(...)`)
+Defines either a record type (`{ ... }`) or a sum type (`A(...) | B(...)`).
 
-> **Note:** Constructors with no fields still require `()` in patterns and expressions (e.g., `Red()`).
-
-### Exception declarations
-
-`exception` declarations extend the built-in `Exn` type with constructors.
+### Exception Declarations
 
 ```nexus
 pub exception NotFound(msg: string)
 pub exception PermissionDenied(msg: string, code: i64)
 ```
 
-- `pub` makes the exception constructor visible to other modules.
+Extends the builtin `Exn` type with new constructors.
 
-## Control Flow
+## Expressions
 
-### If-Else
-
-```nexus
-if condition then
-  // ...
-else
-  // ...
-end
-```
-
-The `else` branch is optional.
-
-### Match
-
-Pattern matching is supported via `match`.
-
-```nexus
-match result do
-  case Ok(val) ->
-    // ...
-  case Err(e) ->
-    // ...
-end
-```
-
-Supported patterns:
-
-| Pattern | Example | Description |
-|---|---|---|
-| Literal | `1`, `true`, `[=[ hi ]=]` | Matches an exact value |
-| Constructor | `Ok(x)`, `Err(e)` | Destructures a sum-type variant |
-| Record (exact) | `{ x: p1, y: p2 }` | All fields must match |
-| Record (partial) | `{ x: p1, _ }` | Remaining fields ignored; `_` must be last |
-| Wildcard | `_` | Matches anything without binding |
-| Variable | `x`, `~x`, `%x` | Binds the matched value with optional sigil |
-
-### Try / Catch
-
-```nexus
-try
-  let result = risky_operation()
-  return result
-catch err ->
-  match err do
-    case NotFound(msg: msg) -> ()
-  end
-  return ()
-end
-```
-
-`catch` binds the raised `Exn` value to a single identifier. Only one catch clause is allowed.
-
-### Raise
-
-```nexus
-raise NotFound(msg: [=[ something went wrong ]=])
-```
-
-`raise` is an expression. It terminates the current computation and propagates to the nearest `catch`.
-Runtime errors are represented as built-in exceptions such as `RuntimeError(string)` and
-`InvalidIndex(i64)` and can be handled in `catch`.
-
-### Exception constructors
-
-Exception values are created with normal constructor syntax:
-
-```nexus
-let err = PermissionDenied(msg: [=[/tmp/data]=], code: 13)
-raise err
-```
-
-## Function Calls and Signatures
-
-Function calls are direct:
-
-```nexus
-Console.println(val: [=[ hello ]=])
-Logger.log(msg: text)
-```
-
-The type checker validates each call against the surrounding `require` and `effect` signatures.
-
-## Borrow
-
-The `&` sigil creates a borrowed reference to a binding without consuming it. It can be used as a prefix operator in expressions or as a sigil in `let` bindings:
-
-```nexus
-let borrowed = &arr         // &immutable
-let &b2 = ~x                // &mutable using let sigil
-let b3 = &%resource         // &linear using prefix operator
-```
-
-> **Note:** `&` serves both as a prefix operator (`&%arr`) and as a let-binding sigil (`let &b = ...`).
-
-## Ports and Handlers
-
-### Port
-
-A `port` defines a coeffect interface.
-
-```nexus
-pub port Logger do
-  fn log(msg: string) -> unit
-  fn warn(msg: string) -> unit
-end
-```
-
-### Handler and Inject
-
-A handler is an expression that implements one port. Handlers may optionally declare `require { ... }` to specify runtime capabilities they need:
-
-```nexus
-// Handler with runtime permission requirement
-let stdout_logger = handler Logger require { Console } do
-  fn log(msg: string) -> unit do
-    Console.println(val: msg)
-    return ()
-  end
-  fn warn(msg: string) -> unit do
-    Console.println(val: msg)
-    return ()
-  end
-end
-
-// Mock handler — no runtime needs
-let mock_logger = handler Logger do
-  fn log(msg: string) -> unit do return () end
-  fn warn(msg: string) -> unit do return () end
-end
-```
-
-When a handler with `require { X }` is injected, the `X` capability is propagated to the caller's require row:
-
-```nexus
-inject stdout_logger do       // caller requires { PermFs }
-  Logger.log(msg: [=[from handler]=])
-end
-
-inject mock_logger do          // caller requires {} — no capabilities
-  Logger.log(msg: [=[from mock]=])
-end
-```
-
-## Imports
-
-Four import forms are available:
-
-```nexus
-import from path/to/module.nx                        // anonymous import
-import as math from path/to/math.nx                  // namespace alias
-import { add, sub } from path/to/math.nx             // named items
-import { add, sub }, * as math from path/to/math.nx  // named items + namespace alias
-import external path/to/lib.wasm                     // Wasm module
-```
-
-## Concurrency (`conc`)
-
-Structured concurrency via `conc` blocks. Task names are identifiers:
-
-```nexus
-conc do
-  task worker1 do
-    // ...
-  end
-  task worker2 do
-    // ...
-  end
-end
-```
-
-`conc` waits for all tasks to complete.
-
-> **Note:** In the current reference interpreter, tasks execute sequentially for deterministic debugging.
-
-## Literals
+### Literals
 
 | Form | Example | Type |
 |---|---|---|
@@ -413,10 +79,232 @@ end
 | Unit | `()` | `unit` |
 | String | `[=[ hello ]=]` | `string` |
 
-Strings use `[=[ ... ]=]` delimiters. To include `]=]` literally, escape it as `\]=]`.
-Numeric literals default to `i64` (integers) and `f64` (floats) unless constrained by annotations or context.
+Strings use `[=[ ... ]=]` delimiters. Escape `]=]` as `\]=]`.
 
-Bracket strings are also used for import paths and Wasm binding names.
+### Operators
+
+All binary operators are left-associative:
+
+| Precedence | Operators | Domain |
+|---|---|---|
+| 1 (lowest) | `==` `!=` `<=` `>=` `<` `>` | Integer / generic comparison |
+| 1 | `==.` `!=.` `<=.` `>=.` `<.` `>.` | Float comparison |
+| 2 | `+` `-` | Integer arithmetic |
+| 2 | `++` | String concatenation |
+| 2 | `+.` `-.` | Float arithmetic |
+| 3 (highest) | `*` `/` | Integer arithmetic |
+| 3 | `*.` `/.` | Float arithmetic |
+
+### Function Calls
+
+```nexus
+add(a: 1, b: 2)
+Console.println(val: [=[hello]=])
+list.map(xs: items, f: transform)
+```
+
+All arguments are labeled. Port method calls use `Port.method(...)` syntax.
+
+### Lambda Expressions
+
+```nexus
+let f = fn (x: i64) -> i64 do
+    return x + 1
+end
+```
+
+### Handler Expressions
+
+```nexus
+let logger = handler Logger require { Console } do
+    fn info(msg: string) -> unit do
+        Console.println(val: msg)
+        return ()
+    end
+end
+```
+
+### Record and Constructor Expressions
+
+```nexus
+let point = { x: 1.0, y: 2.0 }
+let result = Ok(val: 42)
+```
+
+### Collection Literals
+
+```nexus
+let xs = [1, 2, 3]            // list
+let %arr = [| 1, 2, 3 |]      // array (linear)
+```
+
+### Borrow Expression
+
+```nexus
+let b = &arr                   // borrow immutable binding
+let b2 = &%resource            // borrow linear binding
+```
+
+### Index and Field Access
+
+```nexus
+let val = (&%arr)[0]           // array index
+%arr[0] <- 42                  // array index assignment
+let name = user.name           // record field access
+```
+
+### Raise Expression
+
+```nexus
+raise NotFound(msg: [=[key]=])
+```
+
+## Statements
+
+### Let Bindings
+
+```nexus
+let x = 10
+let name: string = [=[Nexus]=]
+let ~counter: i64 = 0
+let %resource = acquire()
+let &view = ~data
+```
+
+Sigils: (none) immutable, `~` mutable, `%` linear, `&` borrowed.
+
+Top-level `let` does not allow `~` or `%` sigils.
+
+### Assignment
+
+```nexus
+~x <- 42
+```
+
+Assigns to a mutable binding.
+
+### Return
+
+```nexus
+return expr
+```
+
+### If-Else
+
+```nexus
+if condition then
+    // ...
+else
+    // ...
+end
+```
+
+The `else` branch is optional.
+
+### Match
+
+```nexus
+match result do
+    case Ok(val: v) -> process(v: v)
+    case Err(err: e) -> handle_error(e: e)
+end
+```
+
+### Try / Catch
+
+```nexus
+try
+    risky_operation()
+catch err ->
+    match err do
+        case NotFound(msg: m) -> ()
+        case _ -> ()
+    end
+end
+```
+
+Single `catch` clause binding the `Exn` value.
+
+### Inject
+
+```nexus
+inject stdio.system_handler do
+    inject console_logger do
+        program()
+    end
+end
+```
+
+Multiple handlers: `inject h1, h2 do ... end`.
+
+### Conc
+
+```nexus
+conc do
+    task worker1 do
+        // ...
+    end
+    task worker2 do
+        // ...
+    end
+end
+```
+
+## Patterns
+
+| Pattern | Example | Description |
+|---|---|---|
+| Literal | `1`, `true`, `[=[ hi ]=]` | Matches exact value |
+| Variable | `x`, `~x`, `%x` | Binds with optional sigil |
+| Constructor | `Ok(val: v)`, `None()` | Destructures variant |
+| Record (exact) | `{ x: p1, y: p2 }` | All fields must match |
+| Record (partial) | `{ x: p1, _ }` | `_` must be last; remaining fields ignored |
+| Wildcard | `_` | Matches anything, no binding |
+
+## Imports
+
+```nexus
+import from path/to/module.nx                        // anonymous
+import as math from path/to/math.nx                  // namespace alias
+import { add, sub } from path/to/math.nx             // named items
+import { add, sub }, * as math from path/to/math.nx  // named + namespace
+import external path/to/lib.wasm                     // Wasm module
+```
+
+## Ports and Handlers
+
+```nexus
+pub port Logger do
+    fn info(msg: string) -> unit
+    fn warn(msg: string) -> unit
+end
+
+let console_logger = handler Logger require { Console } do
+    fn info(msg: string) -> unit do
+        Console.println(val: msg)
+        return ()
+    end
+    fn warn(msg: string) -> unit do
+        Console.println(val: msg)
+        return ()
+    end
+end
+```
+
+## Concurrency
+
+```nexus
+conc do
+    task name1 do
+        // ...
+    end
+    task name2 do
+        // ...
+    end
+end
+```
+
+Task names are identifiers. `conc` blocks wait for all tasks.
 
 ---
 

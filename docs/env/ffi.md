@@ -1,48 +1,52 @@
 # Foreign Function Interface (FFI)
 
-Nexus supports interfacing with WebAssembly (Wasm) modules, allowing developers to extend the language with functions written in languages like Rust, C, or C++.
+Nexus interoperates with WebAssembly modules, allowing extension with functions written in Rust, C, or other languages that compile to WASM.
 
-## Loading Wasm Modules
+## Importing WASM Modules
 
-To load a Wasm module, use the `import external` directive. Nexus handles these modules using the [WebAssembly Component Model and WASI](wasm-wasi.md).
+Load a WASM module with `import external`:
 
 ```nexus
 import external math.wasm
 ```
 
-## Binding External Functions
+The module's exports become available for binding.
 
-Once a module is loaded (or if the function is available in the global Wasm store), you can bind it to a Nexus name using the `external` statement.
+## External Bindings
+
+Bind a WASM export to a Nexus name:
 
 ```nexus
 pub external add_ints = [=[add]=] : (a: i64, b: i64) -> i64
 external internal_helper = [=[helper]=] : (x: i64) -> unit
 ```
 
-- **`pub`**: Makes the binding visible to other modules. If omitted, the binding is private.
-- **Name**: The name of the function in Nexus (`add_ints`).
-- **Wasm Symbol**: The string literal `[=[add]=]` after `=` specifies the name of the exported function in the Wasm module.
-- **Type**: The type signature after `:`. It must be an arrow type.
+- `pub` makes the binding visible to other modules
+- The string literal after `=` is the WASM export name
+- The type after `:` must be an arrow type
 
 ## Generic External Bindings
 
-If the external function is polymorphic, type parameters must be declared explicitly with `<T, U, ...>`:
+Polymorphic externals require explicit type parameters:
 
 ```nexus
 pub external length = [=[array_length]=] : <T>(arr: &[| T |]) -> i64
 ```
 
-Using an undeclared type variable (e.g., writing `T` without `<T>`) is a type error.
-This prevents typos like `Strng` from silently becoming type variables.
+Using an undeclared type variable (e.g., `T` without `<T>`) is a type error. This prevents typos from silently becoming type variables.
 
-## Supported Types
+## Type Mapping
 
-Currently, the FFI supports basic types that map directly to Wasm types:
-
-- `i64` -> `i64`
-- `float` -> `f64`
-- `i32` (via `i64` casting)
-- `f32` (via `float` casting)
+| Nexus Type | WASM Type | Notes |
+|---|---|---|
+| `i64` | `i64` | Direct |
+| `float` / `f64` | `f64` | Direct |
+| `i32` | `i32` | Via `i64` casting |
+| `f32` | `f32` | Via `float` casting |
+| `bool` | `i32` | 0 = false, 1 = true |
+| `string` | `i64` | Packed as (offset, length) pair |
+| `unit` | (none) | No WASM parameter generated |
+| Records | `i32` | Heap pointer |
 
 ## Example
 
@@ -51,10 +55,11 @@ import external utils.wasm
 
 external process_data = [=[process]=] : (val: float) -> float
 
-let main = fn () -> unit do
-  let result = process_data(val: 42.0)
-  // assuming print_float is an effectful operation
-  print_float(val: result)
-  return ()
+let main = fn () -> unit require { PermConsole } do
+    inject stdio.system_handler do
+        let result = process_data(val: 42.0)
+        Console.println(val: string.from_float(val: result))
+    end
+    return ()
 end
 ```
