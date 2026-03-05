@@ -1,16 +1,18 @@
 /**
- * stdio: Standard I/O operations for console output.
+ * stdio: Standard I/O operations for console I/O.
  *
- * Provides Console port with print (no newline) and println (with newline)
- * for writing strings to stdout. Requires PermConsole capability.
+ * Provides Console port with print (no newline), println (with newline),
+ * and read_line (read a line from stdin). Requires PermConsole capability.
  */
 import external nxlib/stdlib/stdlib.wasm
 
 external __nx_print = "__nx_print" : (val: string) -> unit
+external __nx_read_line = "__nx_read_line" : () -> string
 
 pub port Console do
   fn print(val: string) -> unit
   fn println(val: string) -> unit
+  fn read_line() -> string
 end
 
 pub let system_handler = handler Console require { PermConsole } do
@@ -20,5 +22,8 @@ pub let system_handler = handler Console require { PermConsole } do
   fn println(val: string) -> unit do
     let msg = val ++ "\n"
     return __nx_print(val: msg)
+  end
+  fn read_line() -> string do
+    return __nx_read_line()
   end
 end

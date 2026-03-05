@@ -248,6 +248,12 @@ let mock_proc = handler Proc do
   fn exit(status: i64) -> unit do
     return ()
   end
+  fn get_env(key: string) -> string effect { Exn } do
+    return "mock"
+  end
+  fn set_env(key: string, value: string) -> unit do
+    return ()
+  end
 end
 
 let main = fn () -> unit do
@@ -278,6 +284,158 @@ fn result_to_exn_raises_and_is_catchable() {
     let src =
         &crate::common::fixtures::read_test_fixture("result_to_exn_raises_and_is_catchable.nx");
     assert_eq!(run(src).unwrap(), Value::Bool(true));
+}
+
+#[test]
+fn console_read_line_requires_perm_console() {
+    let src = r#"
+import { Console }, * as stdio from nxlib/stdlib/stdio.nx
+
+let main = fn () -> string do
+  inject stdio.system_handler do
+    return Console.read_line()
+  end
+end
+"#;
+    assert!(
+        check(src).is_err(),
+        "Console.read_line without PermConsole should fail typechecking"
+    );
+}
+
+#[test]
+fn console_read_line_with_mock_handler() {
+    let src = r#"
+import { Console } from nxlib/stdlib/stdio.nx
+
+let mock_console = handler Console do
+  fn print(val: string) -> unit do
+    return ()
+  end
+  fn println(val: string) -> unit do
+    return ()
+  end
+  fn read_line() -> string do
+    return "mock input"
+  end
+end
+
+let main = fn () -> string do
+  inject mock_console do
+    return Console.read_line()
+  end
+end
+"#;
+    assert_eq!(run(src).unwrap(), Value::String("mock input".to_string()));
+}
+
+#[test]
+fn console_read_line_typechecks_with_perm_console() {
+    let src = r#"
+import { Console }, * as stdio from nxlib/stdlib/stdio.nx
+
+let main = fn () -> string require { PermConsole } do
+  inject stdio.system_handler do
+    return Console.read_line()
+  end
+end
+"#;
+    assert!(
+        check(src).is_ok(),
+        "Console.read_line with PermConsole should typecheck"
+    );
+}
+
+#[test]
+fn proc_get_env_requires_perm_proc() {
+    let src = r#"
+import { Proc }, * as proc_mod from nxlib/stdlib/proc.nx
+
+let main = fn () -> string do
+  inject proc_mod.system_handler do
+    try
+      return Proc.get_env(key: "HOME")
+    catch e ->
+      return "error"
+    end
+  end
+end
+"#;
+    assert!(
+        check(src).is_err(),
+        "Proc.get_env without PermProc should fail typechecking"
+    );
+}
+
+#[test]
+fn proc_set_env_typechecks_with_perm_proc() {
+    let src = r#"
+import { Proc }, * as proc_mod from nxlib/stdlib/proc.nx
+
+let main = fn () -> unit require { PermProc } do
+  inject proc_mod.system_handler do
+    Proc.set_env(key: "TEST_VAR", value: "hello")
+  end
+end
+"#;
+    assert!(
+        check(src).is_ok(),
+        "Proc.set_env with PermProc should typecheck"
+    );
+}
+
+#[test]
+fn proc_env_with_mock_handler() {
+    let src = r#"
+import { Proc } from nxlib/stdlib/proc.nx
+
+let mock_proc = handler Proc do
+  fn exit(status: i64) -> unit do
+    return ()
+  end
+  fn get_env(key: string) -> string effect { Exn } do
+    return "mock_value"
+  end
+  fn set_env(key: string, value: string) -> unit do
+    return ()
+  end
+end
+
+let main = fn () -> string do
+  inject mock_proc do
+    try
+      return Proc.get_env(key: "MOCK_VAR")
+    catch e ->
+      return "error"
+    end
+  end
+end
+"#;
+    assert_eq!(
+        run(src).unwrap(),
+        Value::String("mock_value".to_string())
+    );
+}
+
+#[test]
+fn proc_get_env_typechecks_with_perm_proc() {
+    let src = r#"
+import { Proc }, * as proc_mod from nxlib/stdlib/proc.nx
+
+let main = fn () -> string require { PermProc } do
+  inject proc_mod.system_handler do
+    try
+      return Proc.get_env(key: "HOME")
+    catch e ->
+      return "error"
+    end
+  end
+end
+"#;
+    assert!(
+        check(src).is_ok(),
+        "Proc.get_env with PermProc should typecheck"
+    );
 }
 
 use proptest::prelude::*;

@@ -16,7 +16,7 @@ nexus_math_wasm = { path = "../math", features = ["no_alloc_export"] }
 nexus_fs_wasm = { path = "../fs", features = ["no_alloc_export"] }
 nexus_random_wasm = { path = "../random" }
 nexus_clock_wasm = { path = "../clock" }
-nexus_proc_wasm = { path = "../proc" }
+nexus_proc_wasm = { path = "../proc", features = ["no_alloc_export"] }
 
 [profile.release]
 lto = true

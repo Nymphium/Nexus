@@ -321,7 +321,7 @@ fn codegen_fixture_network_access_compiles() {
 #[test]
 fn codegen_print_works_via_external_stdio_module() {
     let src = r#"
-import external nxlib/stdlib/stdio.wasm
+import external nxlib/stdlib/stdlib.wasm
 external __nx_print = "__nx_print" : (val: string) -> unit
 
 let main = fn () -> unit do
@@ -336,7 +336,7 @@ end
 #[test]
 fn codegen_print_after_from_i64_works_via_single_string_abi_module() {
     let src = r#"
-import external nxlib/stdlib/stdio.wasm
+import external nxlib/stdlib/stdlib.wasm
 external __nx_print = "__nx_print" : (val: string) -> unit
 
 let main = fn () -> unit do
