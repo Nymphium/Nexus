@@ -493,7 +493,9 @@ impl Parser {
                     span: start..end,
                 })
             }
-            TokenKind::Ident(ref s) if s.chars().next().map_or(false, |c| c.is_ascii_uppercase()) => {
+            TokenKind::Ident(ref s)
+                if s.chars().next().map_or(false, |c| c.is_ascii_uppercase()) =>
+            {
                 // Constructor pattern
                 let name = s.clone();
                 self.advance();
@@ -731,14 +733,10 @@ impl Parser {
             }
 
             // fn ... (lambda)
-            TokenKind::Fn => {
-                self.parse_lambda(start)
-            }
+            TokenKind::Fn => self.parse_lambda(start),
 
             // handler Port do ... end
-            TokenKind::Handler => {
-                self.parse_handler_expr(start)
-            }
+            TokenKind::Handler => self.parse_handler_expr(start),
 
             // Array literal [| ... |]
             TokenKind::LBracketPipe => {
@@ -811,7 +809,10 @@ impl Parser {
             }
 
             // Literals
-            TokenKind::Int(_) | TokenKind::Float(_) | TokenKind::True | TokenKind::False
+            TokenKind::Int(_)
+            | TokenKind::Float(_)
+            | TokenKind::True
+            | TokenKind::False
             | TokenKind::StringLit(_) => {
                 let lit = self.parse_literal()?;
                 let end = self.tokens[self.pos - 1].span.end;
@@ -918,7 +919,10 @@ impl Parser {
             // Negative number as atom (when preceded by minus as prefix, not binary)
             TokenKind::Minus => {
                 // Check if next is a number literal
-                if matches!(self.peek_at_offset(1), Some(TokenKind::Int(_) | TokenKind::Float(_))) {
+                if matches!(
+                    self.peek_at_offset(1),
+                    Some(TokenKind::Int(_) | TokenKind::Float(_))
+                ) {
                     self.advance(); // consume minus
                     match self.peek().clone() {
                         TokenKind::Int(n) => {
@@ -937,7 +941,7 @@ impl Parser {
                                 span: start..end,
                             })
                         }
-                        _ => unreachable!()
+                        _ => unreachable!(),
                     }
                 } else {
                     Err(ParseError {
@@ -1119,7 +1123,10 @@ impl Parser {
         loop {
             // Check for terminators
             match self.peek() {
-                TokenKind::End | TokenKind::Else | TokenKind::Catch | TokenKind::Case
+                TokenKind::End
+                | TokenKind::Else
+                | TokenKind::Catch
+                | TokenKind::Case
                 | TokenKind::Eof => break,
                 _ => {}
             }
@@ -1165,25 +1172,15 @@ impl Parser {
                 })
             }
 
-            TokenKind::If => {
-                self.parse_if_stmt(start)
-            }
+            TokenKind::If => self.parse_if_stmt(start),
 
-            TokenKind::Match => {
-                self.parse_match_stmt(start)
-            }
+            TokenKind::Match => self.parse_match_stmt(start),
 
-            TokenKind::Try => {
-                self.parse_try_stmt(start)
-            }
+            TokenKind::Try => self.parse_try_stmt(start),
 
-            TokenKind::Conc => {
-                self.parse_conc_block(start)
-            }
+            TokenKind::Conc => self.parse_conc_block(start),
 
-            TokenKind::Inject => {
-                self.parse_inject_stmt(start)
-            }
+            TokenKind::Inject => self.parse_inject_stmt(start),
 
             _ => {
                 // Could be: assign or expression statement
@@ -1403,24 +1400,12 @@ impl Parser {
                 self.advance();
                 self.parse_type_def(false, true)
             }
-            TokenKind::Type => {
-                self.parse_type_def(false, false)
-            }
-            TokenKind::Exception => {
-                self.parse_exception_def(false)
-            }
-            TokenKind::Import => {
-                self.parse_import_def()
-            }
-            TokenKind::Port => {
-                self.parse_port_def(false)
-            }
-            TokenKind::External => {
-                self.parse_external_def(false)
-            }
-            TokenKind::Let => {
-                self.parse_global_let(false)
-            }
+            TokenKind::Type => self.parse_type_def(false, false),
+            TokenKind::Exception => self.parse_exception_def(false),
+            TokenKind::Import => self.parse_import_def(),
+            TokenKind::Port => self.parse_port_def(false),
+            TokenKind::External => self.parse_external_def(false),
+            TokenKind::Let => self.parse_global_let(false),
             _ => Err(ParseError {
                 message: format!("expected top-level definition, got {:?}", self.peek()),
                 span: self.peek_span(),
@@ -1434,21 +1419,11 @@ impl Parser {
                 self.advance();
                 self.parse_type_def(is_public, true)
             }
-            TokenKind::Type => {
-                self.parse_type_def(is_public, false)
-            }
-            TokenKind::Exception => {
-                self.parse_exception_def(is_public)
-            }
-            TokenKind::Port => {
-                self.parse_port_def(is_public)
-            }
-            TokenKind::External => {
-                self.parse_external_def(is_public)
-            }
-            TokenKind::Let => {
-                self.parse_global_let(is_public)
-            }
+            TokenKind::Type => self.parse_type_def(is_public, false),
+            TokenKind::Exception => self.parse_exception_def(is_public),
+            TokenKind::Port => self.parse_port_def(is_public),
+            TokenKind::External => self.parse_external_def(is_public),
+            TokenKind::Let => self.parse_global_let(is_public),
             _ => Err(ParseError {
                 message: format!("expected definition after 'pub', got {:?}", self.peek()),
                 span: self.peek_span(),
@@ -1563,7 +1538,11 @@ impl Parser {
     fn parse_exception_def(&mut self, is_public: bool) -> Result<TopLevel, ParseError> {
         self.expect(&TokenKind::Exception)?;
         let name = self.expect_ident()?;
-        if !name.chars().next().map_or(false, |c| c.is_ascii_uppercase()) {
+        if !name
+            .chars()
+            .next()
+            .map_or(false, |c| c.is_ascii_uppercase())
+        {
             return Err(ParseError {
                 message: "exception constructor must start with uppercase letter".to_string(),
                 span: self.tokens[self.pos - 1].span.clone(),
@@ -1750,10 +1729,12 @@ impl Parser {
                 self.advance();
                 s
             }
-            _ => return Err(ParseError {
-                message: "expected string literal for external symbol".to_string(),
-                span: self.peek_span(),
-            }),
+            _ => {
+                return Err(ParseError {
+                    message: "expected string literal for external symbol".to_string(),
+                    span: self.peek_span(),
+                })
+            }
         };
 
         self.expect(&TokenKind::Colon)?;

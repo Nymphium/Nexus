@@ -1,5 +1,3 @@
-
-
 use crate::common::source::{check, run};
 use nexus::interpreter::Value;
 
@@ -81,8 +79,6 @@ end
     );
 }
 
-
-
 #[test]
 fn set_insert_contains_and_size() {
     let src = &crate::common::fixtures::read_test_fixture("set_insert_contains_and_size.nx");
@@ -97,11 +93,11 @@ fn set_union_intersection_difference() {
 
 #[test]
 fn set_custom_key_ops_can_change_membership_rule() {
-    let src = &crate::common::fixtures::read_test_fixture("set_custom_key_ops_can_change_membership_rule.nx");
+    let src = &crate::common::fixtures::read_test_fixture(
+        "set_custom_key_ops_can_change_membership_rule.nx",
+    );
     assert_eq!(run(src).unwrap(), Value::Bool(true));
 }
-
-
 
 #[test]
 fn hashmap_put_get_or_and_contains_key() {
@@ -117,11 +113,11 @@ fn hashmap_get_lookup_and_remove() {
 
 #[test]
 fn hashmap_custom_key_ops_can_change_key_equivalence() {
-    let src = &crate::common::fixtures::read_test_fixture("hashmap_custom_key_ops_can_change_key_equivalence.nx");
+    let src = &crate::common::fixtures::read_test_fixture(
+        "hashmap_custom_key_ops_can_change_key_equivalence.nx",
+    );
     assert_eq!(run(src).unwrap(), Value::Int(40));
 }
-
-
 
 #[test]
 fn clock_now_returns_positive_value() {
@@ -170,8 +166,6 @@ end
     );
 }
 
-
-
 #[test]
 fn random_range_returns_in_bounds_value() {
     let src = r#"
@@ -209,8 +203,6 @@ end
     );
 }
 
-
-
 #[test]
 fn proc_exit_typechecks_with_perm_proc() {
     let src = r#"
@@ -222,7 +214,10 @@ let main = fn () -> unit require { PermProc } do
   end
 end
 "#;
-    assert!(check(src).is_ok(), "Proc.exit with PermProc should typecheck");
+    assert!(
+        check(src).is_ok(),
+        "Proc.exit with PermProc should typecheck"
+    );
 }
 
 #[test]
@@ -264,8 +259,6 @@ end
     assert!(check(src).is_ok(), "Mock Proc handler should typecheck");
 }
 
-
-
 #[test]
 fn result_from_exn_builds_err() {
     let src = r#"
@@ -282,7 +275,8 @@ end
 
 #[test]
 fn result_to_exn_raises_and_is_catchable() {
-    let src = &crate::common::fixtures::read_test_fixture("result_to_exn_raises_and_is_catchable.nx");
+    let src =
+        &crate::common::fixtures::read_test_fixture("result_to_exn_raises_and_is_catchable.nx");
     assert_eq!(run(src).unwrap(), Value::Bool(true));
 }
 

@@ -10,8 +10,8 @@
 
 use crate::ir::hir::*;
 use crate::lang::ast::*;
-use crate::lang::stdlib::load_stdlib_nx_programs;
 use crate::lang::parser;
+use crate::lang::stdlib::load_stdlib_nx_programs;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 
@@ -99,9 +99,7 @@ impl HirBuilder {
             .iter()
             .filter(|(name, _)| {
                 self.handler_bindings.get(*name).map_or(false, |b| {
-                    b.functions
-                        .iter()
-                        .any(|f| reachable.contains(&f.name))
+                    b.functions.iter().any(|f| reachable.contains(&f.name))
                 }) || reachable.contains(name.as_str())
             })
             .map(|(k, v)| {
@@ -148,8 +146,7 @@ impl HirBuilder {
                         let mut resolved_as_port = false;
                         for (binding_name, binding) in &self.handler_bindings {
                             if binding.port_name == port {
-                                let handler_fn =
-                                    format!("__handler_{}_{}", binding_name, method);
+                                let handler_fn = format!("__handler_{}_{}", binding_name, method);
                                 if !reachable.contains(&handler_fn) {
                                     worklist.push(handler_fn);
                                 }
@@ -250,9 +247,13 @@ impl HirBuilder {
                 TopLevel::Port(port) => {
                     self.ports.push(HirPort {
                         name: self.rename(&port.name, rename_map),
-                        functions: port.functions.iter().map(|f| HirPortMethod {
-                            name: f.name.clone(),
-                        }).collect(),
+                        functions: port
+                            .functions
+                            .iter()
+                            .map(|f| HirPortMethod {
+                                name: f.name.clone(),
+                            })
+                            .collect(),
                     });
                 }
                 TopLevel::Let(gl) => {
@@ -268,11 +269,14 @@ impl HirBuilder {
                         } => {
                             self.functions.push(HirFunction {
                                 name: name.clone(),
-                                params: params.iter().map(|p| HirParam {
-                                    name: p.name.clone(),
-                                    label: p.name.clone(),
-                                    typ: p.typ.clone(),
-                                }).collect(),
+                                params: params
+                                    .iter()
+                                    .map(|p| HirParam {
+                                        name: p.name.clone(),
+                                        label: p.name.clone(),
+                                        typ: p.typ.clone(),
+                                    })
+                                    .collect(),
                                 ret_type: ret_type.clone(),
                                 body: self.convert_stmts(body, rename_map),
                             });
@@ -286,11 +290,14 @@ impl HirBuilder {
                                         name: name.clone(),
                                         wasm_module: wasm_mod.clone(),
                                         wasm_name: wasm_name.clone(),
-                                        params: params.iter().map(|(n, t)| HirParam {
-                                            name: n.clone(),
-                                            label: n.clone(),
-                                            typ: t.clone(),
-                                        }).collect(),
+                                        params: params
+                                            .iter()
+                                            .map(|(n, t)| HirParam {
+                                                name: n.clone(),
+                                                label: n.clone(),
+                                                typ: t.clone(),
+                                            })
+                                            .collect(),
                                         ret_type: *ret.clone(),
                                         effects: *effects.clone(),
                                     });
@@ -307,11 +314,15 @@ impl HirBuilder {
                                 let synth_name = format!("__handler_{}_{}", name, hf.name);
                                 hir_fns.push(HirFunction {
                                     name: synth_name,
-                                    params: hf.params.iter().map(|p| HirParam {
-                                        name: p.name.clone(),
-                                        label: p.name.clone(),
-                                        typ: p.typ.clone(),
-                                    }).collect(),
+                                    params: hf
+                                        .params
+                                        .iter()
+                                        .map(|p| HirParam {
+                                            name: p.name.clone(),
+                                            label: p.name.clone(),
+                                            typ: p.typ.clone(),
+                                        })
+                                        .collect(),
                                     ret_type: hf.ret_type.clone(),
                                     body: self.convert_stmts(&hf.body, rename_map),
                                 });
@@ -343,18 +354,17 @@ impl HirBuilder {
         }
 
         self.import_stack.push(import.path.clone());
-        let src = fs::read_to_string(&import.path).map_err(|e| {
-            HirBuildError::ImportReadError {
-                path: import.path.clone(),
-                detail: e.to_string(),
-            }
+        let src = fs::read_to_string(&import.path).map_err(|e| HirBuildError::ImportReadError {
+            path: import.path.clone(),
+            detail: e.to_string(),
         })?;
-        let imported_program = parser::parser().parse(&src).map_err(|e| {
-            HirBuildError::ImportParseError {
-                path: import.path.clone(),
-                detail: format!("{:?}", e),
-            }
-        })?;
+        let imported_program =
+            parser::parser()
+                .parse(&src)
+                .map_err(|e| HirBuildError::ImportParseError {
+                    path: import.path.clone(),
+                    detail: format!("{:?}", e),
+                })?;
 
         let rename_map = self.build_rename_map(&imported_program, import)?;
         let result = self.process_program(&imported_program, &rename_map);
@@ -418,10 +428,7 @@ impl HirBuilder {
                     if selected.contains(&gl.name) {
                         map.insert(gl.name.clone(), gl.name.clone());
                     } else {
-                        map.insert(
-                            gl.name.clone(),
-                            format!("{}_{}", alias_prefix, gl.name),
-                        );
+                        map.insert(gl.name.clone(), format!("{}_{}", alias_prefix, gl.name));
                     }
                 }
             }
@@ -436,55 +443,60 @@ impl HirBuilder {
 
     // ---- AST → HIR conversion helpers ----
 
-    fn convert_stmts(&self, stmts: &[Spanned<Stmt>], rename_map: &HashMap<String, String>) -> Vec<HirStmt> {
-        stmts.iter().filter_map(|s| self.convert_stmt(&s.node, rename_map)).collect()
+    fn convert_stmts(
+        &self,
+        stmts: &[Spanned<Stmt>],
+        rename_map: &HashMap<String, String>,
+    ) -> Vec<HirStmt> {
+        stmts
+            .iter()
+            .filter_map(|s| self.convert_stmt(&s.node, rename_map))
+            .collect()
     }
 
     fn convert_stmt(&self, stmt: &Stmt, rename_map: &HashMap<String, String>) -> Option<HirStmt> {
         match stmt {
-            Stmt::Let { name, typ, value, .. } => {
-                Some(HirStmt::Let {
-                    name: name.clone(),
-                    typ: typ.clone(),
-                    value: self.convert_expr(value, rename_map),
-                })
-            }
-            Stmt::Expr(expr) => {
-                Some(HirStmt::Expr(self.convert_expr(expr, rename_map)))
-            }
-            Stmt::Return(expr) => {
-                Some(HirStmt::Return(self.convert_expr(expr, rename_map)))
-            }
-            Stmt::Assign { target, value } => {
-                Some(HirStmt::Assign {
-                    target: self.convert_expr(target, rename_map),
-                    value: self.convert_expr(value, rename_map),
-                })
-            }
+            Stmt::Let {
+                name, typ, value, ..
+            } => Some(HirStmt::Let {
+                name: name.clone(),
+                typ: typ.clone(),
+                value: self.convert_expr(value, rename_map),
+            }),
+            Stmt::Expr(expr) => Some(HirStmt::Expr(self.convert_expr(expr, rename_map))),
+            Stmt::Return(expr) => Some(HirStmt::Return(self.convert_expr(expr, rename_map))),
+            Stmt::Assign { target, value } => Some(HirStmt::Assign {
+                target: self.convert_expr(target, rename_map),
+                value: self.convert_expr(value, rename_map),
+            }),
             Stmt::Conc(tasks) => {
-                let hir_tasks: Vec<HirFunction> = tasks.iter().map(|t| {
-                    HirFunction {
+                let hir_tasks: Vec<HirFunction> = tasks
+                    .iter()
+                    .map(|t| HirFunction {
                         name: t.name.clone(),
                         params: vec![],
                         ret_type: Type::Unit,
                         body: self.convert_stmts(&t.body, rename_map),
-                    }
-                }).collect();
+                    })
+                    .collect();
                 Some(HirStmt::Conc(hir_tasks))
             }
-            Stmt::Try { body, catch_param, catch_body } => {
-                Some(HirStmt::Try {
-                    body: self.convert_stmts(body, rename_map),
-                    catch_param: catch_param.clone(),
-                    catch_body: self.convert_stmts(catch_body, rename_map),
-                })
-            }
-            Stmt::Inject { handlers, body } => {
-                Some(HirStmt::Inject {
-                    handlers: handlers.iter().map(|h| self.rename(h, rename_map)).collect(),
-                    body: self.convert_stmts(body, rename_map),
-                })
-            }
+            Stmt::Try {
+                body,
+                catch_param,
+                catch_body,
+            } => Some(HirStmt::Try {
+                body: self.convert_stmts(body, rename_map),
+                catch_param: catch_param.clone(),
+                catch_body: self.convert_stmts(catch_body, rename_map),
+            }),
+            Stmt::Inject { handlers, body } => Some(HirStmt::Inject {
+                handlers: handlers
+                    .iter()
+                    .map(|h| self.rename(h, rename_map))
+                    .collect(),
+                body: self.convert_stmts(body, rename_map),
+            }),
         }
     }
 
@@ -494,13 +506,11 @@ impl HirBuilder {
             Expr::Variable(name, sigil) => {
                 HirExpr::Variable(self.rename(name, rename_map), sigil.clone())
             }
-            Expr::BinaryOp(lhs, op, rhs) => {
-                HirExpr::BinaryOp(
-                    Box::new(self.convert_expr(lhs, rename_map)),
-                    *op,
-                    Box::new(self.convert_expr(rhs, rename_map)),
-                )
-            }
+            Expr::BinaryOp(lhs, op, rhs) => HirExpr::BinaryOp(
+                Box::new(self.convert_expr(lhs, rename_map)),
+                *op,
+                Box::new(self.convert_expr(rhs, rename_map)),
+            ),
             Expr::Borrow(name, sigil) => {
                 HirExpr::Borrow(self.rename(name, rename_map), sigil.clone())
             }
@@ -508,25 +518,31 @@ impl HirBuilder {
                 let renamed_func = self.rename(func, rename_map);
                 HirExpr::Call {
                     func: renamed_func,
-                    args: args.iter().map(|(n, e)| {
-                        (n.clone(), self.convert_expr(e, rename_map))
-                    }).collect(),
+                    args: args
+                        .iter()
+                        .map(|(n, e)| (n.clone(), self.convert_expr(e, rename_map)))
+                        .collect(),
                 }
             }
-            Expr::Constructor(name, args) => {
-                HirExpr::Constructor {
-                    variant: name.clone(),
-                    args: args.iter().map(|(_, e)| self.convert_expr(e, rename_map)).collect(),
-                }
-            }
-            Expr::Record(fields) => {
-                HirExpr::Record(fields.iter().map(|(n, e)| {
-                    (n.clone(), self.convert_expr(e, rename_map))
-                }).collect())
-            }
-            Expr::Array(items) => {
-                HirExpr::Array(items.iter().map(|e| self.convert_expr(e, rename_map)).collect())
-            }
+            Expr::Constructor(name, args) => HirExpr::Constructor {
+                variant: name.clone(),
+                args: args
+                    .iter()
+                    .map(|(_, e)| self.convert_expr(e, rename_map))
+                    .collect(),
+            },
+            Expr::Record(fields) => HirExpr::Record(
+                fields
+                    .iter()
+                    .map(|(n, e)| (n.clone(), self.convert_expr(e, rename_map)))
+                    .collect(),
+            ),
+            Expr::Array(items) => HirExpr::Array(
+                items
+                    .iter()
+                    .map(|e| self.convert_expr(e, rename_map))
+                    .collect(),
+            ),
             Expr::List(items) => {
                 // Desugar [a, b, c] → Cons(a, Cons(b, Cons(c, Nil)))
                 let mut acc = HirExpr::Constructor {
@@ -541,65 +557,80 @@ impl HirBuilder {
                 }
                 acc
             }
-            Expr::Index(arr, idx) => {
-                HirExpr::Index(
-                    Box::new(self.convert_expr(arr, rename_map)),
-                    Box::new(self.convert_expr(idx, rename_map)),
-                )
-            }
+            Expr::Index(arr, idx) => HirExpr::Index(
+                Box::new(self.convert_expr(arr, rename_map)),
+                Box::new(self.convert_expr(idx, rename_map)),
+            ),
             Expr::FieldAccess(expr, field) => {
-                HirExpr::FieldAccess(
-                    Box::new(self.convert_expr(expr, rename_map)),
-                    field.clone(),
-                )
+                HirExpr::FieldAccess(Box::new(self.convert_expr(expr, rename_map)), field.clone())
             }
-            Expr::If { cond, then_branch, else_branch } => {
-                HirExpr::If {
-                    cond: Box::new(self.convert_expr(cond, rename_map)),
-                    then_branch: self.convert_stmts(then_branch, rename_map),
-                    else_branch: else_branch.as_ref().map(|b| self.convert_stmts(b, rename_map)),
-                }
-            }
-            Expr::Match { target, cases } => {
-                HirExpr::Match {
-                    target: Box::new(self.convert_expr(target, rename_map)),
-                    cases: cases.iter().map(|c| HirMatchCase {
+            Expr::If {
+                cond,
+                then_branch,
+                else_branch,
+            } => HirExpr::If {
+                cond: Box::new(self.convert_expr(cond, rename_map)),
+                then_branch: self.convert_stmts(then_branch, rename_map),
+                else_branch: else_branch
+                    .as_ref()
+                    .map(|b| self.convert_stmts(b, rename_map)),
+            },
+            Expr::Match { target, cases } => HirExpr::Match {
+                target: Box::new(self.convert_expr(target, rename_map)),
+                cases: cases
+                    .iter()
+                    .map(|c| HirMatchCase {
                         pattern: self.convert_pattern(&c.pattern.node),
                         body: self.convert_stmts(&c.body, rename_map),
-                    }).collect(),
-                }
-            }
-            Expr::Lambda { type_params: _, params, ret_type, requires: _, effects: _, body } => {
-                HirExpr::Lambda {
-                    params: params.iter().map(|p| HirParam {
+                    })
+                    .collect(),
+            },
+            Expr::Lambda {
+                type_params: _,
+                params,
+                ret_type,
+                requires: _,
+                effects: _,
+                body,
+            } => HirExpr::Lambda {
+                params: params
+                    .iter()
+                    .map(|p| HirParam {
                         name: p.name.clone(),
                         label: p.name.clone(),
                         typ: p.typ.clone(),
-                    }).collect(),
-                    ret_type: ret_type.clone(),
-                    body: self.convert_stmts(body, rename_map),
-                }
-            }
-            Expr::Raise(expr) => {
-                HirExpr::Raise(Box::new(self.convert_expr(expr, rename_map)))
-            }
+                    })
+                    .collect(),
+                ret_type: ret_type.clone(),
+                body: self.convert_stmts(body, rename_map),
+            },
+            Expr::Raise(expr) => HirExpr::Raise(Box::new(self.convert_expr(expr, rename_map))),
             Expr::External(sym, tparams, typ) => {
                 HirExpr::External(sym.clone(), tparams.clone(), typ.clone())
             }
-            Expr::Handler { coeffect_name: _, requires: _, functions } => {
-                HirExpr::Handler {
-                    functions: functions.iter().map(|f| HirFunction {
+            Expr::Handler {
+                coeffect_name: _,
+                requires: _,
+                functions,
+            } => HirExpr::Handler {
+                functions: functions
+                    .iter()
+                    .map(|f| HirFunction {
                         name: f.name.clone(),
-                        params: f.params.iter().map(|p| HirParam {
-                            name: p.name.clone(),
-                            label: p.name.clone(),
-                            typ: p.typ.clone(),
-                        }).collect(),
+                        params: f
+                            .params
+                            .iter()
+                            .map(|p| HirParam {
+                                name: p.name.clone(),
+                                label: p.name.clone(),
+                                typ: p.typ.clone(),
+                            })
+                            .collect(),
                         ret_type: f.ret_type.clone(),
                         body: self.convert_stmts(&f.body, rename_map),
-                    }).collect(),
-                }
-            }
+                    })
+                    .collect(),
+            },
         }
     }
 
@@ -607,24 +638,23 @@ impl HirBuilder {
         match pattern {
             Pattern::Literal(lit) => HirPattern::Literal(lit.clone()),
             Pattern::Variable(name, sigil) => HirPattern::Variable(name.clone(), sigil.clone()),
-            Pattern::Constructor(name, fields) => {
-                HirPattern::Constructor {
-                    variant: name.clone(),
-                    fields: fields.iter().map(|(label, p)| {
-                        (label.clone(), self.convert_pattern(&p.node))
-                    }).collect(),
-                }
-            }
-            Pattern::Record(fields, open) => {
-                HirPattern::Record(
-                    fields.iter().map(|(n, p)| (n.clone(), self.convert_pattern(&p.node))).collect(),
-                    *open,
-                )
-            }
+            Pattern::Constructor(name, fields) => HirPattern::Constructor {
+                variant: name.clone(),
+                fields: fields
+                    .iter()
+                    .map(|(label, p)| (label.clone(), self.convert_pattern(&p.node)))
+                    .collect(),
+            },
+            Pattern::Record(fields, open) => HirPattern::Record(
+                fields
+                    .iter()
+                    .map(|(n, p)| (n.clone(), self.convert_pattern(&p.node)))
+                    .collect(),
+                *open,
+            ),
             Pattern::Wildcard => HirPattern::Wildcard,
         }
     }
-
 }
 
 fn get_default_alias(path: &str) -> String {
@@ -659,9 +689,7 @@ fn collect_calls_in_hir_stmts(stmts: &[HirStmt], out: &mut Vec<String>) {
                 }
             }
             HirStmt::Try {
-                body,
-                catch_body,
-                ..
+                body, catch_body, ..
             } => {
                 collect_calls_in_hir_stmts(body, out);
                 collect_calls_in_hir_stmts(catch_body, out);

@@ -1,5 +1,5 @@
-use nexus::lang::parser;
 use nexus::compiler::codegen::compile_program_to_wasm;
+use nexus::lang::parser;
 
 fn get_codegen_error(src: &str) -> String {
     let program = parser::parser().parse(src).unwrap();

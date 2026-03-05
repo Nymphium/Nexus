@@ -1,4 +1,3 @@
-
 use crate::common::source::{check_raw as check, check_warnings};
 use nexus::lang::ast::*;
 use nexus::lang::typecheck::TypeChecker;
@@ -17,9 +16,10 @@ fn resource_program(consume_resource: bool) -> Program {
         name: "r".to_string(),
         sigil: Sigil::Linear,
         typ: None,
-        value: sp(Expr::Record(vec![
-            ("id".to_string(), sp(Expr::Literal(Literal::Int(1)))),
-        ])),
+        value: sp(Expr::Record(vec![(
+            "id".to_string(),
+            sp(Expr::Literal(Literal::Int(1))),
+        )])),
     })];
     if consume_resource {
         body.push(sp(Stmt::Expr(sp(Expr::Match {
@@ -33,21 +33,19 @@ fn resource_program(consume_resource: bool) -> Program {
     body.push(sp(Stmt::Return(sp(Expr::Literal(Literal::Unit)))));
 
     Program {
-        definitions: vec![
-            sp(TopLevel::Let(GlobalLet {
-                name: "main".to_string(),
-                is_public: false,
-                typ: None,
-                value: sp(Expr::Lambda {
-                    type_params: vec![],
-                    params: vec![],
-                    ret_type: Type::Unit,
-                    requires: Type::Row(vec![], None),
-                    effects: Type::Row(vec![], None),
-                    body,
-                }),
-            })),
-        ],
+        definitions: vec![sp(TopLevel::Let(GlobalLet {
+            name: "main".to_string(),
+            is_public: false,
+            typ: None,
+            value: sp(Expr::Lambda {
+                type_params: vec![],
+                params: vec![],
+                ret_type: Type::Unit,
+                requires: Type::Row(vec![], None),
+                effects: Type::Row(vec![], None),
+                body,
+            }),
+        }))],
     }
 }
 

@@ -1,4 +1,3 @@
-
 use crate::common::source::check_raw as check;
 use nexus::lang::ast::*;
 use nexus::lang::typecheck::TypeChecker;
@@ -52,7 +51,8 @@ fn color_program_with_cases(case_ctors: &[&str]) -> Program {
                     type_params: vec![],
                     params: vec![],
                     ret_type: Type::Unit,
-                    requires: Type::Row(vec![], None), effects: Type::Row(vec![], None),
+                    requires: Type::Row(vec![], None),
+                    effects: Type::Row(vec![], None),
                     body: vec![
                         sp(Stmt::Let {
                             name: "c".to_string(),

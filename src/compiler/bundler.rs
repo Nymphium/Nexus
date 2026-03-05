@@ -51,12 +51,10 @@ pub fn bundle_core_wasm(wasm: &[u8], config: &BundleConfig) -> Result<Vec<u8>, S
     if unresolved.is_empty() {
         return Ok(wasm.to_vec());
     }
-    let candidate_modules =
-        bundle_candidate_modules(&unresolved, config.allow_nexus_host_import)?;
+    let candidate_modules = bundle_candidate_modules(&unresolved, config.allow_nexus_host_import)?;
     let merged = merge_dependencies_once(wasm, &candidate_modules, &config.wasm_merge_command)?;
     let merged_imports = module_import_names(&merged)?;
-    let merged_unresolved =
-        file_backed_imports(&merged_imports, config.allow_nexus_host_import)?;
+    let merged_unresolved = file_backed_imports(&merged_imports, config.allow_nexus_host_import)?;
     if !merged_unresolved.is_empty() {
         let unresolved_list = merged_unresolved
             .iter()

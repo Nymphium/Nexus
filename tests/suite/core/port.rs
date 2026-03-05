@@ -1,4 +1,3 @@
-
 use crate::common::source::{check, run};
 
 #[test]
@@ -216,10 +215,7 @@ fn test_handler_require_multiple_merged() {
       end
     end
     "#;
-    assert!(
-        check(src).is_ok(),
-        "Multiple handler requires should merge"
-    );
+    assert!(check(src).is_ok(), "Multiple handler requires should merge");
 }
 
 #[test]

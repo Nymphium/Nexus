@@ -213,26 +213,24 @@ impl LowerCtx {
                 });
                 Ok(None)
             }
-            MirStmt::Expr(expr) => {
-                match expr {
-                    MirExpr::If {
-                        cond,
-                        then_body,
-                        else_body,
-                    } => {
-                        self.lower_if_stmt(cond, then_body, else_body.as_deref(), ret_type)?;
-                        Ok(None)
-                    }
-                    MirExpr::Match { target, cases } => {
-                        self.lower_match_stmt(target, cases, ret_type)?;
-                        Ok(None)
-                    }
-                    _ => {
-                        let _atom = self.lower_expr_to_atom(expr)?;
-                        Ok(None)
-                    }
+            MirStmt::Expr(expr) => match expr {
+                MirExpr::If {
+                    cond,
+                    then_body,
+                    else_body,
+                } => {
+                    self.lower_if_stmt(cond, then_body, else_body.as_deref(), ret_type)?;
+                    Ok(None)
                 }
-            }
+                MirExpr::Match { target, cases } => {
+                    self.lower_match_stmt(target, cases, ret_type)?;
+                    Ok(None)
+                }
+                _ => {
+                    let _atom = self.lower_expr_to_atom(expr)?;
+                    Ok(None)
+                }
+            },
             MirStmt::Return(expr) => {
                 let atom = self.lower_expr_to_atom(expr)?;
                 Ok(Some(atom))
@@ -266,12 +264,8 @@ impl LowerCtx {
                 catch_vars.insert(catch_param.clone(), Type::String);
                 let mut catch_sem_vars = self.semantic_vars.clone();
                 catch_sem_vars.insert(catch_param.clone(), Type::String);
-                let (catch_stmts, catch_ret) = self.lower_block_with_vars(
-                    catch_body,
-                    ret_type,
-                    catch_vars,
-                    catch_sem_vars,
-                )?;
+                let (catch_stmts, catch_ret) =
+                    self.lower_block_with_vars(catch_body, ret_type, catch_vars, catch_sem_vars)?;
 
                 self.stmts.push(LirStmt::TryCatch {
                     body: body_stmts,
@@ -394,12 +388,7 @@ impl LowerCtx {
         let mut conds = Vec::new();
         let mut bindings: HashMap<String, LirAtom> = HashMap::new();
 
-        self.collect_pattern_conditions_and_bindings(
-            target,
-            pattern,
-            &mut conds,
-            &mut bindings,
-        )?;
+        self.collect_pattern_conditions_and_bindings(target, pattern, &mut conds, &mut bindings)?;
 
         // Combine conditions with And
         let combined_cond = if conds.is_empty() {
@@ -634,11 +623,7 @@ impl LowerCtx {
         match expr {
             MirExpr::Literal(lit) => Ok(literal_to_atom(lit)),
             MirExpr::Variable(name) => {
-                let typ = self
-                    .vars
-                    .get(name)
-                    .cloned()
-                    .unwrap_or(Type::I64); // fallback type
+                let typ = self.vars.get(name).cloned().unwrap_or(Type::I64); // fallback type
                 Ok(LirAtom::Var {
                     name: name.clone(),
                     typ,
@@ -741,10 +726,7 @@ impl LowerCtx {
                 Ok(self.bind_expr_to_temp(
                     LirExpr::Call {
                         func: "__array_get".to_string(),
-                        args: vec![
-                            ("arr".to_string(), arr_atom),
-                            ("idx".to_string(), idx_atom),
-                        ],
+                        args: vec![("arr".to_string(), arr_atom), ("idx".to_string(), idx_atom)],
                         typ: typ.clone(),
                     },
                     typ,
@@ -755,8 +737,7 @@ impl LowerCtx {
                 let receiver_semantic_type = self.infer_semantic_type(expr);
                 let obj_atom = self.lower_expr_to_atom(expr)?;
 
-                let (idx, field_type) =
-                    resolve_field_access(&receiver_semantic_type, field);
+                let (idx, field_type) = resolve_field_access(&receiver_semantic_type, field);
 
                 let typ = wasm_type(&field_type);
                 Ok(self.bind_expr_to_temp(
@@ -779,13 +760,13 @@ impl LowerCtx {
                         .to_string(),
                 })
             }
-            MirExpr::Match { target: _, cases: _ } => {
-                Err(LirLowerError::UnsupportedExpression {
-                    detail:
-                        "Match expression in atom position; should be lowered at statement level"
-                            .to_string(),
-                })
-            }
+            MirExpr::Match {
+                target: _,
+                cases: _,
+            } => Err(LirLowerError::UnsupportedExpression {
+                detail: "Match expression in atom position; should be lowered at statement level"
+                    .to_string(),
+            }),
             MirExpr::Borrow(name) => {
                 let typ = self.vars.get(name).cloned().unwrap_or(Type::I64);
                 Ok(LirAtom::Var {
@@ -811,11 +792,7 @@ impl LowerCtx {
     /// variable bindings in semantic_vars.
     fn infer_semantic_type(&self, expr: &MirExpr) -> Type {
         match expr {
-            MirExpr::Variable(name) => self
-                .semantic_vars
-                .get(name)
-                .cloned()
-                .unwrap_or(Type::I64),
+            MirExpr::Variable(name) => self.semantic_vars.get(name).cloned().unwrap_or(Type::I64),
             MirExpr::Call { ret_type, .. } => ret_type.clone(),
             MirExpr::Record(fields) => {
                 let mut field_types: Vec<(String, Type)> = fields

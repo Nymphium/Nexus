@@ -1,4 +1,3 @@
-
 use crate::common::source::{check, run};
 use nexus::interpreter::Value;
 use nexus::lang::ast::{Expr, Type};
@@ -33,7 +32,10 @@ fn test_list_type_is_builtin() {
             false
         }
     });
-    assert!(found_list_type, "Parser should produce Type::List for [i64] syntax");
+    assert!(
+        found_list_type,
+        "Parser should produce Type::List for [i64] syntax"
+    );
 }
 
 #[test]
@@ -63,7 +65,10 @@ fn test_list_expr_is_builtin() {
             false
         }
     });
-    assert!(found_list_expr, "Parser should produce Expr::List for [1,2,3] syntax");
+    assert!(
+        found_list_expr,
+        "Parser should produce Expr::List for [1,2,3] syntax"
+    );
 }
 
 #[test]

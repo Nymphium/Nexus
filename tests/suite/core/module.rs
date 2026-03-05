@@ -1,4 +1,3 @@
-
 use crate::common::source::{check_and_run, prepare_test_source, run};
 use nexus::interpreter::{Interpreter, Value};
 use nexus::lang::parser;
@@ -14,12 +13,14 @@ fn test_module_import() {
 
 #[test]
 fn test_module_default_alias() {
-    let src = prepare_test_source(r#"
+    let src = prepare_test_source(
+        r#"
     import from examples/math.nx
     let main = fn () -> i64 do
       return math.add(a: 5, b: 5)
     end
-    "#);
+    "#,
+    );
     let parser = parser::parser();
     let program = parser.parse(&src).unwrap();
     let mut checker = TypeChecker::new();
@@ -34,12 +35,14 @@ fn test_module_default_alias() {
 
 #[test]
 fn test_module_selective_import() {
-    let src = prepare_test_source(r#"
+    let src = prepare_test_source(
+        r#"
     import { add } from examples/math.nx
     let main = fn () -> i64 do
       return add(a: 1, b: 2)
     end
-    "#);
+    "#,
+    );
     let parser = parser::parser();
     let program = parser.parse(&src).unwrap();
     let mut checker = TypeChecker::new();
@@ -54,10 +57,12 @@ fn test_module_selective_import() {
 
 #[test]
 fn test_import_external_syntax() {
-    let src = prepare_test_source(r#"
+    let src = prepare_test_source(
+        r#"
     import external math.wasm
     pub external add = "add" : (a: i64, b: i64) -> i64
-    "#);
+    "#,
+    );
     let parser = parser::parser();
     let program = parser.parse(&src).unwrap();
     let mut checker = TypeChecker::new();
@@ -157,18 +162,12 @@ fn test_stdlib_public_names_are_not_native_functions_and_drop_is_statement() {
     assert!(!interpreter
         .external_functions
         .contains_key("__nx_drop_array"));
-    assert!(interpreter
-        .external_functions
-        .contains_key("length"));
+    assert!(interpreter.external_functions.contains_key("length"));
     assert!(interpreter.external_functions.contains_key("abs"));
     assert!(interpreter.external_functions.contains_key("length"));
     assert!(interpreter.external_functions.contains_key("from_i64"));
-    assert!(interpreter
-        .external_functions
-        .contains_key("from_float"));
-    assert!(interpreter
-        .external_functions
-        .contains_key("from_bool"));
+    assert!(interpreter.external_functions.contains_key("from_float"));
+    assert!(interpreter.external_functions.contains_key("from_bool"));
     assert!(!interpreter.external_functions.contains_key("__nx_drop_i64"));
 }
 
@@ -182,7 +181,10 @@ fn test_stdio_defines_console_port_and_system_handler() {
         .definitions
         .iter()
         .any(|d| matches!(&d.node, nexus::lang::ast::TopLevel::Port(p) if p.name == "Console"));
-    assert!(has_console_port, "Console port should be defined in stdio.nx");
+    assert!(
+        has_console_port,
+        "Console port should be defined in stdio.nx"
+    );
 
     let let_names: Vec<String> = program
         .definitions
@@ -192,7 +194,10 @@ fn test_stdio_defines_console_port_and_system_handler() {
             _ => None,
         })
         .collect();
-    assert!(let_names.contains(&"system_handler".to_string()), "system_handler should be defined in stdio.nx");
+    assert!(
+        let_names.contains(&"system_handler".to_string()),
+        "system_handler should be defined in stdio.nx"
+    );
 }
 
 #[test]
@@ -227,19 +232,25 @@ fn test_stdlib_global_array_length() {
 
 #[test]
 fn test_exception_constructor_raise_and_catch() {
-    let src = &crate::common::fixtures::read_test_fixture("test_exception_constructor_raise_and_catch.nx");
+    let src = &crate::common::fixtures::read_test_fixture(
+        "test_exception_constructor_raise_and_catch.nx",
+    );
     assert_eq!(run(src).unwrap(), Value::Int(42));
 }
 
 #[test]
 fn test_exception_constructor_with_labels_raise_and_catch() {
-    let src = &crate::common::fixtures::read_test_fixture("test_exception_constructor_with_labels_raise_and_catch.nx");
+    let src = &crate::common::fixtures::read_test_fixture(
+        "test_exception_constructor_with_labels_raise_and_catch.nx",
+    );
     assert_eq!(run(src).unwrap(), Value::Int(42));
 }
 
 #[test]
 fn test_try_catch_can_catch_runtime_error_as_exception() {
-    let src = &crate::common::fixtures::read_test_fixture("test_try_catch_can_catch_runtime_error_as_exception.nx");
+    let src = &crate::common::fixtures::read_test_fixture(
+        "test_try_catch_can_catch_runtime_error_as_exception.nx",
+    );
     let res = run(src);
     assert!(
         res.is_ok(),

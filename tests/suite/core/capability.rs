@@ -1,4 +1,3 @@
-
 use nexus::interpreter::Interpreter;
 use nexus::lang::ast;
 use nexus::lang::parser;
@@ -6,9 +5,7 @@ use nexus::lang::typecheck::TypeChecker;
 use nexus::runtime::ExecutionCapabilities;
 
 fn parse_and_check(src: &str) -> ast::Program {
-    let program = parser::parser()
-        .parse(src)
-        .expect("parse should succeed");
+    let program = parser::parser().parse(src).expect("parse should succeed");
     let mut checker = TypeChecker::new();
     checker
         .check_program(&program)

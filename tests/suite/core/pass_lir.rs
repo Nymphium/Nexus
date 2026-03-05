@@ -1,7 +1,7 @@
-use nexus::lang::parser;
 use nexus::compiler::passes::hir_build::build_hir;
-use nexus::compiler::passes::mir_lower::lower_hir_to_mir;
 use nexus::compiler::passes::lir_lower::lower_mir_to_lir;
+use nexus::compiler::passes::mir_lower::lower_hir_to_mir;
+use nexus::lang::parser;
 
 fn build_lir(src: &str) -> nexus::ir::lir::LirProgram {
     let program = parser::parser().parse(src).unwrap();

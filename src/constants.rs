@@ -85,7 +85,6 @@ impl Permission {
             Permission::Proc => "--allow-proc",
         }
     }
-
 }
 
 pub fn is_preview2_wasi_module(module_name: &str) -> bool {

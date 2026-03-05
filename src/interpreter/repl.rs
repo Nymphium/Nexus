@@ -272,8 +272,7 @@ mod tests {
 
     #[test]
     fn parse_complete_multi_line_if_with_block_comment_stmt() {
-        let src =
-            "if true then\n  /* block\n     comment */\n  let x = 1\nelse\n  let x = 2\nend";
+        let src = "if true then\n  /* block\n     comment */\n  let x = 1\nelse\n  let x = 2\nend";
         assert!(matches!(
             parse_input_for_repl(src),
             ParseState::Complete(ReplInput::Stmt(_))

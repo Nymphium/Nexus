@@ -73,9 +73,7 @@ pub fn check_and_run(src_path: &str) -> Result<(), String> {
     checker.check_program(&program).map_err(|e| e.message)?;
 
     let mut interpreter = Interpreter::new(program);
-    interpreter
-        .run_function("__test", vec![])
-        .map(|_| ())
+    interpreter.run_function("__test", vec![]).map(|_| ())
 }
 
 /// RAII guard for temporary directories — cleans up on drop.

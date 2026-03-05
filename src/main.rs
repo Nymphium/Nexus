@@ -9,15 +9,18 @@ use wasm_compose::{
     composer::ComponentComposer,
     config::{Config as ComposeConfig, Dependency as ComposeDependency},
 };
+use wasm_encoder as wenc;
 use wasmparser::Payload;
 use wasmtime::{Engine, Module};
-use wasm_encoder as wenc;
 use wit_component::{embed_component_metadata, ComponentEncoder, StringEncoding};
 use wit_parser::Resolve;
 
 use nexus::compiler;
 use nexus::compiler::bundler::{self, BundleConfig, WASM_MERGE_MAIN_NAME};
-use nexus::constants::{Permission, ENTRYPOINT, NEXUS_CAPABILITIES_SECTION, NEXUS_HOST_HTTP_MODULE, WASI_SNAPSHOT_MODULE};
+use nexus::constants::{
+    Permission, ENTRYPOINT, NEXUS_CAPABILITIES_SECTION, NEXUS_HOST_HTTP_MODULE,
+    WASI_SNAPSHOT_MODULE,
+};
 use nexus::lang;
 use nexus::repl;
 use nexus::runtime::{self, ExecutionCapabilities};
@@ -164,7 +167,13 @@ fn main() -> ExitCode {
             wasm_merge,
             explain_capabilities,
             explain_capabilities_format,
-        }) => build_command(input, output, wasm_merge, explain_capabilities, explain_capabilities_format),
+        }) => build_command(
+            input,
+            output,
+            wasm_merge,
+            explain_capabilities,
+            explain_capabilities_format,
+        ),
         Some(Command::Check { input }) => check_command(input),
         None => {
             if io::stdin().is_terminal() {
@@ -278,16 +287,14 @@ fn build_command(
         Ok(c) => c,
         Err(code) => return code,
     };
-    let component_wasm = match encode_core_wasm_as_component(
-        &compiled.wasm,
-        compiled.app_needs_nexus_host,
-    ) {
-        Ok(component_wasm) => component_wasm,
-        Err(msg) => {
-            eprintln!("Component Encode Error: {}", msg);
-            return ExitCode::from(1);
-        }
-    };
+    let component_wasm =
+        match encode_core_wasm_as_component(&compiled.wasm, compiled.app_needs_nexus_host) {
+            Ok(component_wasm) => component_wasm,
+            Err(msg) => {
+                eprintln!("Component Encode Error: {}", msg);
+                return ExitCode::from(1);
+            }
+        };
     let output_path = output.unwrap_or_else(default_wasm_output_path);
     if let Err(e) = fs::write(&output_path, &component_wasm) {
         eprintln!("Failed to write {}: {}", output_path.display(), e);
@@ -686,7 +693,8 @@ fn encode_core_wasm_as_component(
 
     if needs_nexus_host {
         let adapter_component_wasm = build_nexus_host_adapter_component()?;
-        component_wasm = compose_component_with_nexus_host_adapter(&component_wasm, &adapter_component_wasm)?;
+        component_wasm =
+            compose_component_with_nexus_host_adapter(&component_wasm, &adapter_component_wasm)?;
     }
 
     // Re-append nexus:capabilities custom section to the component binary.
@@ -733,30 +741,36 @@ fn build_nexus_host_stub_module() -> Vec<u8> {
     let mut types = TypeSection::new();
     types.ty().function(
         vec![
-            ValType::I32, ValType::I32, ValType::I32, ValType::I32,
-            ValType::I32, ValType::I32, ValType::I32, ValType::I32, ValType::I32,
+            ValType::I32,
+            ValType::I32,
+            ValType::I32,
+            ValType::I32,
+            ValType::I32,
+            ValType::I32,
+            ValType::I32,
+            ValType::I32,
+            ValType::I32,
         ],
         vec![],
     );
-    types.ty().function(
-        vec![ValType::I32, ValType::I32],
-        vec![ValType::I64],
-    );
-    types.ty().function(
-        vec![ValType::I64, ValType::I32],
-        vec![],
-    );
+    types
+        .ty()
+        .function(vec![ValType::I32, ValType::I32], vec![ValType::I64]);
+    types
+        .ty()
+        .function(vec![ValType::I64, ValType::I32], vec![]);
     types.ty().function(
         vec![
-            ValType::I64, ValType::I64, ValType::I32, ValType::I32,
-            ValType::I32, ValType::I32,
+            ValType::I64,
+            ValType::I64,
+            ValType::I32,
+            ValType::I32,
+            ValType::I32,
+            ValType::I32,
         ],
         vec![ValType::I32],
     );
-    types.ty().function(
-        vec![ValType::I64],
-        vec![ValType::I32],
-    );
+    types.ty().function(vec![ValType::I64], vec![ValType::I32]);
     module.section(&types);
 
     // Function section
@@ -792,10 +806,7 @@ fn build_nexus_host_stub_module() -> Vec<u8> {
 
 /// Merges a stub module providing dummy (unreachable) implementations of the
 /// 5 `nexus:cli/nexus-host` functions into `wasm`, satisfying those imports.
-fn merge_nexus_host_stubs(
-    wasm: &[u8],
-    wasm_merge_command: &Path,
-) -> Result<Vec<u8>, String> {
+fn merge_nexus_host_stubs(wasm: &[u8], wasm_merge_command: &Path) -> Result<Vec<u8>, String> {
     let stub = build_nexus_host_stub_module();
     let temp_dir = std::env::temp_dir().join(format!(
         "nexus-stub-{}-{}",
@@ -814,8 +825,7 @@ fn merge_nexus_host_stubs(
         let merged_path = temp_dir.join("merged.wasm");
         fs::write(&main_path, wasm)
             .map_err(|e| format!("failed to write main wasm for stub merge: {}", e))?;
-        fs::write(&stub_path, &stub)
-            .map_err(|e| format!("failed to write stub wasm: {}", e))?;
+        fs::write(&stub_path, &stub).map_err(|e| format!("failed to write stub wasm: {}", e))?;
 
         let output = ProcessCommand::new(wasm_merge_command)
             .arg(&main_path)
@@ -843,7 +853,6 @@ fn merge_nexus_host_stubs(
     result
 }
 
-
 /// Returns true if the wasm module imports any function whose name starts with
 /// `__nx_http` — i.e. it actually uses the net FFI.  Used to decide whether the
 /// nexus-host adapter component should be composed in.
@@ -865,7 +874,6 @@ fn module_uses_net_ffi(wasm: &[u8]) -> bool {
     }
     false
 }
-
 
 fn parse_program(filename: &str, src: &str) -> Option<lang::ast::Program> {
     let parser = lang::parser::parser();
@@ -928,7 +936,6 @@ fn typecheck_program(filename: &str, src: &str, program: &lang::ast::Program) ->
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -940,7 +947,6 @@ mod tests {
         assert!(!is_component_wasm(core));
         assert!(is_component_wasm(component));
     }
-
 
     #[test]
     fn cli_build_wasm_merge_flag_is_supported() {
@@ -1032,8 +1038,16 @@ mod tests {
 
     #[test]
     fn execution_capabilities_reject_preopen_without_allow_fs() {
-        let err = build_execution_capabilities(false, false, false, false, false, false, vec![PathBuf::from("/tmp")])
-            .expect_err("preopen without --allow-fs should be rejected");
+        let err = build_execution_capabilities(
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            vec![PathBuf::from("/tmp")],
+        )
+        .expect_err("preopen without --allow-fs should be rejected");
         assert!(
             err.contains("--preopen"),
             "expected --preopen validation message, got: {}",

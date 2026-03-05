@@ -252,21 +252,17 @@ impl<'a> MirLowerer<'a> {
         scope: &HandlerScope,
     ) -> Result<InjectResult, MirLowerError> {
         match stmt {
-            HirStmt::Let {
-                name,
-                typ,
-                value,
-            } => Ok(InjectResult::Single(MirStmt::Let {
+            HirStmt::Let { name, typ, value } => Ok(InjectResult::Single(MirStmt::Let {
                 name: name.clone(),
                 typ: typ.clone().unwrap_or(Type::Unit),
                 expr: self.lower_expr(value, scope)?,
             })),
-            HirStmt::Expr(expr) => {
-                Ok(InjectResult::Single(MirStmt::Expr(self.lower_expr(expr, scope)?)))
-            }
-            HirStmt::Return(expr) => {
-                Ok(InjectResult::Single(MirStmt::Return(self.lower_expr(expr, scope)?)))
-            }
+            HirStmt::Expr(expr) => Ok(InjectResult::Single(MirStmt::Expr(
+                self.lower_expr(expr, scope)?,
+            ))),
+            HirStmt::Return(expr) => Ok(InjectResult::Single(MirStmt::Return(
+                self.lower_expr(expr, scope)?,
+            ))),
             HirStmt::Assign { target, value } => Ok(InjectResult::Single(MirStmt::Assign {
                 target: self.lower_expr(target, scope)?,
                 value: self.lower_expr(value, scope)?,
@@ -304,11 +300,7 @@ impl<'a> MirLowerer<'a> {
         }
     }
 
-    fn lower_expr(
-        &self,
-        expr: &HirExpr,
-        scope: &HandlerScope,
-    ) -> Result<MirExpr, MirLowerError> {
+    fn lower_expr(&self, expr: &HirExpr, scope: &HandlerScope) -> Result<MirExpr, MirLowerError> {
         match expr {
             HirExpr::Literal(lit) => Ok(MirExpr::Literal(lit.clone())),
             HirExpr::Variable(name, _sigil) => Ok(MirExpr::Variable(name.clone())),
@@ -341,10 +333,7 @@ impl<'a> MirLowerer<'a> {
                     ret_type,
                 })
             }
-            HirExpr::Constructor {
-                variant,
-                args,
-            } => {
+            HirExpr::Constructor { variant, args } => {
                 let mir_args: Vec<MirExpr> = args
                     .iter()
                     .map(|e| self.lower_expr(e, scope))
@@ -412,9 +401,7 @@ impl<'a> MirLowerer<'a> {
                 // by the time we reach MIR lowering. Emit unit as placeholder.
                 Ok(MirExpr::Literal(crate::lang::ast::Literal::Unit))
             }
-            HirExpr::Raise(expr) => {
-                Ok(MirExpr::Raise(Box::new(self.lower_expr(expr, scope)?)))
-            }
+            HirExpr::Raise(expr) => Ok(MirExpr::Raise(Box::new(self.lower_expr(expr, scope)?))),
             HirExpr::External(sym, _tparams, _typ) => Ok(MirExpr::Variable(sym.clone())),
             HirExpr::Handler { functions: _ } => {
                 // Handler expressions collected into handler_bindings during HIR build
@@ -433,12 +420,14 @@ impl<'a> MirLowerer<'a> {
         scope: &HandlerScope,
     ) -> Result<MirExpr, MirLowerError> {
         // Find which handler binding provides this port
-        let handler_name = scope.active.get(port_name).ok_or_else(|| {
-            MirLowerError::UnresolvedPort {
-                port: port_name.to_string(),
-                method: method_name.to_string(),
-            }
-        })?;
+        let handler_name =
+            scope
+                .active
+                .get(port_name)
+                .ok_or_else(|| MirLowerError::UnresolvedPort {
+                    port: port_name.to_string(),
+                    method: method_name.to_string(),
+                })?;
 
         // Resolve to the handler's synthesized function
         let func_name = format!("__handler_{}_{}", handler_name, method_name);
@@ -460,13 +449,8 @@ impl<'a> MirLowerer<'a> {
     fn lower_pattern(&self, pattern: &HirPattern) -> MirPattern {
         match pattern {
             HirPattern::Literal(lit) => MirPattern::Literal(lit.clone()),
-            HirPattern::Variable(name, sigil) => {
-                MirPattern::Variable(name.clone(), sigil.clone())
-            }
-            HirPattern::Constructor {
-                variant,
-                fields,
-            } => MirPattern::Constructor {
+            HirPattern::Variable(name, sigil) => MirPattern::Variable(name.clone(), sigil.clone()),
+            HirPattern::Constructor { variant, fields } => MirPattern::Constructor {
                 name: variant.clone(),
                 fields: fields
                     .iter()

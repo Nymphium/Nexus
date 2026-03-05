@@ -46,17 +46,30 @@ pub fn define_nexus_host_stubs(
             MOD,
             "host-http-request",
             |_: wasmtime::Caller<'_, _>,
-             _: i32, _: i32, _: i32, _: i32,
-             _: i32, _: i32, _: i32, _: i32, _: i32| {},
+             _: i32,
+             _: i32,
+             _: i32,
+             _: i32,
+             _: i32,
+             _: i32,
+             _: i32,
+             _: i32,
+             _: i32| {},
         )
         .map_err(|e| e.to_string())?;
     linker
-        .func_wrap(MOD, "host-http-listen", |_: wasmtime::Caller<'_, _>, _: i32, _: i32| -> i64 {
-            -1
-        })
+        .func_wrap(
+            MOD,
+            "host-http-listen",
+            |_: wasmtime::Caller<'_, _>, _: i32, _: i32| -> i64 { -1 },
+        )
         .map_err(|e| e.to_string())?;
     linker
-        .func_wrap(MOD, "host-http-accept", |_: wasmtime::Caller<'_, _>, _: i64, _: i32| {})
+        .func_wrap(
+            MOD,
+            "host-http-accept",
+            |_: wasmtime::Caller<'_, _>, _: i64, _: i32| {},
+        )
         .map_err(|e| e.to_string())?;
     linker
         .func_wrap(
@@ -68,7 +81,11 @@ pub fn define_nexus_host_stubs(
         )
         .map_err(|e| e.to_string())?;
     linker
-        .func_wrap(MOD, "host-http-stop", |_: wasmtime::Caller<'_, _>, _: i64| -> i32 { 0 })
+        .func_wrap(
+            MOD,
+            "host-http-stop",
+            |_: wasmtime::Caller<'_, _>, _: i64| -> i32 { 0 },
+        )
         .map_err(|e| e.to_string())?;
     Ok(())
 }

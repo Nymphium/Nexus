@@ -37,15 +37,15 @@ pub enum TokenKind {
     External,
 
     // Sigils & operators
-    Tilde,    // ~
-    Percent,  // %
+    Tilde,     // ~
+    Percent,   // %
     Ampersand, // &
 
     Arrow,    // ->
     FatArrow, // =>
 
     // Misc
-    Star,     // *
+    Star, // *
 
     // Arithmetic
     Plus,     // +
@@ -58,26 +58,26 @@ pub enum TokenKind {
     PlusPlus, // ++
 
     // Comparison
-    EqEq,     // ==
-    Ne,       // !=
-    Lt,       // <
-    Le,       // <=
-    Gt,       // >
-    Ge,       // >=
-    EqDot,    // ==.
-    NeDot,    // !=.
-    LtDot,    // <.
-    LeDot,    // <=.
-    GtDot,    // >.
-    GeDot,    // >=.
+    EqEq,  // ==
+    Ne,    // !=
+    Lt,    // <
+    Le,    // <=
+    Gt,    // >
+    Ge,    // >=
+    EqDot, // ==.
+    NeDot, // !=.
+    LtDot, // <.
+    LeDot, // <=.
+    GtDot, // >.
+    GeDot, // >=.
 
     // Boolean
-    AndAnd,   // &&
-    OrOr,     // ||
+    AndAnd, // &&
+    OrOr,   // ||
 
     // Assignment
-    Assign,   // <-
-    Eq,       // =
+    Assign, // <-
+    Eq,     // =
 
     // Delimiters
     LParen,
@@ -276,21 +276,19 @@ impl Lexer {
                     });
                     return Some(TokenKind::StringLit(content));
                 }
-                Some('\\') if !is_raw => {
-                    match self.advance() {
-                        Some('n') => content.push('\n'),
-                        Some('r') => content.push('\r'),
-                        Some('t') => content.push('\t'),
-                        Some('\\') => content.push('\\'),
-                        Some(c) => content.push(c),
-                        None => {
-                            self.errors.push(LexError {
-                                message: "unterminated escape in string".to_string(),
-                                span: start..self.pos,
-                            });
-                        }
+                Some('\\') if !is_raw => match self.advance() {
+                    Some('n') => content.push('\n'),
+                    Some('r') => content.push('\r'),
+                    Some('t') => content.push('\t'),
+                    Some('\\') => content.push('\\'),
+                    Some(c) => content.push(c),
+                    None => {
+                        self.errors.push(LexError {
+                            message: "unterminated escape in string".to_string(),
+                            span: start..self.pos,
+                        });
                     }
-                }
+                },
                 Some(c) => content.push(c),
             }
         }
@@ -318,22 +316,20 @@ impl Lexer {
                 Some('"') => {
                     return TokenKind::StringLit(content);
                 }
-                Some('\\') => {
-                    match self.advance() {
-                        Some('"') => content.push('"'),
-                        Some('\\') => content.push('\\'),
-                        Some('n') => content.push('\n'),
-                        Some('r') => content.push('\r'),
-                        Some('t') => content.push('\t'),
-                        Some(c) => content.push(c),
-                        None => {
-                            self.errors.push(LexError {
-                                message: "unterminated escape in string".to_string(),
-                                span: start..self.pos,
-                            });
-                        }
+                Some('\\') => match self.advance() {
+                    Some('"') => content.push('"'),
+                    Some('\\') => content.push('\\'),
+                    Some('n') => content.push('\n'),
+                    Some('r') => content.push('\r'),
+                    Some('t') => content.push('\t'),
+                    Some(c) => content.push(c),
+                    None => {
+                        self.errors.push(LexError {
+                            message: "unterminated escape in string".to_string(),
+                            span: start..self.pos,
+                        });
                     }
-                }
+                },
                 Some(c) => content.push(c),
             }
         }

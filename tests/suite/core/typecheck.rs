@@ -1,4 +1,3 @@
-
 use crate::common::source::check_raw;
 use nexus::lang::parser;
 
@@ -204,7 +203,9 @@ fn test_poly_variants() {
 
 #[test]
 fn test_type_sum_definition_with_labeled_variant_fields() {
-    let src = &crate::common::fixtures::read_test_fixture("test_type_sum_definition_with_labeled_variant_fields.nx");
+    let src = &crate::common::fixtures::read_test_fixture(
+        "test_type_sum_definition_with_labeled_variant_fields.nx",
+    );
     assert!(check_code(src).is_ok());
 }
 
@@ -349,7 +350,9 @@ fn test_linear_capturing_lambda_cannot_be_called_twice() {
 
 #[test]
 fn test_recursive_lambda_with_annotation_typechecks() {
-    let src = &crate::common::fixtures::read_test_fixture("test_recursive_lambda_with_annotation_typechecks.nx");
+    let src = &crate::common::fixtures::read_test_fixture(
+        "test_recursive_lambda_with_annotation_typechecks.nx",
+    );
     match check_code(src) {
         Ok(_) => (),
         Err(e) => panic!("Type check failed: {}", e),
@@ -397,7 +400,10 @@ fn test_binary_op_in_call_arg() {
         return add(a: 1 + 2, b: 3 * 4)
     end
     "#;
-    assert!(check_code(src).is_ok(), "binary ops should be allowed in call args");
+    assert!(
+        check_code(src).is_ok(),
+        "binary ops should be allowed in call args"
+    );
 }
 
 #[test]
@@ -411,7 +417,10 @@ fn test_string_concat_in_call_arg() {
         return greet(msg: "hello " ++ "world")
     end
     "#;
-    assert!(check_code(src).is_ok(), "string concat should be allowed in call args");
+    assert!(
+        check_code(src).is_ok(),
+        "string concat should be allowed in call args"
+    );
 }
 
 #[test]
@@ -466,7 +475,6 @@ fn test_function_arity_mismatch_too_many_args() {
 //         err
 //     );
 // }
-
 
 use crate::common::source::check_raw as check;
 
@@ -534,8 +542,6 @@ fn test_f32_and_f64_keywords() {
     assert!(check(src).is_ok());
 }
 
-
-
 #[test]
 fn test_anonymous_record() {
     let src = r#"
@@ -585,8 +591,6 @@ fn test_record_fail() {
     "#;
     assert!(check(src).is_err());
 }
-
-
 
 #[test]
 fn test_ffi_declaration() {
@@ -685,8 +689,6 @@ fn test_ffi_concrete_types_no_type_params_needed() {
     }
 }
 
-
-
 #[test]
 fn test_ref_creation_and_type() {
     let src = r#"
@@ -712,7 +714,8 @@ fn test_ref_creation_and_type() {
 // Maybe I should test that `let c = ~x` (implicit deref) results in value, not ref.
 #[test]
 fn test_gravity_rule_immutable_holds_value() {
-    let src = &crate::common::fixtures::read_test_fixture("test_gravity_rule_immutable_holds_value.nx");
+    let src =
+        &crate::common::fixtures::read_test_fixture("test_gravity_rule_immutable_holds_value.nx");
     match check_code(src) {
         Ok(_) => (),
         Err(e) => panic!("Type check failed: {}", e),

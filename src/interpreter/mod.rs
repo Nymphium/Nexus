@@ -320,7 +320,9 @@ fn write_component_string_result(
     let _ = memory.write(&mut *caller, ret_ptr as usize, &pair);
 }
 
-fn parse_http_request(stream: &mut std::net::TcpStream) -> Option<(String, String, String, String)> {
+fn parse_http_request(
+    stream: &mut std::net::TcpStream,
+) -> Option<(String, String, String, String)> {
     let mut reader = BufReader::new(stream.try_clone().ok()?);
 
     // Read request line: METHOD PATH HTTP/1.x\r\n
@@ -465,8 +467,7 @@ fn add_nexus_host_to_linker(
                     if !allow_net {
                         return -1;
                     }
-                    let Some(memory) =
-                        caller.get_export("memory").and_then(|e| e.into_memory())
+                    let Some(memory) = caller.get_export("memory").and_then(|e| e.into_memory())
                     else {
                         return -1;
                     };
@@ -516,8 +517,7 @@ fn add_nexus_host_to_linker(
                     if !allow_net {
                         return;
                     }
-                    let Some(memory) =
-                        caller.get_export("memory").and_then(|e| e.into_memory())
+                    let Some(memory) = caller.get_export("memory").and_then(|e| e.into_memory())
                     else {
                         return;
                     };
@@ -526,9 +526,7 @@ fn add_nexus_host_to_linker(
                         let table = match st.lock() {
                             Ok(t) => t,
                             Err(_) => {
-                                write_component_string_result(
-                                    &mut caller, &memory, ret_ptr, "",
-                                );
+                                write_component_string_result(&mut caller, &memory, ret_ptr, "");
                                 return;
                             }
                         };
@@ -538,15 +536,16 @@ fn add_nexus_host_to_linker(
                                 Ok(l) => l,
                                 Err(_) => {
                                     write_component_string_result(
-                                        &mut caller, &memory, ret_ptr, "",
+                                        &mut caller,
+                                        &memory,
+                                        ret_ptr,
+                                        "",
                                     );
                                     return;
                                 }
                             },
                             None => {
-                                write_component_string_result(
-                                    &mut caller, &memory, ret_ptr, "",
-                                );
+                                write_component_string_result(&mut caller, &memory, ret_ptr, "");
                                 return;
                             }
                         }
@@ -555,32 +554,25 @@ fn add_nexus_host_to_linker(
                     let (mut stream, _peer) = match listener_clone.accept() {
                         Ok(pair) => pair,
                         Err(_) => {
-                            write_component_string_result(
-                                &mut caller, &memory, ret_ptr, "",
-                            );
+                            write_component_string_result(&mut caller, &memory, ret_ptr, "");
                             return;
                         }
                     };
 
-                    let (method, path, headers, body) =
-                        match parse_http_request(&mut stream) {
-                            Some(parsed) => parsed,
-                            None => {
-                                write_component_string_result(
-                                    &mut caller, &memory, ret_ptr, "",
-                                );
-                                return;
-                            }
-                        };
+                    let (method, path, headers, body) = match parse_http_request(&mut stream) {
+                        Some(parsed) => parsed,
+                        None => {
+                            write_component_string_result(&mut caller, &memory, ret_ptr, "");
+                            return;
+                        }
+                    };
 
                     // Store stream in connection table
                     let req_id = {
                         let mut ct_lock = match ct.lock() {
                             Ok(t) => t,
                             Err(_) => {
-                                write_component_string_result(
-                                    &mut caller, &memory, ret_ptr, "",
-                                );
+                                write_component_string_result(&mut caller, &memory, ret_ptr, "");
                                 return;
                             }
                         };
@@ -625,8 +617,7 @@ fn add_nexus_host_to_linker(
                     if !allow_net {
                         return 0;
                     }
-                    let Some(memory) =
-                        caller.get_export("memory").and_then(|e| e.into_memory())
+                    let Some(memory) = caller.get_export("memory").and_then(|e| e.into_memory())
                     else {
                         return 0;
                     };
@@ -698,9 +689,7 @@ fn add_nexus_host_to_linker(
             .func_wrap(
                 NEXUS_HOST_HTTP_MODULE,
                 "host-http-stop",
-                move |_caller: Caller<'_, wasmtime_wasi::p1::WasiP1Ctx>,
-                      server_id: i64|
-                      -> i32 {
+                move |_caller: Caller<'_, wasmtime_wasi::p1::WasiP1Ctx>, server_id: i64| -> i32 {
                     if !allow_net {
                         return 0;
                     }
@@ -862,8 +851,10 @@ impl Interpreter {
         let handlers = HashMap::new();
         let mut external_functions = HashMap::new();
         let mut modules = HashMap::new();
-        let mut native_functions: HashMap<String, Arc<dyn Fn(&[Value]) -> EvalResult + Send + Sync>> =
-            HashMap::new();
+        let mut native_functions: HashMap<
+            String,
+            Arc<dyn Fn(&[Value]) -> EvalResult + Send + Sync>,
+        > = HashMap::new();
 
         let engine = SHARED_ENGINE.clone();
         let mut wasm_modules = HashMap::new();
@@ -1706,8 +1697,7 @@ impl Interpreter {
                     // Save current handlers, push injected ones, evaluate body, restore
                     let saved = self.handlers.clone();
                     for handler_name in handlers {
-                        let val = if let Some((mod_name, item_name)) =
-                            handler_name.split_once('.')
+                        let val = if let Some((mod_name, item_name)) = handler_name.split_once('.')
                         {
                             self.modules
                                 .get(mod_name)

@@ -109,7 +109,10 @@ fn run_component_wasm_bytes(wasm: &[u8], capabilities: &ExecutionCapabilities) -
     let main = match instance.get_typed_func::<(), ()>(&mut store, ENTRYPOINT) {
         Ok(main) => main,
         Err(e) => {
-            eprintln!("Runtime Error: could not find exported '{}' with signature () -> (): {}", ENTRYPOINT, e);
+            eprintln!(
+                "Runtime Error: could not find exported '{}' with signature () -> (): {}",
+                ENTRYPOINT, e
+            );
             return ExitCode::from(1);
         }
     };
@@ -221,7 +224,10 @@ fn run_core_wasm_bytes(
     let main = match instance.get_typed_func::<(), ()>(&mut store, ENTRYPOINT) {
         Ok(main) => main,
         Err(e) => {
-            eprintln!("Runtime Error: could not find exported '{}' with signature () -> (): {}", ENTRYPOINT, e);
+            eprintln!(
+                "Runtime Error: could not find exported '{}' with signature () -> (): {}",
+                ENTRYPOINT, e
+            );
             return ExitCode::from(1);
         }
     };

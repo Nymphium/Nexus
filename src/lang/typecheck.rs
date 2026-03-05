@@ -65,7 +65,8 @@ impl TypeEnv {
         if self.linear_vars.is_empty() {
             return Ok(());
         }
-        let unused: Vec<_> = self.linear_vars
+        let unused: Vec<_> = self
+            .linear_vars
             .iter()
             .filter(|name| {
                 if let Some(sch) = self.vars.get(*name) {
@@ -469,10 +470,9 @@ fn default_numeric_literals(typ: &Type) -> Type {
         Type::Borrow(inner) => Type::Borrow(Box::new(default_numeric_literals(inner))),
         Type::Array(inner) => Type::Array(Box::new(default_numeric_literals(inner))),
         Type::List(inner) => Type::List(Box::new(default_numeric_literals(inner))),
-        Type::Handler(name, req) => Type::Handler(
-            name.clone(),
-            Box::new(default_numeric_literals(req)),
-        ),
+        Type::Handler(name, req) => {
+            Type::Handler(name.clone(), Box::new(default_numeric_literals(req)))
+        }
         Type::Row(effs, tail) => Type::Row(
             effs.iter().map(default_numeric_literals).collect(),
             tail.as_ref().map(|t| Box::new(default_numeric_literals(t))),
@@ -549,9 +549,11 @@ fn collect_external_type_vars(typ: &Type, env: &TypeEnv, out: &mut HashSet<Strin
             }
             collect_external_type_vars(ret, env, out);
         }
-        Type::Ref(inner) | Type::Linear(inner) | Type::Borrow(inner) | Type::Array(inner) | Type::List(inner) => {
-            collect_external_type_vars(inner, env, out)
-        }
+        Type::Ref(inner)
+        | Type::Linear(inner)
+        | Type::Borrow(inner)
+        | Type::Array(inner)
+        | Type::List(inner) => collect_external_type_vars(inner, env, out),
         Type::Row(effects, tail) => {
             for effect in effects {
                 collect_external_type_vars(effect, env, out);
@@ -706,7 +708,12 @@ impl TypeChecker {
         let mut env = TypeEnv::new();
         env.enums.insert(EFFECT_EXN.to_string(), exn_enum_def());
         env.enums.insert("List".to_string(), list_enum_def());
-        register_nullary_variant_constructor(&mut env, "List", &["T".to_string()], &list_enum_def().variants[0]);
+        register_nullary_variant_constructor(
+            &mut env,
+            "List",
+            &["T".to_string()],
+            &list_enum_def().variants[0],
+        );
 
         env.linear_vars.clear();
         TypeChecker {
@@ -1046,13 +1053,13 @@ impl TypeChecker {
                             );
                         }
                         Expr::External(_, type_params, typ) => {
-                            let vars_set: HashSet<String> =
-                                type_params.iter().cloned().collect();
-                            check_unintroduced_type_vars(typ, &vars_set, &self.env)
-                                .map_err(|e| TypeError {
+                            let vars_set: HashSet<String> = type_params.iter().cloned().collect();
+                            check_unintroduced_type_vars(typ, &vars_set, &self.env).map_err(
+                                |e| TypeError {
                                     message: e,
                                     span: gl.value.span.clone(),
-                                })?;
+                                },
+                            )?;
                             let scheme = external_scheme(type_params, typ);
                             self.env.insert(gl.name.clone(), scheme);
                         }
@@ -1162,11 +1169,10 @@ impl TypeChecker {
 
     fn check_missing_requirements(&self, program: &Program) -> Result<(), TypeError> {
         for def in &program.definitions {
-            let TopLevel::Let(gl) = &def.node else { continue };
-            let Expr::Lambda {
-                requires, body, ..
-            } = &gl.value.node
-            else {
+            let TopLevel::Let(gl) = &def.node else {
+                continue;
+            };
+            let Expr::Lambda { requires, body, .. } = &gl.value.node else {
                 continue;
             };
 
@@ -1178,8 +1184,7 @@ impl TypeChecker {
             if req_unknown {
                 continue;
             }
-            let mut missing: Vec<String> =
-                used_reqs.difference(&declared_reqs).cloned().collect();
+            let mut missing: Vec<String> = used_reqs.difference(&declared_reqs).cloned().collect();
             missing.sort();
             if !missing.is_empty() {
                 return Err(TypeError {
@@ -1330,9 +1335,7 @@ impl TypeChecker {
     fn collect_unused_local_variable_warnings_in_stmts(&mut self, stmts: &[Spanned<Stmt>]) {
         for stmt in stmts {
             match &stmt.node {
-                Stmt::Let { value, .. }
-                | Stmt::Expr(value)
-                | Stmt::Return(value) => {
+                Stmt::Let { value, .. } | Stmt::Expr(value) | Stmt::Return(value) => {
                     self.collect_unused_local_variable_warnings_in_expr(value);
                 }
                 Stmt::Assign { target, value } => {
@@ -1419,8 +1422,10 @@ impl TypeChecker {
                     self.collect_unused_local_variable_warnings_in_function(&name, &f.body);
                 }
             }
-            Expr::Literal(_) | Expr::Variable(_, _) | Expr::Borrow(_, _) | Expr::External(_, _, _) => {
-            }
+            Expr::Literal(_)
+            | Expr::Variable(_, _)
+            | Expr::Borrow(_, _)
+            | Expr::External(_, _, _) => {}
         }
     }
 
@@ -1822,7 +1827,13 @@ impl TypeChecker {
         Ok(())
     }
 
-    fn check_task(&mut self, t: &Function, oe: &TypeEnv, _span: &Span, outer_eq: &Type) -> Result<(), TypeError> {
+    fn check_task(
+        &mut self,
+        t: &Function,
+        oe: &TypeEnv,
+        _span: &Span,
+        outer_eq: &Type,
+    ) -> Result<(), TypeError> {
         let mut te = TypeEnv::new();
         te.types = oe.types.clone();
         te.enums = oe.enums.clone();
@@ -1991,7 +2002,12 @@ impl TypeChecker {
                         s = compose_subst(&s, &s4);
                         Ok((s, target))
                     }
-                    BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Gt | BinaryOp::Le | BinaryOp::Ge => {
+                    BinaryOp::Eq
+                    | BinaryOp::Ne
+                    | BinaryOp::Lt
+                    | BinaryOp::Gt
+                    | BinaryOp::Le
+                    | BinaryOp::Ge => {
                         let lt = apply_subst_type(&s, &t1);
                         let rt = apply_subst_type(&s, &t2);
                         let target = select_int_type(&lt, &rt).ok_or_else(|| TypeError {
@@ -2016,7 +2032,12 @@ impl TypeChecker {
                         s = compose_subst(&s, &s4);
                         Ok((s, Type::Bool))
                     }
-                    BinaryOp::FEq | BinaryOp::FNe | BinaryOp::FLt | BinaryOp::FGt | BinaryOp::FLe | BinaryOp::FGe => {
+                    BinaryOp::FEq
+                    | BinaryOp::FNe
+                    | BinaryOp::FLt
+                    | BinaryOp::FGt
+                    | BinaryOp::FLe
+                    | BinaryOp::FGe => {
                         let lt = apply_subst_type(&s, &t1);
                         let rt = apply_subst_type(&s, &t2);
                         let target = select_float_type(&lt, &rt).ok_or_else(|| TypeError {
@@ -2654,7 +2675,10 @@ impl TypeChecker {
                         span: e.span.clone(),
                     });
                 }
-                Ok((HashMap::new(), Type::Handler(coeffect_name.clone(), Box::new(handler_requires.clone()))))
+                Ok((
+                    HashMap::new(),
+                    Type::Handler(coeffect_name.clone(), Box::new(handler_requires.clone())),
+                ))
             }
             Expr::Raise(ex) => {
                 let (s, t) = self.infer(env, ex, er, eq, ee)?;
@@ -3233,7 +3257,9 @@ impl TypeChecker {
             (Type::Ref(t1), Type::Ref(t2))
             | (Type::Linear(t1), Type::Linear(t2))
             | (Type::Borrow(t1), Type::Borrow(t2)) => self.unify(t1, t2),
-            (Type::Handler(a, req_a), Type::Handler(b, req_b)) if a == b => self.unify(req_a, req_b),
+            (Type::Handler(a, req_a), Type::Handler(b, req_b)) if a == b => {
+                self.unify(req_a, req_b)
+            }
             // Borrow can be read as its underlying value type.
             (Type::Borrow(t1), t2) => self.unify(t1, t2),
             _ => Err(format!("Mismatch: {} vs {}", t1, t2)),
@@ -3262,10 +3288,9 @@ pub fn apply_subst_type(subst: &Subst, typ: &Type) -> Type {
         Type::Borrow(i) => Type::Borrow(Box::new(apply_subst_type(subst, i))),
         Type::Array(i) => Type::Array(Box::new(apply_subst_type(subst, i))),
         Type::List(i) => Type::List(Box::new(apply_subst_type(subst, i))),
-        Type::Handler(name, req) => Type::Handler(
-            name.clone(),
-            Box::new(apply_subst_type(subst, req)),
-        ),
+        Type::Handler(name, req) => {
+            Type::Handler(name.clone(), Box::new(apply_subst_type(subst, req)))
+        }
         Type::Row(es, t) => Type::Row(
             es.iter().map(|x| apply_subst_type(subst, x)).collect(),
             t.as_ref().map(|x| Box::new(apply_subst_type(subst, x))),
@@ -3310,7 +3335,9 @@ fn get_free_vars_type(typ: &Type) -> HashSet<String> {
             }
             s
         }
-        Type::Ref(i) | Type::Linear(i) | Type::Borrow(i) | Type::Array(i) | Type::List(i) => get_free_vars_type(i),
+        Type::Ref(i) | Type::Linear(i) | Type::Borrow(i) | Type::Array(i) | Type::List(i) => {
+            get_free_vars_type(i)
+        }
         Type::Row(es, t) => {
             let mut s = HashSet::new();
             for e in es {
@@ -3352,7 +3379,9 @@ fn occurs_check(n: &str, t: &Type) -> bool {
                 || occurs_check(n, e)
         }
         Type::UserDefined(_, a) => a.iter().any(|x| occurs_check(n, x)),
-        Type::Ref(i) | Type::Linear(i) | Type::Borrow(i) | Type::Array(i) | Type::List(i) => occurs_check(n, i),
+        Type::Ref(i) | Type::Linear(i) | Type::Borrow(i) | Type::Array(i) | Type::List(i) => {
+            occurs_check(n, i)
+        }
         Type::Row(es, t) => {
             es.iter().any(|x| occurs_check(n, x))
                 || t.as_ref().map_or(false, |x| occurs_check(n, x))
@@ -3499,10 +3528,12 @@ fn is_allowed_main_require_signature(t: &Type) -> bool {
         Type::Unit => true,
         Type::Row(reqs, tail) => {
             tail.is_none()
-                && reqs.iter().all(|r| matches!(r,
-                    Type::UserDefined(name, args) if args.is_empty()
-                        && is_known_runtime_perm(name)
-                ))
+                && reqs.iter().all(|r| {
+                    matches!(r,
+                        Type::UserDefined(name, args) if args.is_empty()
+                            && is_known_runtime_perm(name)
+                    )
+                })
         }
         _ => false,
     }
@@ -3617,9 +3648,7 @@ fn collect_signature_needs_from_stmts(
 
     for stmt in stmts {
         match &stmt.node {
-            Stmt::Let { value, .. }
-            | Stmt::Expr(value)
-            | Stmt::Return(value) => {
+            Stmt::Let { value, .. } | Stmt::Expr(value) | Stmt::Return(value) => {
                 let (inner_reqs, inner_effs, inner_unknown) =
                     collect_signature_needs_from_expr(value, env);
                 reqs.extend(inner_reqs);
@@ -3827,7 +3856,9 @@ fn expr_mentions_name(expr: &Spanned<Expr>, target: &str) -> bool {
         Expr::Record(fields) => fields
             .iter()
             .any(|(_, arg)| expr_mentions_name(arg, target)),
-        Expr::Array(items) | Expr::List(items) => items.iter().any(|item| expr_mentions_name(item, target)),
+        Expr::Array(items) | Expr::List(items) => {
+            items.iter().any(|item| expr_mentions_name(item, target))
+        }
         Expr::FieldAccess(receiver, _) | Expr::Raise(receiver) => {
             expr_mentions_name(receiver, target)
         }
@@ -3885,9 +3916,10 @@ fn stmt_mentions_name(stmt: &Spanned<Stmt>, target: &str) -> bool {
                     .any(|stmt| stmt_mentions_name(stmt, target))
         }
         Stmt::Inject { handlers, body } => {
-            handlers.iter().any(|h| {
-                h == target || h.starts_with(&format!("{}.", target))
-            }) || body.iter().any(|stmt| stmt_mentions_name(stmt, target))
+            handlers
+                .iter()
+                .any(|h| h == target || h.starts_with(&format!("{}.", target)))
+                || body.iter().any(|stmt| stmt_mentions_name(stmt, target))
         }
     }
 }
@@ -3895,9 +3927,7 @@ fn stmt_mentions_name(stmt: &Spanned<Stmt>, target: &str) -> bool {
 fn collect_used_variable_keys_in_stmts(stmts: &[Spanned<Stmt>], out: &mut HashSet<String>) {
     for stmt in stmts {
         match &stmt.node {
-            Stmt::Let { value, .. }
-            | Stmt::Expr(value)
-            | Stmt::Return(value) => {
+            Stmt::Let { value, .. } | Stmt::Expr(value) | Stmt::Return(value) => {
                 collect_used_variable_keys_in_expr(value, out);
             }
             Stmt::Assign { target, value } => {

@@ -29,7 +29,7 @@ pub enum Type {
     Array(Box<Type>),                  // [| T |]
     List(Box<Type>),                   // [T]
     Borrow(Box<Type>),                 // &T
-    Handler(String, Box<Type>),         // handler Port require { ... }
+    Handler(String, Box<Type>),        // handler Port require { ... }
 }
 
 impl std::fmt::Display for Type {
@@ -314,7 +314,7 @@ pub enum Expr {
         effects: Type,
         body: Vec<Spanned<Stmt>>,
     },
-    Raise(Box<Spanned<Expr>>), // raise "error"
+    Raise(Box<Spanned<Expr>>),           // raise "error"
     External(String, Vec<String>, Type), // external "wasm_symbol" : <T> arrow_type
     // handler Port [require { ... }] do fn ... end end — coeffect handler as expression
     Handler {

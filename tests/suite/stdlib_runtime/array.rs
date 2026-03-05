@@ -1,4 +1,3 @@
-
 use crate::common::source::{check, run};
 use nexus::interpreter::Value;
 
@@ -80,25 +79,31 @@ fn test_array_module_fold_left_sum() {
 
 #[test]
 fn test_array_module_find_index_any_all() {
-    let src = &crate::common::fixtures::read_test_fixture("test_array_module_find_index_any_all.nx");
+    let src =
+        &crate::common::fixtures::read_test_fixture("test_array_module_find_index_any_all.nx");
     assert_eq!(run(src).unwrap(), Value::Int(2));
 }
 
 #[test]
 fn test_array_module_map_in_place_and_for_each() {
-    let src = &crate::common::fixtures::read_test_fixture("test_array_module_map_in_place_and_for_each.nx");
+    let src = &crate::common::fixtures::read_test_fixture(
+        "test_array_module_map_in_place_and_for_each.nx",
+    );
     assert_eq!(run(src).unwrap(), Value::Int(6));
 }
 
 #[test]
 fn test_array_module_filter_returns_list() {
-    let src = &crate::common::fixtures::read_test_fixture("test_array_module_filter_returns_list.nx");
+    let src =
+        &crate::common::fixtures::read_test_fixture("test_array_module_filter_returns_list.nx");
     assert_eq!(run(src).unwrap(), Value::Int(32));
 }
 
 #[test]
 fn test_array_module_partition_returns_two_lists() {
-    let src = &crate::common::fixtures::read_test_fixture("test_array_module_partition_returns_two_lists.nx");
+    let src = &crate::common::fixtures::read_test_fixture(
+        "test_array_module_partition_returns_two_lists.nx",
+    );
     assert_eq!(run(src).unwrap(), Value::Int(22));
 }
 

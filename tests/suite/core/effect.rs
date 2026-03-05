@@ -1,4 +1,3 @@
-
 use crate::common::source::check_raw as check;
 
 #[test]
@@ -126,7 +125,10 @@ fn test_main_require_known_perm_is_accepted() {
         return ()
     end
     "#;
-    assert!(check(src).is_ok(), "main with require {{ PermFs }} should be accepted");
+    assert!(
+        check(src).is_ok(),
+        "main with require {{ PermFs }} should be accepted"
+    );
 }
 
 #[test]
@@ -139,7 +141,10 @@ fn test_main_require_unknown_port_is_rejected() {
         return ()
     end
     "#;
-    assert!(check(src).is_err(), "main with require {{ Custom }} should be rejected");
+    assert!(
+        check(src).is_err(),
+        "main with require {{ Custom }} should be rejected"
+    );
 }
 
 #[test]
@@ -150,7 +155,10 @@ fn test_main_require_port_name_is_rejected() {
         return ()
     end
     "#;
-    assert!(check(src).is_err(), "main with require {{ Net }} should be rejected — use PermNet");
+    assert!(
+        check(src).is_err(),
+        "main with require {{ Net }} should be rejected — use PermNet"
+    );
 }
 
 #[test]

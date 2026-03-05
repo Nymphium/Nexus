@@ -1,8 +1,6 @@
-
 use crate::common::source::{check, run};
 use nexus::interpreter::Value;
 static TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
 
 #[test]
 fn net_server_types_check() {

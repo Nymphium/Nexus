@@ -1,4 +1,3 @@
-
 use nexus::runtime::string_heap::{StringHandle, StringHeap, StringHeapError};
 use proptest::prelude::*;
 

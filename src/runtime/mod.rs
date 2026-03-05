@@ -141,7 +141,7 @@ impl ExecutionCapabilities {
     /// Applies this capability policy to a WASI context builder.
     pub fn apply_to_wasi_builder(&self, builder: &mut WasiCtxBuilder) -> Result<(), String> {
         self.validate()?;
-        
+
         if self.allow_console {
             builder.inherit_stdio();
         }
@@ -241,7 +241,10 @@ mod tests {
     fn validate_program_requires_missing_net() {
         let caps = ExecutionCapabilities::deny_all();
         let requires = Type::Row(
-            vec![Type::UserDefined(Permission::Net.perm_name().to_string(), vec![])],
+            vec![Type::UserDefined(
+                Permission::Net.perm_name().to_string(),
+                vec![],
+            )],
             None,
         );
         let err = caps
@@ -257,7 +260,10 @@ mod tests {
             ..ExecutionCapabilities::deny_all()
         };
         let requires = Type::Row(
-            vec![Type::UserDefined(Permission::Net.perm_name().to_string(), vec![])],
+            vec![Type::UserDefined(
+                Permission::Net.perm_name().to_string(),
+                vec![],
+            )],
             None,
         );
         assert!(caps.validate_program_requires(&requires).is_ok());
@@ -280,11 +286,7 @@ mod tests {
         let err = caps
             .validate_program_requires(&requires)
             .expect_err("should reject missing --allow-console");
-        assert!(
-            err.contains("--allow-console"),
-            "unexpected error: {}",
-            err
-        );
+        assert!(err.contains("--allow-console"), "unexpected error: {}", err);
         assert!(
             !err.contains("--allow-net"),
             "should not mention --allow-net: {}",

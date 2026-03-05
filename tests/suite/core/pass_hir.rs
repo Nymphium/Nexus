@@ -1,7 +1,9 @@
-use nexus::lang::parser;
 use nexus::compiler::passes::hir_build::build_hir;
+use nexus::lang::parser;
 
-fn parse_and_build_hir(src: &str) -> Result<nexus::ir::hir::HirProgram, nexus::compiler::passes::hir_build::HirBuildError> {
+fn parse_and_build_hir(
+    src: &str,
+) -> Result<nexus::ir::hir::HirProgram, nexus::compiler::passes::hir_build::HirBuildError> {
     let program = parser::parser().parse(src).unwrap();
     build_hir(&program)
 }
