@@ -12,6 +12,7 @@ Nexus compiles to the WebAssembly Component Model with WASI for system interface
 | `PermRandom` | `wasi:random/random` | `--allow-random` | Statically checked |
 | `PermClock` | `wasi:clocks/wall-clock`, `monotonic-clock` | `--allow-clock` | Statically checked |
 | `PermProc` | `wasi:cli/exit`, `environment` | `--allow-proc` | Statically checked |
+| `PermEnv` | `wasi:cli/environment` | `--allow-env` | Statically checked |
 
 ## Capability Enforcement
 
@@ -74,6 +75,8 @@ wasmtime run -Scli --dir ./data main.wasm
 ### Inspect Capabilities
 
 ```bash
-nexus build program.nx --explain-capabilities       # human-readable
-nexus build program.nx --explain-capabilities=json   # machine-readable
+nexus build program.nx --explain-capabilities           # list capability names (default)
+nexus build program.nx --explain-capabilities=wasmtime   # show wasmtime run command with flags
+nexus build program.nx --explain-capabilities=none       # suppress output
+nexus build program.nx --explain-capabilities-format=json  # machine-readable JSON
 ```

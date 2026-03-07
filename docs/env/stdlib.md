@@ -42,7 +42,27 @@ Requires `PermFs`. CLI flag: `--allow-fs`.
 type Handle = Handle(id: i64)   // linear file handle
 ```
 
-**Port methods:**
+**Direct-call API** (no `inject` required):
+
+```nexus
+fn exists(path: string) -> bool require { PermFs }
+fn is_file(path: string) -> bool require { PermFs }
+fn read_to_string(path: string) -> string require { PermFs } effect { Exn }
+fn write_string(path: string, content: string) -> unit require { PermFs } effect { Exn }
+fn append_string(path: string, content: string) -> unit require { PermFs } effect { Exn }
+fn remove_file(path: string) -> unit require { PermFs } effect { Exn }
+fn create_dir_all(path: string) -> unit require { PermFs } effect { Exn }
+fn list_dir(path: string) -> [ string ] require { PermFs } effect { Exn }
+fn open_read(path: string) -> %Handle require { PermFs } effect { Exn }
+fn open_write(path: string) -> %Handle require { PermFs } effect { Exn }
+fn open_append(path: string) -> %Handle require { PermFs } effect { Exn }
+fn read(handle: %Handle) -> { content: string, handle: %Handle } require { PermFs }
+fn write(handle: %Handle, content: string) -> { ok: bool, handle: %Handle } require { PermFs }
+fn handle_path(handle: %Handle) -> { path: string, handle: %Handle } require { PermFs }
+fn close(handle: %Handle) -> unit require { PermFs }
+```
+
+**Port methods** (for DI / testing):
 
 ```nexus
 port Fs do
@@ -55,15 +75,15 @@ port Fs do
     fn append_string(path: string, content: string) -> unit effect { Exn }
     fn remove_file(path: string) -> unit effect { Exn }
     fn create_dir_all(path: string) -> unit effect { Exn }
-    fn read_dir(path: string) -> List<Handle> effect { Exn }
+    fn read_dir(path: string) -> %[ Handle ] effect { Exn }
 
     // File descriptor operations (consume-and-return pattern)
     fn open_read(path: string) -> %Handle effect { Exn }
     fn open_write(path: string) -> %Handle effect { Exn }
     fn open_append(path: string) -> %Handle effect { Exn }
     fn read(handle: %Handle) -> { content: string, handle: %Handle }
-    fn fd_write(handle: %Handle, content: string) -> { ok: bool, handle: %Handle }
-    fn fd_path(handle: %Handle) -> { path: string, handle: %Handle }
+    fn write(handle: %Handle, content: string) -> { ok: bool, handle: %Handle }
+    fn handle_path(handle: %Handle) -> { path: string, handle: %Handle }
     fn close(handle: %Handle) -> unit
 end
 ```
@@ -87,26 +107,41 @@ Requires `PermNet`. CLI flag: `--allow-net`.
 
 ```nexus
 type Header = Header(name: string, value: string)
-type Response = Response(status: i64, body: string)
+type Response = Response(status: i64, headers: string, body: string)
 opaque type Server = Server(id: i64)     // linear server handle
 type Request = Request(method: string, path: string, headers: string, body: string, req_id: i64)
 ```
 
-**Port methods:**
+**Direct-call API** (no `inject` required):
+
+```nexus
+// HTTP client (all raise on failure)
+fn get(url: string) -> string require { PermNet } effect { Exn }
+fn post(url: string, body: string) -> string require { PermNet } effect { Exn }
+fn request_raw(method: string, url: string, headers: string, body: string) -> Response require { PermNet } effect { Exn }
+fn request(method: string, url: string, headers: [ Header ], body: string) -> Response require { PermNet } effect { Exn }
+
+// HTTP server
+fn listen(addr: string) -> %Server require { PermNet } effect { Exn }
+fn accept(server: &Server) -> Request require { PermNet }
+fn respond(req: Request, status: i64, body: string) -> unit require { PermNet } effect { Exn }
+fn respond_with_headers(req: Request, status: i64, headers: [ Header ], body: string) -> unit require { PermNet } effect { Exn }
+fn stop(server: %Server) -> unit require { PermNet }
+```
+
+**Port methods** (for DI / testing):
 
 ```nexus
 port Net do
     // HTTP client (all raise on failure)
     fn get(url: string) -> string effect { Exn }
-    fn request(method: string, url: string, headers: List<Header>) -> string effect { Exn }
-    fn request_with_body(method: string, url: string, headers: List<Header>, body: string) -> string effect { Exn }
-    fn request_response(method: string, url: string, headers: List<Header>, body: string) -> Response effect { Exn }
+    fn request(method: string, url: string, headers: [ Header ], body: string) -> Response effect { Exn }
 
     // HTTP server
     fn listen(addr: string) -> %Server effect { Exn }
     fn accept(server: &Server) -> Request
     fn respond(req: Request, status: i64, body: string) -> unit effect { Exn }
-    fn respond_with_headers(req: Request, status: i64, headers: List<Header>, body: string) -> unit effect { Exn }
+    fn respond_with_headers(req: Request, status: i64, headers: [ Header ], body: string) -> unit effect { Exn }
     fn stop(server: %Server) -> unit
 end
 ```
@@ -116,6 +151,7 @@ end
 ```nexus
 fn header(name: string, value: string) -> Header
 fn response_status(res: Response) -> i64
+fn response_headers(res: Response) -> string
 fn response_body(res: Response) -> string
 fn request_method(req: &Request) -> string
 fn request_path(req: &Request) -> string
@@ -187,27 +223,28 @@ fn expect<T>(opt: Option<T>, msg: string) -> T effect { Exn }
 
 ### List (`list.nx`)
 
-Immutable singly-linked list: `type List<T> = Nil | Cons(v: T, rest: List<T>)`
+Immutable singly-linked list: `type List<T> = Nil | Cons(v: T, rest: List<T>)`.
+`[ T ]` is an alias for `List<T>` with literal syntax sugar.
 
 ```nexus
-type Partition<T> = Partition(matched: List<T>, rest: List<T>)
+type Partition<T> = Partition(matched: [ T ], rest: [ T ])
 
-fn empty<T>() -> List<T>
-fn cons<T>(x: T, xs: List<T>) -> List<T>
-fn is_empty<T>(xs: List<T>) -> bool
-fn length<T>(xs: List<T>) -> i64
-fn head<T>(xs: List<T>) -> T
-fn tail<T>(xs: List<T>) -> List<T>
-fn last<T>(xs: List<T>) -> T
-fn reverse<T>(xs: List<T>) -> List<T>
-fn concat<T>(xs: List<T>, ys: List<T>) -> List<T>
-fn take<T>(xs: List<T>, n: i64) -> List<T>
-fn drop_n<T>(xs: List<T>, n: i64) -> List<T>
-fn nth<T>(xs: List<T>, n: i64) -> T
-fn contains(xs: List<i64>, val: i64) -> bool
-fn fold_left<T, U>(xs: List<T>, init: U, f: (acc: U, val: T) -> U) -> U
-fn map<T, U>(xs: List<T>, f: (val: T) -> U) -> List<U>
-fn map_rev<T, U>(xs: List<T>, f: (val: T) -> U) -> List<U>
+fn empty<T>() -> [ T ]
+fn cons<T>(x: T, xs: [ T ]) -> [ T ]
+fn is_empty<T>(xs: [ T ]) -> bool
+fn length<T>(xs: [ T ]) -> i64
+fn head<T>(xs: [ T ]) -> T
+fn tail<T>(xs: [ T ]) -> [ T ]
+fn last<T>(xs: [ T ]) -> T
+fn reverse<T>(xs: [ T ]) -> [ T ]
+fn concat<T>(xs: [ T ], ys: [ T ]) -> [ T ]
+fn take<T>(xs: [ T ], n: i64) -> [ T ]
+fn drop_n<T>(xs: [ T ], n: i64) -> [ T ]
+fn nth<T>(xs: [ T ], n: i64) -> T
+fn contains(xs: [ i64 ], val: i64) -> bool
+fn fold_left<T, U>(xs: [ T ], init: U, f: (acc: U, val: T) -> U) -> U
+fn map<T, U>(xs: [ T ], f: (val: T) -> U) -> [ U ]
+fn map_rev<T, U>(xs: [ T ], f: (val: T) -> U) -> [ U ]
 ```
 
 ### Tuple (`tuple.nx`)
@@ -236,10 +273,10 @@ fn all<T>(arr: &[| T |], pred: (val: T) -> bool) -> bool
 fn find_index<T>(arr: &[| T |], pred: (val: T) -> bool) -> i64
 fn for_each<T>(arr: &[| T |], f: (val: T) -> unit) -> unit
 fn map_in_place<T>(arr: &[| T |], f: (val: T) -> T) -> unit
-fn filter<T>(arr: &[| T |], pred: (val: T) -> bool) -> List<T>
+fn filter<T>(arr: &[| T |], pred: (val: T) -> bool) -> [ T ]
 fn partition<T>(arr: &[| T |], pred: (val: T) -> bool) -> Partition<T>
-fn zip_with<A, B, C>(left: &[| A |], right: &[| B |], f: (left: A, right: B) -> C) -> List<C>
-fn zip<A, B>(left: &[| A |], right: &[| B |]) -> List<Pair<A, B>>
+fn zip_with<A, B, C>(left: &[| A |], right: &[| B |], f: (left: A, right: B) -> C) -> [ C ]
+fn zip<A, B>(left: &[| A |], right: &[| B |]) -> [ Pair<A, B> ]
 fn consume<T>(%arr: [| T |], f: (val: %T) -> unit) -> unit
 ```
 
@@ -255,8 +292,8 @@ fn insert(set: %Set, val: i64) -> %Set
 fn contains(set: &Set, val: i64) -> bool
 fn remove(set: %Set, val: i64) -> %Set
 fn size(set: &Set) -> i64
-fn from_list(xs: List<i64>) -> %Set
-fn to_list(set: &Set) -> List<i64>
+fn from_list(xs: [ i64 ]) -> %Set
+fn to_list(set: &Set) -> [ i64 ]
 fn union(left: &Set, right: &Set) -> %Set
 fn intersection(left: &Set, right: &Set) -> %Set
 fn difference(left: &Set, right: &Set) -> %Set
@@ -278,8 +315,8 @@ fn get_or(map: &HashMap, key: i64, default: i64) -> i64
 fn contains_key(map: &HashMap, key: i64) -> bool
 fn remove(map: %HashMap, key: i64) -> %HashMap
 fn size(map: &HashMap) -> i64
-fn keys(map: &HashMap) -> List<i64>
-fn values(map: &HashMap) -> List<i64>
+fn keys(map: &HashMap) -> [ i64 ]
+fn values(map: &HashMap) -> [ i64 ]
 fn free(map: %HashMap) -> unit
 ```
 
@@ -306,14 +343,13 @@ fn concat(a: string, b: string) -> string
 fn repeat(s: string, n: i64) -> string
 fn pad_left(s: string, width: i64, fill: string) -> string
 fn pad_right(s: string, width: i64, fill: string) -> string
-fn join(xs: List<string>, sep: string) -> string
-fn split(s: string, sep: string) -> List<string>
+fn join(xs: [ string ], sep: string) -> string
+fn split(s: string, sep: string) -> [ string ]
 
 // Conversion
 fn from_i64(val: i64) -> string
 fn from_float(val: float) -> string
 fn from_bool(val: bool) -> string
-fn to_i64(s: string) -> i64
 fn parse_i64(s: string) -> Option<i64>
 ```
 
@@ -324,7 +360,6 @@ fn abs(val: i64) -> i64
 fn max(a: i64, b: i64) -> i64
 fn min(a: i64, b: i64) -> i64
 fn mod_i64(a: i64, b: i64) -> i64
-fn negate(val: bool) -> bool
 fn abs_float(val: float) -> float
 fn sqrt(val: float) -> float
 fn floor(val: float) -> float
@@ -332,6 +367,7 @@ fn ceil(val: float) -> float
 fn pow(base: float, exp: float) -> float
 fn i64_to_float(val: i64) -> float
 fn float_to_i64(val: float) -> i64
+fn negate(val: bool) -> bool
 ```
 
 ### Result (`result.nx`)
@@ -364,7 +400,7 @@ Legacy re-exports for backwards compatibility. Prefer `tuple.nx`, `list.nx`, `ma
 
 ```nexus
 type Pair<A, B> = Pair(left: A, right: B)
-type Partition<T> = Partition(matched: List<T>, rest: List<T>)
+type Partition<T> = Partition(matched: [ T ], rest: [ T ])
 
 fn fst<A, B>(p: Pair<A, B>) -> A
 fn snd<A, B>(p: Pair<A, B>) -> B

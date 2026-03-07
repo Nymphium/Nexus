@@ -86,7 +86,7 @@ Positional arguments require looking at the function signature to know what each
 
 ```nexus
 // Every argument is self-documenting
-let result = request_with_body(
+let result = request(
     method: "POST",
     url: "https://api.example.com",
     headers: headers,

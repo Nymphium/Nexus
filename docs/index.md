@@ -171,6 +171,7 @@ Runtime permissions map to WASI capabilities:
 | `PermRandom` | Random |
 | `PermClock` | Clocks |
 | `PermProc` | Process |
+| `PermEnv` | Environment variables |
 
 ```nexus
 let main = fn () -> unit require { PermNet, PermConsole } do

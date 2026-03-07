@@ -1,5 +1,11 @@
 # CLI
 
+## Global Flags
+
+| Flag | Description |
+|---|---|
+| `--verbose` / `-v` | Enable structured timing output to stderr |
+
 ## Commands
 
 ### `nexus run [FILE|-]`
@@ -32,8 +38,16 @@ Resolution order: `--wasm-merge` > `NEXUS_WASM_MERGE` > `wasm-merge` from `PATH`
 Inspect declared capabilities:
 
 ```bash
-nexus build program.nx --explain-capabilities       # human-readable
-nexus build program.nx --explain-capabilities=json   # machine-readable
+nexus build program.nx --explain-capabilities        # list capability names (default)
+nexus build program.nx --explain-capabilities=none    # suppress capability output
+nexus build program.nx --explain-capabilities=wasmtime  # show wasmtime run command
+```
+
+Output format:
+
+```bash
+nexus build program.nx --explain-capabilities-format=text  # human-readable (default)
+nexus build program.nx --explain-capabilities-format=json  # machine-readable JSON
 ```
 
 Run the built component:
@@ -62,7 +76,10 @@ nexus
 - Persistent definitions across inputs
 - Multi-line input support (prompt changes to `..`)
 - `PermConsole` auto-enabled
-- `:help` for commands, `:exit` or Ctrl-D to quit
+- `:help` for commands
+- `:exit` / `:quit` or Ctrl-D to quit
+- `:reset` to clear accumulated state
+- `:defs` to list accumulated definitions
 
 ## Capability Flags
 
@@ -74,6 +91,7 @@ nexus
 | `--allow-random` | `PermRandom` | Random number generation |
 | `--allow-clock` | `PermClock` | Clock and timers |
 | `--allow-proc` | `PermProc` | Process control |
+| `--allow-env` | `PermEnv` | Environment variables |
 | `--preopen DIR` | (with `PermFs`) | Preopen a directory for filesystem access |
 
 Capability flags apply to `nexus run`. The compiled WASM binary encodes required capabilities in the `nexus:capabilities` section -- the host runtime (e.g., wasmtime) enforces them at execution time. See [WASM and WASI](wasm.md).

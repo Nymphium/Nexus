@@ -46,7 +46,7 @@ Using an undeclared type variable (e.g., `T` without `<T>`) is a type error. Thi
 | `bool` | `i32` | 0 = false, 1 = true |
 | `string` | `i64` | Packed as (offset, length) pair |
 | `unit` | (none) | No WASM parameter generated |
-| Records | `i32` | Heap pointer |
+| Records | `i64` | Heap pointer |
 
 ## Example
 

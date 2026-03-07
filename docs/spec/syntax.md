@@ -83,17 +83,19 @@ Strings use `"..."` delimiters with escape sequences (`\n`, `\t`, `\\`, `\"`). R
 
 ### Operators
 
-All binary operators are left-associative:
+All binary operators are left-associative with uniform precedence (no operator binds tighter than another; evaluation is strictly left-to-right):
 
-| Precedence | Operators | Domain |
-|---|---|---|
-| 1 (lowest) | `==` `!=` `<=` `>=` `<` `>` | Integer / generic comparison |
-| 1 | `==.` `!=.` `<=.` `>=.` `<.` `>.` | Float comparison |
-| 2 | `+` `-` | Integer arithmetic |
-| 2 | `++` | String concatenation |
-| 2 | `+.` `-.` | Float arithmetic |
-| 3 (highest) | `*` `/` | Integer arithmetic |
-| 3 | `*.` `/.` | Float arithmetic |
+| Operators | Domain |
+|---|---|
+| `==` `!=` `<=` `>=` `<` `>` | Integer / generic comparison |
+| `==.` `!=.` `<=.` `>=.` `<.` `>.` | Float comparison |
+| `+` `-` | Integer arithmetic |
+| `++` | String concatenation |
+| `+.` `-.` | Float arithmetic |
+| `*` `/` | Integer arithmetic |
+| `*.` `/.` | Float arithmetic |
+| `&&` | Logical AND |
+| `\|\|` | Logical OR |
 
 ### Function Calls
 
@@ -324,8 +326,8 @@ top_level     ::= type_def
 
 (* ── Definitions ───────────────────────────────────────────── *)
 
-type_def      ::= [ "pub" ] "type" UIDENT [ type_params ] "=" record_type
-                | [ "pub" ] "type" UIDENT [ type_params ] "=" type_sum_def
+type_def      ::= [ "pub" ] [ "opaque" ] "type" UIDENT [ type_params ] "=" record_type
+                | [ "pub" ] [ "opaque" ] "type" UIDENT [ type_params ] "=" type_sum_def
 
 type_sum_def  ::= variant_def ( "|" variant_def )*
 variant_def   ::= UIDENT [ "(" variant_field ( "," variant_field )* ")" ]
@@ -422,15 +424,17 @@ expr_stmt     ::= expr
 expr          ::= expr binary_op expr     (* left-associative *)
                 | postfix_expr
 
-binary_op     ::=                         (* precedence level 1 — comparison *)
+binary_op     ::=                         (* comparison *)
                   "==" | "!=" | "<=" | ">=" | "<" | ">"
                 | "==." | "!=." | "<=." | ">=." | "<." | ">."
-                |                         (* precedence level 2 — additive *)
+                |                         (* additive *)
                   "+" | "-" | "++"
                 | "+." | "-."
-                |                         (* precedence level 3 — multiplicative *)
+                |                         (* multiplicative *)
                   "*" | "/"
                 | "*." | "/."
+                |                         (* logical *)
+                  "&&" | "||"
 
 postfix_expr  ::= postfix_expr "." IDENT  (* field access *)
                 | postfix_expr "[" expr "]"  (* index *)

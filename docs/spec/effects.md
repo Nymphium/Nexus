@@ -130,7 +130,7 @@ The `main` function has special restrictions:
 
 - Signature: `() -> unit`
 - `effect` must be empty (all exceptions must be handled internally)
-- `require` may contain any subset of runtime permissions: `{ PermFs, PermNet, PermConsole, PermRandom, PermClock, PermProc }`
+- `require` may contain any subset of runtime permissions: `{ PermFs, PermNet, PermConsole, PermRandom, PermClock, PermProc, PermEnv }`
 
 ```nexus
 let main = fn () -> unit require { PermConsole } do
